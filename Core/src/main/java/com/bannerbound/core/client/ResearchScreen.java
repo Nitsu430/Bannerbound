@@ -895,7 +895,7 @@ public class ResearchScreen extends Screen {
             if (activeTab == Tab.FAITH) {
                 // The faith tree has one shared slot; the rate is the FAITH's total
                 // (all member settlements' devotion summed).
-                MutableComponent header = Component.literal(String.format("%d/1  Â·  %.2f",
+                MutableComponent header = Component.literal(String.format("%d/1  ·  %.2f",
                         ClientFaithTreeState.hasActive() ? 1 : 0,
                         ClientFaithTreeState.getDevotionPerSecond()))
                     .append(Icons.faith())
@@ -915,7 +915,7 @@ public class ResearchScreen extends Screen {
                 rate = ClientResearchState.getSciencePerSecond();
                 rateIcon = Icons.science();
             }
-            MutableComponent header = Component.literal(String.format("%d/%d  Â·  %.2f", active, cap, rate))
+            MutableComponent header = Component.literal(String.format("%d/%d  ·  %.2f", active, cap, rate))
                 .append(rateIcon)
                 .append(Component.literal("/s"));
             graphics.drawCenteredString(this.font, header,
@@ -1415,7 +1415,7 @@ public class ResearchScreen extends Screen {
      *  Only matches characters that are actually valid formatting codes so a literal "&K&R" inside
      *  description prose still survives if K and R aren't both followed by valid format chars. */
     private static String applyAmpFormatting(String s) {
-        return s.replaceAll("&([0-9a-fk-orA-FK-OR])", "Â§$1");
+        return s.replaceAll("&([0-9a-fk-orA-FK-OR])", "§$1");
     }
 
     private void renderNodeTooltip(GuiGraphics graphics, ResearchDefinition def, int mouseX, int mouseY) {
@@ -1822,7 +1822,7 @@ public class ResearchScreen extends Screen {
 
     private static String formatTimeRemaining(double remaining, double ratePerSecond) {
         if (ratePerSecond <= 0.0) {
-            return "âˆž";
+            return "∞";
         }
         int total = (int) Math.ceil(remaining / ratePerSecond);
         if (total <= 0) {
