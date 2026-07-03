@@ -34,7 +34,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 public class ResearchScreen extends Screen {
     private static final int NODE_WIDTH = 110;
     private static final int NODE_HEIGHT = 36;
-    /** Gap past a node's edge where a prereq connector drops its vertical jog â€” see {@link #drawLine}. */
+    /** Gap past a node's edge where a prereq connector drops its vertical jog  see {@link #drawLine}. */
     private static final int ELBOW_GAP = 14;
     private static final int INSIGHT_LABEL_GAP = 3;
     private static final int INSIGHT_LABEL_HEIGHT = 14;
@@ -48,7 +48,7 @@ public class ResearchScreen extends Screen {
 
     private double panX = 0;
     private double panY = 0;
-    // â”€â”€â”€ Polish animations (gated by Config.UI_ANIMATIONS) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    //  Polish animations (gated by Config.UI_ANIMATIONS) 
     // The camera (pan + zoom) eases toward TARGET values each frame instead of snapping: scroll
     // zoom glides around the cursor, and a Suggestions-tab [Resolve] glides the board to the
     // focused node. Dragging writes both current AND target so the board tracks the cursor 1:1.
@@ -56,26 +56,26 @@ public class ResearchScreen extends Screen {
     private double panYTarget = 0;
     private double zoomTarget = 1.0;
     private long lastEaseMs = net.minecraft.Util.getMillis();
-    /** When this screen instance was opened â€” drives the open settle (zoom/drift, ~160ms). */
+    /** When this screen instance was opened  drives the open settle (zoom/drift, ~160ms). */
     private final long openedAtMs = net.minecraft.Util.getMillis();
-    /** Per-node 0â†’1 hover ease (brighten + 2px grow) keyed by research id. Entries are dropped
+    /** Per-node 01 hover ease (brighten + 2px grow) keyed by research id. Entries are dropped
      *  once they decay below 0.01, so the map only ever holds the node under (or just left by)
-     *  the cursor â€” not the whole tree. */
+     *  the cursor  not the whole tree. */
     private final java.util.Map<String, Float> nodeHoverEase = new java.util.HashMap<>();
     /** Per-node DISPLAYED progress, eased toward the synced value (~350ms constant) so the bar
      *  glides instead of stepping once a second when the research-state sync lands. */
     private final java.util.Map<String, Float> progressEase = new java.util.HashMap<>();
-    /** Prereq-path highlight eases (gated by UI_ANIMATIONS): per-edge 0â†’1 "on the hovered node's
+    /** Prereq-path highlight eases (gated by UI_ANIMATIONS): per-edge 01 "on the hovered node's
      *  prerequisite chain" (smooth crossfade as the cursor moves node-to-node), per-node ring
-     *  0â†’1, and one global 0â†’1 that dims the off-path lines while ANY node is hovered. Map entries
+     *  01, and one global 01 that dims the off-path lines while ANY node is hovered. Map entries
      *  are dropped once they decay below 0.01, so they only hold what's currently lit or fading. */
     private final java.util.Map<String, Float> edgeHighlightEase = new java.util.HashMap<>();
     private final java.util.Map<String, Float> nodeHighlightEase = new java.util.HashMap<>();
     private float highlightDimEase = 0f;
-    /** Seconds elapsed last frame â€” computed in {@link #tickPanZoomEase}, reused by the
+    /** Seconds elapsed last frame  computed in {@link #tickPanZoomEase}, reused by the
      *  progress-bar easing so both stay frame-rate independent. */
     private double lastFrameDt = 0;
-    /** When the node tooltip last (re)appeared â€” drives its ~120ms scale-pop. */
+    /** When the node tooltip last (re)appeared  drives its ~120ms scale-pop. */
     private long tooltipShownAtMs = 0L;
     /** The node the tooltip was showing last frame, to detect appearance/retarget. */
     private String lastHoveredId = null;
@@ -86,7 +86,7 @@ public class ResearchScreen extends Screen {
     private double zoom = 1.0;
     private static final double MIN_ZOOM = 0.45;
     private static final double MAX_ZOOM = 2.0;
-    /** Multiplicative zoom per scroll notch â€” geometric so each notch feels even at any zoom. */
+    /** Multiplicative zoom per scroll notch  geometric so each notch feels even at any zoom. */
     private static final double ZOOM_FACTOR = 1.12;
     private boolean dragging = false;
     private ResearchDefinition hovered;
@@ -94,12 +94,12 @@ public class ResearchScreen extends Screen {
      *  separately from {@link #hovered} so hovering the label shows a focused insight tooltip with
      *  the full, untruncated condition + progress instead of the big node tooltip. */
     private ResearchDefinition hoveredInsight;
-    /** Green "+" pop near the cursor when a suggestion is sent â€” visual replacement for the
+    /** Green "+" pop near the cursor when a suggestion is sent  visual replacement for the
      *  removed "X suggested Y" chat broadcast. Only fires on the suggest branch. */
     private final TransientClickFeedback feedback = new TransientClickFeedback();
 
     /** Which tree the screen is currently showing. The two tabs share board geometry, hover
-     *  logic, era dividers, etc. â€” only the data source + color palette swap. */
+     *  logic, era dividers, etc.  only the data source + color palette swap. */
     public enum Tab { SCIENCE, CULTURE, FAITH }
     private Tab activeTab = Tab.SCIENCE;
 
@@ -138,7 +138,7 @@ public class ResearchScreen extends Screen {
         }
     }
 
-    // â”€â”€â”€ Per-tab data accessors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    //  Per-tab data accessors 
     // Centralised so the render block + mouseClicked don't have to ternary on every line.
     private java.util.Map<String, ResearchDefinition> currentTree() {
         if (activeTab == Tab.FAITH) return ClientFaithTreeState.getTree();
@@ -165,7 +165,7 @@ public class ResearchScreen extends Screen {
             : ClientCultureState.prereqsMet(def);
     }
     private boolean currentAgeMet(ResearchDefinition def) {
-        // Faith reuses the science-side age check â€” min_age semantics are identical.
+        // Faith reuses the science-side age check  min_age semantics are identical.
         if (activeTab == Tab.FAITH) return ClientResearchState.ageMet(def);
         return activeTab == Tab.SCIENCE
             ? ClientResearchState.ageMet(def)
@@ -248,7 +248,7 @@ public class ResearchScreen extends Screen {
 
     /** A node is hidden when it carries a government_type gate that doesn't match the
      *  player's settlement's current government. Drives the government-exclusive policy
-     *  nodes â€” a Council never sees a Chiefdom-only node and vice versa. Nodes with no
+     *  nodes  a Council never sees a Chiefdom-only node and vice versa. Nodes with no
      *  gate (general) are always visible. */
     private boolean isNodeVisible(ResearchDefinition def) {
         // Faith-path gate (FAITH tab): the other path's branch simply doesn't render.
@@ -262,13 +262,13 @@ public class ResearchScreen extends Screen {
     }
 
     /** FAITH-tab backdrop: ~90 hash-scattered twinkling stars + 14 gold motes drifting
-     *  slowly upward ("to the heavens"). Twinkle/motion gate on the uiAnimations config â€”
+     *  slowly upward ("to the heavens"). Twinkle/motion gate on the uiAnimations config 
      *  with animations off the stars render at fixed alpha and the motes are skipped. */
     private void drawFaithAmbience(GuiGraphics graphics, int bx, int by, int bw, int bh) {
         boolean animate = com.bannerbound.core.Config.UI_ANIMATIONS.get();
         long ms = net.minecraft.Util.getMillis();
         for (int i = 0; i < 90; i++) {
-            // Cheap integer hash â†’ stable per-index position across frames.
+            // Cheap integer hash  stable per-index position across frames.
             int h = i * 0x9E3779B1;
             int sx = bx + Math.floorMod(h, Math.max(1, bw));
             int sy = by + Math.floorMod(h >> 11, Math.max(1, bh));
@@ -288,20 +288,20 @@ public class ResearchScreen extends Screen {
         for (int i = 0; i < 14; i++) {
             int h = (i + 31) * 0x85EBCA6B;
             float cycle = 9_000.0f + (i % 5) * 2_300.0f;         // seconds per climb
-            float t = ((ms + h) % (long) cycle) / cycle;          // 0 â†’ 1, wraps
+            float t = ((ms + h) % (long) cycle) / cycle;          // 0  1, wraps
             int mx = bx + Math.floorMod(h, Math.max(1, bw))
                 + (int) (Math.sin(ms / 1400.0 + i) * 6.0);        // lazy sway
-            int my = by + bh - (int) (t * (bh + 8)) - 4;          // rises bottom â†’ top
+            int my = by + bh - (int) (t * (bh + 8)) - 4;          // rises bottom  top
             float fade = (float) Math.sin(Math.PI * t);           // in/out at the ends
             int a = (int) (fade * 0.55f * 255.0f);
             int gold = (a << 24) | 0xD9A94A;
-            // Tiny plus-shape mote â€” sprite language, not geometry.
+            // Tiny plus-shape mote  sprite language, not geometry.
             graphics.fill(mx, my - 1, mx + 1, my + 2, gold);
             graphics.fill(mx - 1, my, mx + 2, my + 1, gold);
         }
     }
 
-    /** Cheap 1px straight segment (DDA) for the ambience sketches/web links â€” the existing
+    /** Cheap 1px straight segment (DDA) for the ambience sketches/web links  the existing
      *  {@link #drawLine} is an L-shaped connector, no good for diagonals. Clipped by the
      *  caller's board scissor. */
     private static void drawSegment(GuiGraphics graphics, int x0, int y0, int x1, int y1, int color) {
@@ -316,7 +316,7 @@ public class ResearchScreen extends Screen {
     }
 
     /** Progressively-revealed arc for the blueprint constructions: draws {@code drawFrac} of a
-     *  {@code sweepRad}-radian arc starting at {@code startRad} (screen space â€” +Y is down, so
+     *  {@code sweepRad}-radian arc starting at {@code startRad} (screen space  +Y is down, so
      *  negative angles sweep upward). drawFrac 1.0 + sweep 2Ï€ = a full circle. */
     private static void drawArc(GuiGraphics graphics, int cx, int cy, int r,
                                 double startRad, double sweepRad, float drawFrac, int color) {
@@ -340,7 +340,7 @@ public class ResearchScreen extends Screen {
      *  (scribe-ruled clay tablet + tally/wedge/asterism/pictograph marks scratched on); Medieval =
      *  geometry & proof (compass circles, triangles, angle arcs on a sparse ruled sheet); Renaissance
      *  /Industrial = the drafting table (blueprint grid + dimension lines, vectors, plotted curves).
-     *  The same self-drawing animation carries through â€” only the surface + the figure pool swap.
+     *  The same self-drawing animation carries through  only the surface + the figure pool swap.
      *  Time-based motion gates on uiAnimations; the surface is parallax-only (pan-driven). */
     private void drawScienceAmbience(GuiGraphics graphics, int bx, int by, int bw, int bh) {
         boolean animate = com.bannerbound.core.Config.UI_ANIMATIONS.get();
@@ -349,11 +349,11 @@ public class ResearchScreen extends Screen {
         Era era = ClientEraState.getPlayerEra();
         int style = era == Era.ANCIENT ? 0 : era.ordinal() <= Era.MEDIEVAL.ordinal() ? 1 : 2;
         // Parallax: the surface shifts by a FRACTION of the board pan so it sits BEHIND the nodes.
-        // No autonomous scroll (that read as trippy) â€” dead-still unless you're panning.
+        // No autonomous scroll (that read as trippy)  dead-still unless you're panning.
         final double parallax = 0.1;
 
         if (style == 0) {
-            // Antiquity: a clay/stone tablet â€” faint, slightly irregular HORIZONTAL scribe rules
+            // Antiquity: a clay/stone tablet  faint, slightly irregular HORIZONTAL scribe rules
             // only (no machined grid, no studs). Cool slate-grey so it reads as scratched stone.
             int doy = (int) Math.round(panY * parallax);
             int ruleCol = (0x14 << 24) | 0x5A6675;
@@ -365,7 +365,7 @@ public class ResearchScreen extends Screen {
                 idx++;
             }
         } else if (style == 1) {
-            // Medieval: a sparse ruled manuscript grid â€” wider cells, fainter, no studs.
+            // Medieval: a sparse ruled manuscript grid  wider cells, fainter, no studs.
             final int cell = 40;
             int dox = Math.floorMod((int) Math.round(panX * parallax), cell);
             int doy = Math.floorMod((int) Math.round(panY * parallax), cell);
@@ -395,7 +395,7 @@ public class ResearchScreen extends Screen {
         // Self-drawing constructions: several at once, each on its own reveal cycle, re-hashed to a
         // new spot AND a new figure every cycle. The figure POOL is era-specific, so Antiquity
         // sketches tallies/wedges/asterisms while later eras sketch geometry/blueprints. `draw`
-        // sweeps 0â†’1 (the figure sketches on); `env` is an in/out alpha envelope (drawn then erased).
+        // sweeps 01 (the figure sketches on); `env` is an in/out alpha envelope (drawn then erased).
         int[] pool = style == 0 ? SCI_POOL_ANCIENT : style == 1 ? SCI_POOL_MEDIEVAL : SCI_POOL_BLUEPRINT;
         for (int i = 0; i < 5; i++) {
             int h = (i + 5) * 0x9E3779B1;
@@ -407,7 +407,7 @@ public class ResearchScreen extends Screen {
             int cy = by + 44 + Math.floorMod((ph >> 9) + (int) Math.round(panY * parallax), Math.max(1, bh - 88));
             float env = (float) Math.sin(Math.PI * t);
             float draw = Math.min(1f, t / 0.45f);
-            int a = (int) (env * 0.22f * 255f);   // faint â€” sits behind the tree, never competes
+            int a = (int) (env * 0.22f * 255f);   // faint  sits behind the tree, never competes
             if (a <= 3) continue;
             // Antiquity marks read as scratched stone (cool slate); later eras as ink/blueprint blue.
             int col = (a << 24) | (style == 0 ? 0x9DAEC0 : 0x5E97C4);
@@ -429,12 +429,12 @@ public class ResearchScreen extends Screen {
     }
 
     /** Draws one science construction figure ({@code variant}) centred at (cx,cy), revealed by
-     *  {@code draw} (0â†’1) in {@code col}. Variants are grouped by era: 0â€“7 Antiquity (etched
-     *  records), 8â€“12 Medieval (geometry), 13â€“16 Renaissance/Industrial (blueprint). Which pool an
+     *  {@code draw} (01) in {@code col}. Variants are grouped by era: 07 Antiquity (etched
+     *  records), 812 Medieval (geometry), 1316 Renaissance/Industrial (blueprint). Which pool an
      *  era draws from is decided in {@link #drawScienceAmbience} via the SCI_POOL_* arrays. */
     private static void drawConstruction(GuiGraphics graphics, int variant, int cx, int cy, float draw, int col) {
         switch (variant) {
-            // â”€â”€ Antiquity: the first records â€” scratched / etched marks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            //  Antiquity: the first records  scratched / etched marks 
             case 0 -> {   // tally bundle: four uprights + a diagonal slash through them (a count of 5)
                 int sp = 5, shown = (int) (5 * draw + 0.001f);
                 for (int k = 0; k < Math.min(4, shown); k++)
@@ -474,7 +474,7 @@ public class ResearchScreen extends Screen {
                         cx + (int) (Math.cos(an) * 13), cy + (int) (Math.sin(an) * 13), col);
                 }
             }
-            case 5 -> {   // pictograph: water â€” a zigzag of waves
+            case 5 -> {   // pictograph: water  a zigzag of waves
                 int segs = 6, shown = (int) (segs * draw), sp = 7, prevx = cx, prevy = cy;
                 for (int k = 1; k <= shown; k++) {
                     int xx = cx + k * sp, yy = cy + ((k % 2 == 0) ? -4 : 4);
@@ -482,7 +482,7 @@ public class ResearchScreen extends Screen {
                     prevx = xx; prevy = yy;
                 }
             }
-            case 6 -> {   // pictograph: grain stalk â€” a stem with paired ears
+            case 6 -> {   // pictograph: grain stalk  a stem with paired ears
                 int stem = (int) (22 * draw);
                 drawSegment(graphics, cx, cy, cx, cy - stem, col);
                 for (int k = 1; k <= 3; k++) {
@@ -500,7 +500,7 @@ public class ResearchScreen extends Screen {
                     graphics.fill(cx + dxp, cy - dyp, cx + dxp + 2, cy - dyp + 2, col);
                 }
             }
-            // â”€â”€ Medieval: geometry & proof â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            //  Medieval: geometry & proof 
             case 8 -> {   // circle + two radius spokes
                 drawArc(graphics, cx, cy, 18, 0, Math.PI * 2, draw, col);
                 if (draw > 0.6f) {
@@ -533,7 +533,7 @@ public class ResearchScreen extends Screen {
                 for (int e = 0; e < upto; e++)
                     drawSegment(graphics, pts[e][0], pts[e][1], pts[e + 1][0], pts[e + 1][1], col);
             }
-            // â”€â”€ Renaissance / Industrial: the drafting table â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            //  Renaissance / Industrial: the drafting table 
             case 13 -> {  // dimension line with end ticks
                 int len = 46, x1 = cx - len / 2, x2 = x1 + (int) (len * draw);
                 drawSegment(graphics, x1, cy, x2, cy, col);
@@ -548,7 +548,7 @@ public class ResearchScreen extends Screen {
                     drawSegment(graphics, ex, ey, ex - 2, ey + 7, col);
                 }
             }
-            case 15 -> {  // plotted parabola y = xÂ²
+            case 15 -> {  // plotted parabola y = x²
                 int span = 46, half = span / 2, prevx = cx - half, prevy = cy;
                 int upto = (int) (span * draw);
                 for (int dxp = 1; dxp <= upto; dxp++) {
@@ -576,7 +576,7 @@ public class ResearchScreen extends Screen {
     /** CULTURE-tab backdrop, ERA-AWARE (per-era GUI-skin rule), mirroring the science track.
      *  Antiquity = the cave wall (ochre handprints, aurochs, hunters, dancers, spirals painted on);
      *  Medieval = the scriptorium (musical neumes, heraldic shields, illuminated initials, rose
-     *  windows on ruled parchment); later eras fall back to the "web of minds" â€” a self-organising
+     *  windows on ruled parchment); later eras fall back to the "web of minds"  a self-organising
      *  social network that really reads as the information age. The cave/scriptorium share the
      *  science self-drawing reveal; only the surface + figure pool swap. Motion gates on uiAnimations. */
     private void drawCultureAmbience(GuiGraphics graphics, int bx, int by, int bw, int bh) {
@@ -590,7 +590,7 @@ public class ResearchScreen extends Screen {
             return;
         }
 
-        // â”€â”€ Later eras: the "web of minds" â€” an information-age social network â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        //  Later eras: the "web of minds"  an information-age social network 
         final int n = 28;
         int[] px = new int[n];
         int[] py = new int[n];
@@ -603,7 +603,7 @@ public class ResearchScreen extends Screen {
         }
         // Links: connect every pair of nodes closer than ~1.3Ã— the expected nearest-neighbour
         // spacing. That threshold is derived from the board area, so the mesh stays equally dense
-        // at any resolution, and â€” unlike the old fixed index-pairs â€” every node actually ties into
+        // at any resolution, and  unlike the old fixed index-pairs  every node actually ties into
         // the handful of neighbours around it. The result reads as a web, not stray stars. Links
         // stay visible and only gently shimmer (they never blink fully out).
         double thresh = Math.sqrt((double) bw * bh / Math.max(1, n)) * 1.3;
@@ -623,7 +623,7 @@ public class ResearchScreen extends Screen {
                 if (a <= 4) continue;
                 drawSegment(graphics, px[i], py[i], px[j], py[j], (a << 24) | 0xA85CD8);
 
-                // Occasional traveling pulse â€” an idea crossing between minds. Only ~1 in 8 links
+                // Occasional traveling pulse  an idea crossing between minds. Only ~1 in 8 links
                 // carries one (gated on a per-link hash bit) so the sparks stay sparse, not a swarm.
                 if (animate && (eh & 7) == 0) {
                     float p = ((ms + Math.floorMod(eh, 3000)) % 2000L) / 2000f;
@@ -692,18 +692,18 @@ public class ResearchScreen extends Screen {
             int cy = by + 46 + Math.floorMod((ph >> 9) + (int) Math.round(panY * parallax), Math.max(1, bh - 92));
             float env = (float) Math.sin(Math.PI * t);
             float draw = Math.min(1f, t / 0.45f);
-            int a = (int) (env * 0.26f * 255f);   // a touch stronger than science â€” paintings, not faint ink
+            int a = (int) (env * 0.26f * 255f);   // a touch stronger than science  paintings, not faint ink
             if (a <= 3) continue;
             drawCultureMotif(graphics, pool[Math.floorMod(ph, pool.length)], cx, cy, draw, (a << 24) | rgb);
         }
     }
 
     /** Draws one culture motif ({@code variant}) centred at (cx,cy), revealed by {@code draw}
-     *  (0â†’1) in {@code col}. 0â€“5 Antiquity cave wall, 6â€“11 Medieval scriptorium. Pools live in
+     *  (01) in {@code col}. 05 Antiquity cave wall, 611 Medieval scriptorium. Pools live in
      *  CUL_POOL_*; see {@link #drawCultureMotifField}. */
     private static void drawCultureMotif(GuiGraphics graphics, int variant, int cx, int cy, float draw, int col) {
         switch (variant) {
-            // â”€â”€ Antiquity: the cave wall â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            //  Antiquity: the cave wall 
             case 0 -> {   // handprint: palm + five fingers radiating up
                 drawArc(graphics, cx, cy, 6, 0, Math.PI * 2, draw, col);
                 if (draw > 0.4f) for (int f = 0; f < 5; f++) {
@@ -760,7 +760,7 @@ public class ResearchScreen extends Screen {
                 int shown = (int) (6 * draw);
                 for (int k = 0; k < shown; k++) graphics.fill(cx + k * 8, cy, cx + k * 8 + 4, cy + 3, col);
             }
-            // â”€â”€ Medieval: the scriptorium â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            //  Medieval: the scriptorium 
             case 6 -> {   // musical staff + square neumes
                 int w = (int) (42 * draw);
                 for (int l = 0; l < 4; l++) {
@@ -819,7 +819,7 @@ public class ResearchScreen extends Screen {
                     prevx = xx; prevy = yy;
                 }
             }
-            default -> { // 11: rose window â€” concentric circles + radial tracery
+            default -> { // 11: rose window  concentric circles + radial tracery
                 drawArc(graphics, cx, cy, 16, 0, Math.PI * 2, draw, col);
                 if (draw > 0.4f) drawArc(graphics, cx, cy, 8, 0, Math.PI * 2, (draw - 0.4f) / 0.6f, col);
                 if (draw > 0.6f) for (int k = 0; k < 8; k++) {
@@ -836,14 +836,14 @@ public class ResearchScreen extends Screen {
     private int boardWidth() { return this.width - PANEL_MARGIN * 2; }
     private int boardHeight() { return this.height - PANEL_MARGIN * 2 - HEADER_HEIGHT - FOOTER_HEIGHT; }
 
-    // â”€â”€ Board-space â†” screen transform â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    //  Board-space  screen transform 
     // Nodes/lines/badges are drawn inside a pose translated to (pivot + pan) and scaled by `zoom`,
     // so within that pose everything is positioned in BOARD space (origin = board centre, unscaled).
     // The pivot is the board centre; pan stays in screen pixels so dragging tracks the cursor 1:1.
     private double pivotX() { return boardX() + boardWidth() / 2.0 + panX; }
     private double pivotY() { return boardY() + boardHeight() / 2.0 + panY; }
 
-    /** Board-space top-left of a node (no pan/zoom applied â€” that's the pose's job). */
+    /** Board-space top-left of a node (no pan/zoom applied  that's the pose's job). */
     private int nodeBoardX(ResearchDefinition def) { return def.x() - NODE_WIDTH / 2; }
     private int nodeBoardY(ResearchDefinition def) { return def.y() - NODE_HEIGHT / 2; }
 
@@ -856,7 +856,7 @@ public class ResearchScreen extends Screen {
     protected void init() {
         // Consume a one-shot focus request: pick the right tree and pan its node to board centre
         // (pan is in screen pixels and the node's board coords are def.x/y, so at zoom 1 the pan
-        // is simply their negation). Only the TARGET camera is set â€” with animations on, the board
+        // is simply their negation). Only the TARGET camera is set  with animations on, the board
         // opens and glides to the node (tickPanZoomEase); with them off it snaps.
         if (pendingFocusId != null) {
             activeTab = pendingFocusCulture ? Tab.CULTURE : Tab.SCIENCE;
@@ -874,7 +874,7 @@ public class ResearchScreen extends Screen {
             pendingFocusId = null;
         }
         this.addRenderableOnly((graphics, mouseX, mouseY, partialTick) -> {
-            // Per-tab chrome â€” Science keeps the neutral grey panel; Culture tints the
+            // Per-tab chrome  Science keeps the neutral grey panel; Culture tints the
             // panel fill, frame, and divider purple so the whole screen reads as a
             // different mode rather than "the same screen with different node colors."
             boolean culture = activeTab == Tab.CULTURE;
@@ -895,7 +895,7 @@ public class ResearchScreen extends Screen {
             if (activeTab == Tab.FAITH) {
                 // The faith tree has one shared slot; the rate is the FAITH's total
                 // (all member settlements' devotion summed).
-                MutableComponent header = Component.literal(String.format("%d/1  Â·  %.2f",
+                MutableComponent header = Component.literal(String.format("%d/1  ·  %.2f",
                         ClientFaithTreeState.hasActive() ? 1 : 0,
                         ClientFaithTreeState.getDevotionPerSecond()))
                     .append(Icons.faith())
@@ -915,14 +915,14 @@ public class ResearchScreen extends Screen {
                 rate = ClientResearchState.getSciencePerSecond();
                 rateIcon = Icons.science();
             }
-            MutableComponent header = Component.literal(String.format("%d/%d  Â·  %.2f", active, cap, rate))
+            MutableComponent header = Component.literal(String.format("%d/%d  ·  %.2f", active, cap, rate))
                 .append(rateIcon)
                 .append(Component.literal("/s"));
             graphics.drawCenteredString(this.font, header,
                 this.width / 2, PANEL_MARGIN + 10, 0xFFFFFFFF);
         });
 
-        // Tab strip â€” sits ABOVE the divider line (which is at PANEL_MARGIN + HEADER_HEIGHT)
+        // Tab strip  sits ABOVE the divider line (which is at PANEL_MARGIN + HEADER_HEIGHT)
         // so clicks don't fall into the board's drag-capture zone. Each tab is a vanilla
         // button; the active tab is disabled (greyed) so the player can't re-click it.
         //
@@ -989,7 +989,7 @@ public class ResearchScreen extends Screen {
 
             // Era dividers (behind everything; dynamic to the X-extent of each era's nodes).
             // Drawn in SCREEN space (full board height, crisp labels) but with the zoom applied to
-            // their X so they still line up with the scaled nodes. The FAITH tree skips them â€”
+            // their X so they still line up with the scaled nodes. The FAITH tree skips them 
             // its antiquity content is single-era; rotated (Y-extent) dividers come with
             // multi-era faith content (FAITH_PLAN: the tree grows UPWARD).
             if (activeTab != Tab.FAITH) {
@@ -1010,7 +1010,7 @@ public class ResearchScreen extends Screen {
             // Prereq-path highlight: hovering a node lights up the WHOLE chain of prerequisites
             // that gates it (its ancestor closure) and dims everything else, so "what do I still
             // need to unlock this?" reads at a glance. `hovered` holds LAST frame's pick (it's set
-            // in pass 1 below) â€” the one-frame lag is invisible, the same trick the hover-ease uses.
+            // in pass 1 below)  the one-frame lag is invisible, the same trick the hover-ease uses.
             java.util.Set<String> highlightSet = hovered != null
                 ? prereqClosure(hovered.id())
                 : java.util.Collections.emptySet();
@@ -1045,7 +1045,7 @@ public class ResearchScreen extends Screen {
 
             // Prerequisite lines (behind nodes), each with an arrowhead pointing INTO the dependent
             // node so the direction of the "unlocks" relationship is explicit. Drawn in TWO Z passes
-            // â€” dim/neutral first, lit on top â€” so a bright path edge is never overdrawn by a grey
+            //  dim/neutral first, lit on top  so a bright path edge is never overdrawn by a grey
             // line that just happens to be iterated later (they share one Z plane). Colour
             // crossfades via the per-edge ease. Skip lines touching a hidden (wrong-gov) node so a
             // Chiefdom-only node doesn't leave a dangling connector.
@@ -1088,7 +1088,7 @@ public class ResearchScreen extends Screen {
                 int borderColor = colors[1];
 
                 // Hover ease: the hovered node brightens and grows ~2px instead of snapping.
-                // Target uses LAST frame's hover (set at the end of this pass) â€” the one-frame
+                // Target uses LAST frame's hover (set at the end of this pass)  the one-frame
                 // lag is invisible at the ~5-frame ease length. Hit-testing below stays on the
                 // UNGROWN rect so the visual pop never changes what's clickable.
                 float ease = nodeHoverEase.getOrDefault(def.id(), 0f);
@@ -1126,7 +1126,7 @@ public class ResearchScreen extends Screen {
                 }
 
                 // Milestone nodes ("important": true in the node JSON): a second gold frame
-                // with corner studs, slowly pulsing until completed â€” era-defining choices
+                // with corner studs, slowly pulsing until completed  era-defining choices
                 // (Spiritualism, age advances) must READ as bigger than ordinary nodes.
                 if (def.important()) {
                     float pulse = 1.0f;
@@ -1138,7 +1138,7 @@ public class ResearchScreen extends Screen {
                     int ox0 = nx - grow - 3, oy0 = ny - grow - 3;
                     int ox1 = nx + NODE_WIDTH + grow + 3, oy1 = ny + NODE_HEIGHT + grow + 3;
                     graphics.renderOutline(ox0, oy0, ox1 - ox0, oy1 - oy0, gold);
-                    // Corner studs (5Ã—5) â€” ornate rivets, sprite-language not geometry.
+                    // Corner studs (5Ã—5)  ornate rivets, sprite-language not geometry.
                     graphics.fill(ox0 - 2, oy0 - 2, ox0 + 3, oy0 + 3, gold);
                     graphics.fill(ox1 - 3, oy0 - 2, ox1 + 2, oy0 + 3, gold);
                     graphics.fill(ox0 - 2, oy1 - 3, ox0 + 3, oy1 + 2, gold);
@@ -1253,7 +1253,7 @@ public class ResearchScreen extends Screen {
             .bounds(this.width - PANEL_MARGIN - 80, btnY, 80, 20)
             .build());
 
-        // NOTE: tooltip is rendered in our render() override after super.render() â€” not registered
+        // NOTE: tooltip is rendered in our render() override after super.render()  not registered
         // here. Keeping it out of the renderables list guarantees it draws strictly on top of
         // every node box, badge, and button regardless of insertion order.
     }
@@ -1261,7 +1261,7 @@ public class ResearchScreen extends Screen {
     /**
      * Draws an "| Era Name |"-style boundary around each era's contiguous range of nodes.
      * The X span is computed from each node's {@code min_age} grouping; Y spans the whole board.
-     * Eras with no nodes get no divider â€” nothing to label.
+     * Eras with no nodes get no divider  nothing to label.
      */
     private void drawEraDividers(GuiGraphics graphics, int bx, int by, int bw, int bh) {
         Map<Era, int[]> bounds = new EnumMap<>(Era.class);
@@ -1285,13 +1285,13 @@ public class ResearchScreen extends Screen {
         int bottom = by + bh;
 
         // Eras left-to-right by their node span. EnumMap already yields chronological order and
-        // nodes are laid out chronologically â€” sorting by left edge just makes it explicit.
+        // nodes are laid out chronologically  sorting by left edge just makes it explicit.
         List<Era> eras = new ArrayList<>(bounds.keySet());
         eras.sort((a, b) -> Integer.compare(bounds.get(a)[0], bounds.get(b)[0]));
 
-        // One vertical bar per boundary: n eras â†’ n+1 bars. The bar between two adjacent eras is
+        // One vertical bar per boundary: n eras  n+1 bars. The bar between two adjacent eras is
         // a SINGLE shared line at the midpoint of the gap, so the end of one era's band is
-        // exactly the start of the next â€” no janky double divider.
+        // exactly the start of the next  no janky double divider.
         // X positions carry the zoom (worldX * zoom) and pan so the dividers stay aligned with the
         // scaled nodes; the bars themselves are drawn full board height in screen space below.
         int n = eras.size();
@@ -1325,7 +1325,7 @@ public class ResearchScreen extends Screen {
         }
     }
 
-    /** Step 7 polish: suggestion badge â€” sits to the LEFT of the node. Format is
+    /** Step 7 polish: suggestion badge  sits to the LEFT of the node. Format is
      *  {@code [+N]} in green followed by up to {@link #MAX_FACES} 8Ã—8 skin-head icons. The
      *  local player's own head (if they're a suggester) gets a brighter green border so they
      *  can spot their own suggestion at a glance. Heads beyond MAX_FACES collapse into a
@@ -1370,7 +1370,7 @@ public class ResearchScreen extends Screen {
                         net.minecraft.client.resources.PlayerSkin.Model.WIDE, true),
                     cursorX, faceY, headSize);
             } else {
-                // Fallback square â€” skin not loaded (offline player + no profile cache hit).
+                // Fallback square  skin not loaded (offline player + no profile cache hit).
                 graphics.fill(cursorX, faceY, cursorX + headSize, faceY + headSize, 0xFF55EE55);
             }
             // Bright outline on the local player's own face.
@@ -1388,7 +1388,7 @@ public class ResearchScreen extends Screen {
     private static final int MAX_FACES = 4;
 
     /** Resolve a UUID to its skin texture via the client's connection's PlayerInfo cache.
-     *  Returns null when the player is offline AND not in the cache â€” caller falls back to
+     *  Returns null when the player is offline AND not in the cache  caller falls back to
      *  a plain coloured square in that case. */
     private net.minecraft.resources.ResourceLocation resolveSkin(java.util.UUID id) {
         if (this.minecraft == null || this.minecraft.getConnection() == null) return null;
@@ -1415,7 +1415,7 @@ public class ResearchScreen extends Screen {
      *  Only matches characters that are actually valid formatting codes so a literal "&K&R" inside
      *  description prose still survives if K and R aren't both followed by valid format chars. */
     private static String applyAmpFormatting(String s) {
-        return s.replaceAll("&([0-9a-fk-orA-FK-OR])", "Â§$1");
+        return s.replaceAll("&([0-9a-fk-orA-FK-OR])", "§$1");
     }
 
     private void renderNodeTooltip(GuiGraphics graphics, ResearchDefinition def, int mouseX, int mouseY) {
@@ -1434,9 +1434,9 @@ public class ResearchScreen extends Screen {
         header.add(Component.literal(def.name()).withStyle(ChatFormatting.WHITE));
         if (!def.description().isEmpty()) {
             // \n in JSON becomes a real newline (Gson handles the escape); we split per line so
-            // the tooltip stacks them. & format codes (&4, &l, etc.) are flipped to vanilla Â§
+            // the tooltip stacks them. & format codes (&4, &l, etc.) are flipped to vanilla §
             // codes so authors can put color/style hints in description text without paying the
-            // JSON-escape tax of typing Â§ directly.
+            // JSON-escape tax of typing § directly.
             String formatted = applyAmpFormatting(def.description());
             for (String line : formatted.split("\n", -1)) {
                 header.add(Component.literal(line).withStyle(ChatFormatting.GRAY));
@@ -1491,7 +1491,7 @@ public class ResearchScreen extends Screen {
         if (!currentPrereqsMet(def) && !currentIsCompleted(def.id())) {
             footer.add(Component.translatable("bannerbound.research.prereq_locked").withStyle(ChatFormatting.RED));
         }
-        // Ponder hint â€” only when a Create-aware expansion is loaded AND this node has a scene.
+        // Ponder hint  only when a Create-aware expansion is loaded AND this node has a scene.
         // Same progress-bar treatment Create uses on inventory tooltips (GRAY/DARK_GRAY pipes).
         if (!def.ponderScene().isEmpty() && ResearchPonderBridge.isAvailable()) {
             footer.add(ResearchPonderBridge.holdToPonderHint(this.font));
@@ -1531,7 +1531,7 @@ public class ResearchScreen extends Screen {
         // Progress / discovered status.
         boolean fired = currentInsightFired(def.id());
         if (fired) {
-            header.add(Component.literal("âœ” Discovered").withStyle(ChatFormatting.GREEN));
+            header.add(Component.literal("\u2714 Discovered").withStyle(ChatFormatting.GREEN));
         } else {
             int target = Math.max(1, insight.trigger().count());
             int count = (int) Math.min(target, Math.max(0, Math.floor(currentInsightProgress(def.id()))));
@@ -1610,7 +1610,7 @@ public class ResearchScreen extends Screen {
      * sprites, which is why we hand-roll the layout here. Items render at native 16Ã—16 with
      * 2px padding; the grid wraps at {@link #ITEMS_PER_ROW} entries per row.
      */
-    /** Hard cap on tooltip text width â€” every line wraps to this. Long node descriptions used to
+    /** Hard cap on tooltip text width  every line wraps to this. Long node descriptions used to
      *  render as ONE line and stretch the panel across the whole screen on wide monitors. */
     private static final int MAX_TOOLTIP_TEXT_W = 260;
 
@@ -1656,7 +1656,7 @@ public class ResearchScreen extends Screen {
         // Push the pose stack to a higher Z so every draw in this method renders strictly on top
         // of everything before it. Earlier draws (era titles, node labels, queue badges) use the
         // batched text render type and can otherwise z-fight or render through our background
-        // fill â€” the fix isn't insertion order, it's the depth value. Vanilla tooltips use ~400.
+        // fill  the fix isn't insertion order, it's the depth value. Vanilla tooltips use ~400.
         graphics.pose().pushPose();
         graphics.pose().translate(0, 0, 400);
         try {
@@ -1674,7 +1674,7 @@ public class ResearchScreen extends Screen {
                 graphics.drawString(this.font, itemsHeader, textX, y, 0xFFCCCCCC, false);
                 y += lineH;
                 // Bypass the unknown-item swap so the player sees actual icons for items they
-                // haven't unlocked yet â€” the tooltip exists to preview *what* the research gives.
+                // haven't unlocked yet  the tooltip exists to preview *what* the research gives.
                 UnknownItemHelper.setBypassUnknownSwap(true);
                 try {
                     for (int i = 0; i < items.size(); i++) {
@@ -1775,7 +1775,7 @@ public class ResearchScreen extends Screen {
                 .withStyle(ChatFormatting.GREEN);
         }
         // Ore-disguise reveal flags carry an item id whose own resource-location colon would
-        // confuse the generic prefix:value split â€” handle them explicitly. Resolves the item to
+        // confuse the generic prefix:value split  handle them explicitly. Resolves the item to
         // its readable name (e.g. "Iron Ore") so the tooltip reads like a description, not a key.
         if (feature.startsWith("bannerbound.showore:")) {
             String itemId = feature.substring("bannerbound.showore:".length());
@@ -1801,7 +1801,7 @@ public class ResearchScreen extends Screen {
     }
 
     private static Component autoDescribeByLangKey(String feature) {
-        // Split on ':' for valued features (e.g. "...delta:0.5" â†’ suffix "delta", arg "0.5").
+        // Split on ':' for valued features (e.g. "...delta:0.5"  suffix "delta", arg "0.5").
         int colon = feature.indexOf(':');
         String prefix = colon >= 0 ? feature.substring(0, colon) : feature;
         String arg = colon >= 0 ? feature.substring(colon + 1) : "";
@@ -1813,7 +1813,7 @@ public class ResearchScreen extends Screen {
                 ? Component.translatable(langKey).withStyle(ChatFormatting.GREEN)
                 : Component.translatable(langKey, arg).withStyle(ChatFormatting.GREEN);
         }
-        // No lang entry â€” this is an internal gating flag (e.g. bannerbound.unlock.digger) whose
+        // No lang entry  this is an internal gating flag (e.g. bannerbound.unlock.digger) whose
         // player-facing meaning lives in the node's description, not a green effect line. Suppress
         // it so the raw key never leaks into the tooltip. A meaningful effect gets a line by adding
         // a "bannerbound.research.effect.<suffix>" lang entry; everything else stays silent.
@@ -1822,7 +1822,7 @@ public class ResearchScreen extends Screen {
 
     private static String formatTimeRemaining(double remaining, double ratePerSecond) {
         if (ratePerSecond <= 0.0) {
-            return "âˆž";
+            return "∞";
         }
         int total = (int) Math.ceil(remaining / ratePerSecond);
         if (total <= 0) {
@@ -1841,7 +1841,7 @@ public class ResearchScreen extends Screen {
         tickPanZoomEase();
         // Background OUTSIDE the open-settle pose (the dim/blur must never zoom with the board);
         // the renderables are looped manually instead of via super.render() for exactly that
-        // reason â€” Screen.render would re-run the background inside the pose.
+        // reason  Screen.render would re-run the background inside the pose.
         this.renderBackground(graphics, mouseX, mouseY, partialTick);
         boolean animate = com.bannerbound.core.Config.UI_ANIMATIONS.get();
         float open = animate
@@ -1862,10 +1862,10 @@ public class ResearchScreen extends Screen {
         if (posed) {
             graphics.pose().popPose();
         }
-        // Tooltip rendered last, after every renderable in the list (and outside the settle pose â€”
-        // it hangs off the cursor). Otherwise the per-node text/badges in the board pass â€” or
-        // anything else added to renderables â€” can bleed through the tooltip's panel.
-        // Polish: it POPS in (scale 0.92â†’1 anchored on the cursor, ~120ms ease-out) whenever it
+        // Tooltip rendered last, after every renderable in the list (and outside the settle pose 
+        // it hangs off the cursor). Otherwise the per-node text/badges in the board pass  or
+        // anything else added to renderables  can bleed through the tooltip's panel.
+        // Polish: it POPS in (scale 0.921 anchored on the cursor, ~120ms ease-out) whenever it
         // appears or retargets to a different node, instead of materialising fully-formed.
         String hoveredIdNow = hovered == null ? null : hovered.id();
         if (hoveredIdNow != null && !hoveredIdNow.equals(lastHoveredId)) {
@@ -1884,7 +1884,7 @@ public class ResearchScreen extends Screen {
                 graphics.pose().scale(popScale, popScale, 1f);
                 graphics.pose().translate(-mouseX, -mouseY, 0);
             }
-            // Over the insight label â†’ focused insight tooltip; over the box â†’ full node tooltip.
+            // Over the insight label  focused insight tooltip; over the box  full node tooltip.
             if (hoveredInsight != null) {
                 renderInsightTooltip(graphics, hoveredInsight, mouseX, mouseY);
             } else {
@@ -1897,7 +1897,7 @@ public class ResearchScreen extends Screen {
         feedback.render(graphics);
     }
 
-    /** Eases the camera (pan + zoom) toward its targets â€” time-based exponential approach
+    /** Eases the camera (pan + zoom) toward its targets  time-based exponential approach
      *  (~80ms constant) so the glide is frame-rate independent. Snaps when animations are off
      *  or the remaining distance is sub-pixel. */
     private void tickPanZoomEase() {
@@ -1950,7 +1950,7 @@ public class ResearchScreen extends Screen {
         return (a << 24) | (r << 16) | (g << 8) | b;
     }
 
-    /** Scales an ARGB colour's alpha by {@code factor} (clamped to [0,1]), leaving RGB intact â€”
+    /** Scales an ARGB colour's alpha by {@code factor} (clamped to [0,1]), leaving RGB intact 
      *  for fading the highlight node-ring in and out. */
     private static int withAlpha(int argb, float factor) {
         int a = (int) (((argb >>> 24) & 0xFF) * Math.max(0f, Math.min(1f, factor)));
@@ -2002,7 +2002,7 @@ public class ResearchScreen extends Screen {
             boolean prereqMet = currentPrereqsMet(hovered);
             boolean ageMet = currentAgeMet(hovered);
 
-            // Step 7 â€” in a Chiefdom, non-Chiefs cannot start/enqueue research; their click
+            // Step 7  in a Chiefdom, non-Chiefs cannot start/enqueue research; their click
             // becomes a suggestion chat to the Chief instead. Council + NONE pass straight
             // through to the existing flow.
             boolean chiefdom = ClientPopulationState.getGovernmentOrdinal()
@@ -2012,7 +2012,7 @@ public class ResearchScreen extends Screen {
             if (button == 0) {
                 if (!isComplete && !isActive && prereqMet && ageMet) {
                     if (activeTab == Tab.FAITH) {
-                        // No suggestion detour for faith yet â€” the server's chief gate
+                        // No suggestion detour for faith yet  the server's chief gate
                         // rejects non-chief starts with a chat message.
                         PacketDistributor.sendToServer(
                             new com.bannerbound.core.network.StartFaithResearchPayload(hovered.id()));
@@ -2100,7 +2100,7 @@ public class ResearchScreen extends Screen {
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
         if (dragging) {
-            // Dragging writes current AND target so the board tracks the cursor 1:1 â€” easing a
+            // Dragging writes current AND target so the board tracks the cursor 1:1  easing a
             // drag would make the board feel like it's swimming behind the hand.
             panX += dragX;
             panY += dragY;
@@ -2114,7 +2114,7 @@ public class ResearchScreen extends Screen {
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         // Scroll wheel zooms the board, clamped to [MIN_ZOOM, MAX_ZOOM] so it can't go infinite.
-        // Only inside the board rect â€” elsewhere (tabs/footer) scrolling is a no-op pass-through.
+        // Only inside the board rect  elsewhere (tabs/footer) scrolling is a no-op pass-through.
         int bx = boardX(), by = boardY(), bw = boardWidth(), bh = boardHeight();
         if (scrollY == 0 || mouseX < bx || mouseX >= bx + bw || mouseY < by || mouseY >= by + bh) {
             return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
@@ -2125,7 +2125,7 @@ public class ResearchScreen extends Screen {
         double oldZoom = zoomTarget;
         double newZoom = scrollY > 0 ? zoomTarget * ZOOM_FACTOR : zoomTarget / ZOOM_FACTOR;
         newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom));
-        if (newZoom == oldZoom) return true; // already at a cap â€” swallow so it doesn't scroll past
+        if (newZoom == oldZoom) return true; // already at a cap  swallow so it doesn't scroll past
         // Anchor the zoom on the cursor: keep the board-space point under the cursor fixed by
         // adjusting pan. screen = pivot + pan + world*zoom, so for the world point currently under
         // the cursor, solve the new pan that keeps `screen` (= mouse) unchanged at the new zoom.
@@ -2143,9 +2143,9 @@ public class ResearchScreen extends Screen {
         // so a midpoint elbow drops its vertical right behind an intermediate node (making it look
         // required) and parks sibling edges' verticals at staggered midpoints that read as a phantom
         // rectangle. Hugging the source instead means the long horizontal run sits at the
-        // DESTINATION's row â€” above/below any intermediate same-row nodes, so it clears them â€” and
+        // DESTINATION's row  above/below any intermediate same-row nodes, so it clears them  and
         // edges leaving a shared source fork cleanly out of it.
-        if (x1 == x2) {                       // pure vertical run â€” no corner to round
+        if (x1 == x2) {                       // pure vertical run  no corner to round
             graphics.fill(x1, Math.min(y1, y2), x1 + 1, Math.max(y1, y2) + 1, color);
             return;
         }
@@ -2157,11 +2157,11 @@ public class ResearchScreen extends Screen {
         int dirH1 = Integer.signum(elbowX - x1);  // stub direction out of the source
         int dirV  = Integer.signum(y2 - y1);      // jog direction toward the destination row
         int dirH2 = Integer.signum(x2 - elbowX);  // run direction into the destination
-        if (dirV == 0) {                      // same row â€” a single straight horizontal segment
+        if (dirV == 0) {                      // same row  a single straight horizontal segment
             graphics.fill(Math.min(x1, x2), y1, Math.max(x1, x2) + 1, y1 + 1, color);
             return;
         }
-        // Slight fillets at the two corners so the bend â€” and thus the prereq DIRECTION â€” reads at a
+        // Slight fillets at the two corners so the bend  and thus the prereq DIRECTION  reads at a
         // glance without hovering. The radius is clamped to the adjacent segment lengths so short
         // edges degrade to sharper corners rather than overshooting.
         int r1 = Math.min(EDGE_CORNER_RADIUS, Math.min(Math.abs(elbowX - x1), Math.abs(y2 - y1) / 2));
@@ -2188,14 +2188,14 @@ public class ResearchScreen extends Screen {
     private static final int EDGE_CORNER_RADIUS = 7;
 
     /** Quarter-circle fillet from A(ax,ay) to B(bx,by) about centre C(cx,cy), sampled as 1px
-     *  {@link #drawSegment} steps along the SHORT arc â€” rounds an L-connector corner so the bend
+     *  {@link #drawSegment} steps along the SHORT arc  rounds an L-connector corner so the bend
      *  reads without hovering. A and B are assumed equidistant from C (a true quarter turn). */
     private static void drawFillet(GuiGraphics graphics, int cx, int cy, int ax, int ay,
                                    int bx, int by, int color) {
         double a0 = Math.atan2(ay - cy, ax - cx);
         double a1 = Math.atan2(by - cy, bx - cx);
         double d = a1 - a0;
-        while (d <= -Math.PI) d += 2 * Math.PI;   // shortest signed sweep (Â±90Â° here)
+        while (d <= -Math.PI) d += 2 * Math.PI;   // shortest signed sweep (±90° here)
         while (d > Math.PI) d -= 2 * Math.PI;
         double r = Math.hypot(ax - cx, ay - cy);
         int segs = Math.max(4, (int) r);
@@ -2210,7 +2210,7 @@ public class ResearchScreen extends Screen {
     }
 
     /** Prereq connector from the prerequisite (x1,y1) to the dependent (x2,y2), with an arrowhead
-     *  where it enters the dependent's box edge â€” so the direction of the "unlocks" relationship
+     *  where it enters the dependent's box edge  so the direction of the "unlocks" relationship
      *  reads at a glance. Drawn centre-to-centre (the boxes overdraw the middle), which leaves the
      *  arrowhead sitting right at the visible end of the line. {@code emphasize} thickens the
      *  arrowhead for highlighted path edges. {@code diagonal} draws a true straight line at any
@@ -2224,7 +2224,7 @@ public class ResearchScreen extends Screen {
         drawLine(graphics, x1, y1, x2, y2, color);
         int s = emphasize ? 5 : 4;
         if (x1 != x2) {
-            // Horizontal final segment â†’ arrow enters the dependent's left/right edge at mid-height.
+            // Horizontal final segment  arrow enters the dependent's left/right edge at mid-height.
             int dir = Integer.signum(x2 - (x1 + x2) / 2);
             if (dir == 0) dir = 1;
             int tipX = x2 - dir * (NODE_WIDTH / 2);
@@ -2235,7 +2235,7 @@ public class ResearchScreen extends Screen {
                 drawSegment(graphics, tipX - dir, y2, tipX - dir * (s + 1), y2 + s, color);
             }
         } else {
-            // Pure vertical run â†’ arrow enters the dependent's top/bottom edge.
+            // Pure vertical run  arrow enters the dependent's top/bottom edge.
             int dir = Integer.signum(y2 - y1);
             if (dir == 0) dir = 1;
             int tipY = y2 - dir * (NODE_HEIGHT / 2);
@@ -2255,8 +2255,8 @@ public class ResearchScreen extends Screen {
                                                int color, boolean emphasize) {
         double dx = x2 - x1, dy = y2 - y1;
         double len = Math.sqrt(dx * dx + dy * dy);
-        if (len < 1.0) return;               // coincident nodes â€” nothing to draw
-        double ux = dx / len, uy = dy / len; // unit heading, source â†’ dependent
+        if (len < 1.0) return;               // coincident nodes  nothing to draw
+        double ux = dx / len, uy = dy / len; // unit heading, source  dependent
         // Where the centre-to-centre ray crosses the dependent's box edge (slab method): the tip
         // sits on the edge facing the source so the arrowhead isn't swallowed by the box overdraw.
         double hw = NODE_WIDTH / 2.0, hh = NODE_HEIGHT / 2.0;
@@ -2266,11 +2266,11 @@ public class ResearchScreen extends Screen {
         int tipX = (int) Math.round(x2 - ux * edge);
         int tipY = (int) Math.round(y2 - uy * edge);
         drawSegment(graphics, x1, y1, tipX, tipY, color);
-        // Arrowhead: two barbs swept back from the tip along Â±spread off the heading.
+        // Arrowhead: two barbs swept back from the tip along ±spread off the heading.
         int s = emphasize ? 7 : 6;
-        double spread = 0.5;                 // ~29Â°
+        double spread = 0.5;                 // ~29°
         double cos = Math.cos(spread), sin = Math.sin(spread);
-        // Rotate the reverse heading (-u) by Â±spread and step out by s.
+        // Rotate the reverse heading (-u) by ±spread and step out by s.
         int b1x = (int) Math.round(tipX + s * (-ux * cos - -uy * sin));
         int b1y = (int) Math.round(tipY + s * (-ux * sin + -uy * cos));
         int b2x = (int) Math.round(tipX + s * (-ux * cos + -uy * sin));
@@ -2286,7 +2286,7 @@ public class ResearchScreen extends Screen {
     }
 
     /** Every transitive prerequisite of {@code rootId} in the current tree (the ancestor closure),
-     *  including the root itself. Drives the hover highlight â€” the set of nodes/edges that gate the
+     *  including the root itself. Drives the hover highlight  the set of nodes/edges that gate the
      *  hovered research. A visited set bounds it so a malformed cyclic graph can't loop forever. */
     private java.util.Set<String> prereqClosure(String rootId) {
         java.util.Map<String, ResearchDefinition> tree = currentTree();
@@ -2303,7 +2303,7 @@ public class ResearchScreen extends Screen {
         return seen;
     }
 
-    /** Bright tab-tinted colour for highlighted prereq-path lines, arrowheads and node rings â€”
+    /** Bright tab-tinted colour for highlighted prereq-path lines, arrowheads and node rings 
      *  steel-blue / purple / gold, matching the active tree's palette. */
     private int highlightLineColor() {
         if (activeTab == Tab.FAITH) return 0xFFFFE8A0;

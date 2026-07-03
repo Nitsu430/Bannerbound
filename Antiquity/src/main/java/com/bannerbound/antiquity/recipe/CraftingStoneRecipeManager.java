@@ -76,6 +76,22 @@ public class CraftingStoneRecipeManager extends SimpleJsonResourceReloadListener
         return null;
     }
 
+    public static List<CraftingStoneRecipe> findMatching(List<ItemStack> contents) {
+        Map<Item, Integer> placed = new HashMap<>();
+        for (ItemStack s : contents) {
+            if (!s.isEmpty()) placed.merge(s.getItem(), s.getCount(), Integer::sum);
+        }
+
+        if (placed.isEmpty()) return null;
+
+        List<CraftingStoneRecipe> matched = new ArrayList<>();
+        for (CraftingStoneRecipe recipe : recipes) {
+            if (recipe.matches(placed)) matched.add(recipe);
+        }
+
+        return matched;
+    }
+
     /** Recipes the pile could still BECOME — every placed item appears in the recipe at no more
      *  than its required count, and at least one ingredient is still missing (an exact match is the
      *  craftable result, not a candidate). Empty pile → no candidates (no ghost spam on an empty
