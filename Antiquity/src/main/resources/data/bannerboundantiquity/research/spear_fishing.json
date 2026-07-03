@@ -12,7 +12,7 @@
   "insight": {
     "trigger": {
       "type": "kill_entity",
-      "target": "#minecraft:fish",
+      "target": "#bannerbound:fish",
       "count": 2
     },
     "boost": 0.4
