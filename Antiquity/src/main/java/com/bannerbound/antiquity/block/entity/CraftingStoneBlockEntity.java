@@ -195,12 +195,29 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
         ghostIngredients = List.of();
         ghostResult = ItemStack.EMPTY;
         ghostCandidateCount = 0;
-        CraftingStoneRecipe recipe = CraftingStoneRecipeManager.find(contents);
-        if (recipe == null
-                || !com.bannerbound.core.api.research.CraftGating.canProduceAt(
+        List<CraftingStoneRecipe> recipes = CraftingStoneRecipeManager.findMatching(contents);
+
+        if (recipes.isEmpty()) {
+            cachedResult = ItemStack.EMPTY;
+            recomputeGhost();
+            return;
+        }
+
+        CraftingStoneRecipe recipe = recipes.getFirst();
+
+        if (recipes.size() > 1) {
+            // check if one of the recipes is our locked one, if yes then prefer that one.
+
+            for (CraftingStoneRecipe c : recipes) {
+                if (c.result().is(ghostChoice)) {
+                    recipe = c;
+                    break;
+                }
+            }
+        }
+
+        if (!com.bannerbound.core.api.research.CraftGating.canProduceAt(
                     level, getBlockPos(), recipe.result().getItem())) {
-            // No recipe, or the owning civ hasn't researched the output yet → no result (the
-            // floating preview shows nothing and craft() returns EMPTY).
             cachedResult = ItemStack.EMPTY;
             recomputeGhost();
             return;
