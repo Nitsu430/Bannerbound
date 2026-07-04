@@ -3,6 +3,8 @@ package com.bannerbound.core.entity;
 
 import java.util.UUID;
 
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.damagesource.DamageTypes;
 import org.jetbrains.annotations.Nullable;
 
 import com.bannerbound.core.api.settlement.CitizenGender;
@@ -592,6 +594,15 @@ public class CitizenEntity extends PathfinderMob {
     public int getMaxFallDistance() {
         // Only while digging â€” ordinary citizens keep the vanilla 3 so they don't stroll off cliffs.
         return deepDigDescent ? 24 : super.getMaxFallDistance();
+    }
+
+    @Override
+    public boolean hurt(DamageSource source, float amount) {
+        if (source.is(DamageTypes.CAMPFIRE)) {
+            return false;
+        }
+
+        return super.hurt(source, amount);
     }
 
     @Override
