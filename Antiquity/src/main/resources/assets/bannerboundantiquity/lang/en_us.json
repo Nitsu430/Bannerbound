@@ -147,6 +147,7 @@
   "poison.bannerboundantiquity.oleander": "Oleander",
   "poison.bannerboundantiquity.water_hemlock": "Water Hemlock",
   "entity.bannerboundantiquity.blowdart": "Blowdart",
+  "entity.bannerboundantiquity.ground_decal":  "Footsteps",
   "death.attack.poison": "%1$s succumbed to poison",
   "death.attack.poison.player": "%1$s succumbed to poison whilst fighting %2$s",
   "death.bannerbound.wolfsbane.title": "Paralyzed",
