@@ -40,7 +40,7 @@ public final class Settlement {
     public static final double DEFAULT_FOOD_PER_SECOND = 0.1;
     public static final double DEFAULT_CULTURE_PER_SECOND = 0.05;
     public static final double BASE_IMMIGRATION_FOOD_COST = 5.0;
-    public static final double BASE_IMMIGRATION_CULTURE_COST = 10.0;
+    public static final double BASE_IMMIGRATION_CULTURE_COST = 50.0;
 
     private final UUID id;
     /** Capital / settlement name. Until multi-settlement factions arrive, this is also what
