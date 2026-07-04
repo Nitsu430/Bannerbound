@@ -197,7 +197,7 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
         ghostCandidateCount = 0;
         List<CraftingStoneRecipe> recipes = CraftingStoneRecipeManager.findMatching(contents);
 
-        if (recipes.isEmpty()) {
+        if (recipes == null || recipes.isEmpty()) {
             cachedResult = ItemStack.EMPTY;
             recomputeGhost();
             return;
