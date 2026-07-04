@@ -546,8 +546,7 @@ public class SpearFisherWorkGoal extends GathererWorkGoal {
      *  stands (the expensive block geometry was scanned once into {@link #standCache}). */
     private Spot findStandNearFish() {
         if (!(citizen.level() instanceof ServerLevel sl)) return null;
-        BlockPos origin = citizen.getDropOff();
-        if (origin == null) return null;
+        BlockPos origin = citizen.blockPosition();
         ensureStandCache();
         if (standCache.isEmpty()) return null;
         Settlement settlement = citizen.getSettlement();
@@ -585,7 +584,7 @@ public class SpearFisherWorkGoal extends GathererWorkGoal {
     /** Rebuild the shore-stand cache when it's stale, empty, or the drop-off moved. The block scan is
      *  the expensive part, so it runs ~once a minute instead of every fish poll. */
     private void ensureStandCache() {
-        BlockPos origin = citizen.getDropOff();
+        BlockPos origin = citizen.blockPosition();
         if (standCacheCooldown > 0 && !standCache.isEmpty() && origin != null && origin.equals(cacheOrigin)) {
             standCacheCooldown--;
             return;
@@ -605,8 +604,7 @@ public class SpearFisherWorkGoal extends GathererWorkGoal {
         dbgClaimedWater = 0;
         Settlement settlement = citizen.getSettlement();
         if (settlement == null || !(citizen.level() instanceof ServerLevel sl)) return;
-        BlockPos origin = citizen.getDropOff();
-        if (origin == null) return;
+        BlockPos origin = citizen.blockPosition();
         BlockPos.MutableBlockPos c = new BlockPos.MutableBlockPos();
         Set<Long> tried = new HashSet<>();
         List<Spot> found = new ArrayList<>();
