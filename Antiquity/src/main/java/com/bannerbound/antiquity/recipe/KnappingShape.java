@@ -21,18 +21,20 @@ import net.minecraft.world.item.Item;
  * </pre>
  * When the remaining cells exactly equal {@code keep}, the head is made; chipping every cell away
  * "breaks the stone" (a wasted rock). Loaded from {@code data/<namespace>/knapping_shapes/*.json}:
- * <pre>{ "head": "bannerboundantiquity:stone_pick_head", "keep": [0, 1, 2], "stretches": 4 }</pre>
+ * <pre>{ "head": "bannerboundantiquity:stone_pick_head", "keep": [0, 1, 2], "min_completed": 4 }</pre>
  *
  * @param head      the tool head produced when this silhouette is matched
  * @param keep      grid cells (0–8) that stay stone — must be unique across all loaded shapes
- * @param stretches number of timing-minigame reps to knap this head (more shaping → more reps)
+ * @param percentage_standard percentage of completed timing-minigame reps to get standard quality
+ * @param percentage_fine percentage of completed timing-minigame reps to get fine quality
  */
 @ApiStatus.Internal
-public record KnappingShape(Item head, List<Integer> keep, int stretches) {
+public record KnappingShape(Item head, List<Integer> keep, int percentage_standard, int percentage_fine) {
     public static final Codec<KnappingShape> CODEC = RecordCodecBuilder.create(i -> i.group(
         BuiltInRegistries.ITEM.byNameCodec().fieldOf("head").forGetter(KnappingShape::head),
         Codec.INT.listOf().fieldOf("keep").forGetter(KnappingShape::keep),
-        Codec.INT.optionalFieldOf("stretches", 4).forGetter(KnappingShape::stretches)
+        Codec.INT.optionalFieldOf("percentage_standard", 50).forGetter(KnappingShape::percentage_standard),
+        Codec.INT.optionalFieldOf("percentage_fine", 75).forGetter(KnappingShape::percentage_fine)
     ).apply(i, KnappingShape::new));
 
     /** The 9-bit mask (bit {@code i} set = cell {@code i} stays stone) of {@link #keep}. */

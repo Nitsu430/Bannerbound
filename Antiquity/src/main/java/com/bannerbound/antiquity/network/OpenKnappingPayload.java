@@ -25,11 +25,12 @@ import net.minecraft.resources.ResourceLocation;
 public record OpenKnappingPayload(List<ShapeView> shapes) implements CustomPacketPayload {
 
     /** One knappable shape as seen by the client: which head, which cells stay stone, how many reps. */
-    public record ShapeView(ResourceLocation head, int keepMask, int stretches) {
+    public record ShapeView(ResourceLocation head, int keepMask, int percentage_standard, int percentage_fine) {
         public static final StreamCodec<ByteBuf, ShapeView> STREAM_CODEC = StreamCodec.composite(
             ResourceLocation.STREAM_CODEC, ShapeView::head,
             ByteBufCodecs.VAR_INT, ShapeView::keepMask,
-            ByteBufCodecs.VAR_INT, ShapeView::stretches,
+            ByteBufCodecs.VAR_INT, ShapeView::percentage_standard,
+            ByteBufCodecs.VAR_INT, ShapeView::percentage_fine,
             ShapeView::new);
     }
 
