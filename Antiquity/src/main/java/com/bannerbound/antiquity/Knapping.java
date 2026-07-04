@@ -1,11 +1,8 @@
 package com.bannerbound.antiquity;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
+import java.util.*;
 
+import com.mojang.logging.LogUtils;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.antiquity.network.KnappingActionPayload;
@@ -84,7 +81,7 @@ public final class Knapping {
         for (KnappingShape s : shapes) {
             if (UnknownItemBlocker.isUnknownForPlayer(player, s.head())) continue;
             views.add(new OpenKnappingPayload.ShapeView(
-                BuiltInRegistries.ITEM.getKey(s.head()), s.keepMask(), s.stretches()));
+                BuiltInRegistries.ITEM.getKey(s.head()), s.keepMask(), s.percentage_standard(), s.percentage_fine()));
         }
         if (views.isEmpty()) return;
         SESSIONS.put(player.getUUID(), new Session(player.serverLevel().getGameTime()));
@@ -133,17 +130,18 @@ public final class Knapping {
     /** The tier a set of per-tap scores earns. Caps at FINE (hand-craft), and additionally REQUIRES
      *  at least one perfect (100) tap to reach FINE — a clean run of merely-good taps tops out at
      *  Standard. Shared by the server roll and the client's live estimate so they never disagree. */
-    public static QualityTier rollTier(int[] scores) {
-        QualityTier tier = QualityTier.fromScore(QualityMath.aggregate(scores));
-        if (tier.ordinal() >= QualityTier.FINE.ordinal()) {
-            boolean anyPerfect = false;
-            for (int s : scores) {
-                if (s >= 100) {
-                    anyPerfect = true;
-                    break;
-                }
-            }
-            if (!anyPerfect) tier = QualityTier.STANDARD;
+    public static QualityTier rollTier(int percentage_standard, int percentage_fine, List<Integer> scores, int reps) {
+        int total_score = scores.stream().mapToInt(Integer::intValue).sum();
+        double percentage = (total_score / (double) (reps * 100)) * 100;
+
+        QualityTier tier;
+
+        if (percentage >= percentage_fine) {
+            tier = QualityTier.FINE;
+        } else if (percentage >= percentage_standard) {
+            tier = QualityTier.STANDARD;
+        } else {
+            tier = QualityTier.CRUDE;
         }
         return tier;
     }
@@ -153,12 +151,9 @@ public final class Knapping {
         KnappingShape shape = KnappingShapeManager.byHead(headItem);
         if (shape == null) return; // unknown/forged head id — ignore
         if (UnknownItemBlocker.isUnknownForPlayer(player, headItem)) return; // shape not unlocked
-        List<Integer> scores = payload.scores();
-        if (scores.size() != shape.stretches()) return;
-        if (!MinigameGuard.elapsedOk(player, session.startTime, shape.stretches(), 6)) return;
-        int[] arr = new int[scores.size()];
-        for (int i = 0; i < arr.length; i++) arr[i] = MinigameGuard.clampScore(scores.get(i));
-        QualityTier tier = com.bannerbound.antiquity.item.Intoxication.craftQuality(player, rollTier(arr));
+
+        QualityTier tier = rollTier(shape.percentage_standard(), shape.percentage_fine(), payload.scores(), 9 - shape.keep().size());
+
         ItemStack head = Fletching.applyQuality(new ItemStack(headItem), tier);
         giveOrDrop(player, head);
         player.serverLevel().playSound(null, player.blockPosition(),

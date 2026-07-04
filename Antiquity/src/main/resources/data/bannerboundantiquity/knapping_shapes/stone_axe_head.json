@@ -1,5 +1,6 @@
 {
   "head": "bannerboundantiquity:stone_axe_head",
   "keep": [0, 1, 3],
-  "stretches": 4
+  "percentage_standard": 50,
+  "percentage_fine": 75
 }

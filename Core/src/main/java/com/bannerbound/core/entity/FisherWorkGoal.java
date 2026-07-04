@@ -5,6 +5,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import com.mojang.logging.LogUtils;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.world.item.Items;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.core.api.fisher.FisherCatchTable;
@@ -153,14 +156,22 @@ public class FisherWorkGoal extends GathererWorkGoal {
         return DropOffContainers.resolveJobDepot(citizen);
     }
 
+    public static boolean isFishingRod(net.minecraft.world.item.ItemStack stack) {
+        return !stack.isEmpty() && stack.getItem() instanceof net.minecraft.world.item.FishingRodItem;
+    }
+
+    private boolean hasFishingRod() {
+        return JOB_TYPE_ID.equals(citizen.getJobType()) && isFishingRod(citizen.getJobTool());
+    }
+
     @Override
     protected boolean canStartWork() {
         citizen.validateJobStorage();   // clear a broken drop-off so we don't fish for a dead container
-        boolean ready = citizen.isFisherReady();
-        // A catch is unknown until reeled in, so we need a guaranteed-free slot or we'd lose it on a
-        // full depot. No free slot → stop fishing (yield to patrol) until the stocker drains it.
+        boolean ready = hasFishingRod();
+
         Container depot = resolveDepot();
         boolean depotOk = depot != null && DropOffContainers.hasFreeSlot(depot);
+
         // World-reload recovery: the sailing-trip state is transient, so a fisher saved out at sea
         // wakes up seated on her vessel with no trip — and no way to walk anywhere, so she'd idle
         // afloat forever. Adopt the boat under her: re-anchor right here, fish, and ride home as
@@ -733,8 +744,7 @@ public class FisherWorkGoal extends GathererWorkGoal {
         if (settlement == null || !(citizen.level() instanceof ServerLevel sl)) return null;
         if (!FishingVessels.hasProvider() || !FishingVessels.isSailingUnlocked(settlement)) return null;
         if (isBedtimeSoon()) return null;   // wind-down: don't launch a trip she'd immediately turn around
-        BlockPos origin = citizen.getDropOff();
-        if (origin == null) return null;
+        BlockPos origin = citizen.blockPosition();
         BlockPos deep = findDeepOpenWater(sl, origin);
         if (deep == null) return null;
         BlockPos launch = findLaunchStand(sl, origin, deep);
@@ -847,8 +857,7 @@ public class FisherWorkGoal extends GathererWorkGoal {
     private CastSolution findSpot() {
         Settlement settlement = citizen.getSettlement();
         if (settlement == null || !(citizen.level() instanceof ServerLevel sl)) return null;
-        BlockPos origin = citizen.getDropOff();
-        if (origin == null) return null;
+        BlockPos origin = citizen.blockPosition();
         BlockPos.MutableBlockPos c = new BlockPos.MutableBlockPos();
         Set<Long> triedStands = new HashSet<>();
         CastSolution best = null;

@@ -344,6 +344,7 @@ public class KnappingScreen extends PolishedScreen {
 
     private void renderShaping(GuiGraphics g) {
         int cx = this.width / 2;
+        this.cursorX = cx - (travelDist / 2);
         Component hint = Component.translatable("bannerbound.knapping.shape_hint").withStyle(ChatFormatting.GRAY);
         // Backing strip wide enough for BOTH the grid and the title (whichever is wider).
         int halfW = Math.max(3 * CELL / 2 + 14, this.font.width(hint) / 2 + 16);
@@ -390,9 +391,10 @@ public class KnappingScreen extends PolishedScreen {
         g.drawCenteredString(this.font,
             Component.translatable("bannerbound.knapping.strike_hint").withStyle(ChatFormatting.BOLD),
             cx, trackY - 50, 0xFFDDDDDD);
-        g.drawString(this.font, Math.min(resolvedCount + 1, reps) + "/" + reps,
-            cursorX - 24, trackY - 34, 0xFFFFFFFF, false);
-        QualityTier tier = com.bannerbound.antiquity.Knapping.rollTier(scoresSoFar());
+        g.drawCenteredString(this.font, Math.min(resolvedCount + 1, reps) + "/" + reps,
+                cursorX, trackY - 34, 0xFFFFFFFF);
+
+        QualityTier tier = com.bannerbound.antiquity.Knapping.rollTier(matched.percentage_standard(), matched.percentage_fine(), scoresSoFar(), reps);
         g.drawCenteredString(this.font, tier.displayName(), cx, trackY - 34, 0xFFFFFFFF);
 
         // Track baseline.
@@ -512,11 +514,10 @@ public class KnappingScreen extends PolishedScreen {
         return streak;
     }
 
-    private int[] scoresSoFar() {
-        int[] arr = new int[resolvedCount];
-        int j = 0;
+    private List<Integer> scoresSoFar() {
+        List<Integer> arr = new ArrayList<>();
         for (int i = 0; i < reps; i++) {
-            if (resolved[i]) arr[j++] = noteScore[i];
+            if (resolved[i]) arr.add(noteScore[i]);
         }
         return arr;
     }
