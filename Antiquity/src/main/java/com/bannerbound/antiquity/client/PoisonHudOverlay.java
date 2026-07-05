@@ -30,7 +30,7 @@ public final class PoisonHudOverlay {
             return;
         }
         float time = (float) mc.level.getGameTime() + delta.getGameTimeDeltaPartialTick(false);
-        float flash = PoisonClientEffects.healFlash(time);
+        float flash = StatusClientEffects.healFlash(time);
         if (flash > 0.0F) {
             int a = (int) (flash * 105);
             g.fill(0, 0, g.guiWidth(), g.guiHeight(), (a << 24) | 0xFFE85C); // warm yellow relief

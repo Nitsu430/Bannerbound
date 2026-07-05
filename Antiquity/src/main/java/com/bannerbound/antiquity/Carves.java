@@ -42,8 +42,8 @@ import net.minecraft.world.phys.Vec3;
  * no block placement, no sounds, no durability, no research gate. It answers the question "if the
  * player committed this gesture right here, which positions would become which blockstates?".
  *
- * <p>The matching client-side ghost preview ({@code CarvePreviewController} /
- * {@code CarveGhostRenderer}) consumes this directly, so the silhouette the player sees is computed
+ * <p>The matching client-side ghost preview ({@code CarveClientEvents} /
+ * {@code CarveClientEvents}) consumes this directly, so the silhouette the player sees is computed
  * from the exact same logic that performs the carve. The handlers in {@link AntiquityEvents} still
  * own the <em>execution</em> (placement + side effects + authoritative gating); the intent is that
  * they read their target state from here too, so detection can never drift between the preview and

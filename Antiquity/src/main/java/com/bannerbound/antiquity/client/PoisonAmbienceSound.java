@@ -12,7 +12,7 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * One looping poison ambience drone (a single stage layer, for any poison). It plays "in the player's
  * head" (no attenuation, relative) and ramps its volume toward a target each tick, so
- * {@code PoisonClientEffects} can crossfade between stage layers and fade the whole thing in on a hit
+ * {@code StatusClientEffects} can crossfade between stage layers and fade the whole thing in on a hit
  * / out on a heal. It self-stops once it has faded fully to silence.
  */
 @OnlyIn(Dist.CLIENT)

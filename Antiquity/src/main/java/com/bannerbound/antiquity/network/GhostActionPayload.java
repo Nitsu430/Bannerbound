@@ -14,7 +14,7 @@ import net.minecraft.resources.ResourceLocation;
 /**
  * C→S: the player right-clicked one of a workstation's floating ghost-preview targets (browse
  * arrows or the ghost result). The targets are pure client-side billboards — no entity, no block —
- * so the client ray-tests them itself ({@code GhostClickEvents}) and forwards the intent; the
+ * so the client ray-tests them itself ({@code GhostRecipeClientEvents}) and forwards the intent; the
  * server validates range/locks and acts ({@code GhostWorkstationActions.serverHandle}).
  */
 @ApiStatus.Internal

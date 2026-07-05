@@ -28,7 +28,7 @@ import net.neoforged.api.distmarker.OnlyIn;
  * result + browse arrows, and the saw-minigame animation). Everything is drawn at the master block's
  * centre (x/z = 0.5) — the blockstate rotation pivot, which stays on the tabletop for any facing and
  * matches the ghost click hitbox. All <b>text</b> (counts, names, the queue) is drawn separately by
- * {@link CarpentryReadoutRenderer} via a level-stage pass, because glyphs added inside a block-entity
+ * {@link StationReadoutEvents} via a level-stage pass, because glyphs added inside a block-entity
  * renderer don't get flushed reliably.
  */
 @OnlyIn(Dist.CLIENT)

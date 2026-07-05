@@ -14,7 +14,7 @@ import net.minecraft.resources.ResourceLocation;
  * C→S: the player left-clicked the rope part of a rope fence post at {@code pos}. Left-click is
  * cancelled client-side (so no block-break is predicted) and this is sent instead; the server then
  * either cancels the player's in-progress tie or breaks one of the post's ropes (see
- * {@code RopeFenceInteractions.serverHandle}). Vanilla's left-click packet can't carry this intent,
+ * {@code RopeFenceEvents.serverHandle}). Vanilla's left-click packet can't carry this intent,
  * hence a dedicated payload.
  */
 @ApiStatus.Internal

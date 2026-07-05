@@ -243,7 +243,7 @@ public class SpearProjectile extends AbstractArrow {
                     addStuckSpear(living, result.getLocation());
                 } else if (living instanceof AbstractFish && Config.SPEAR_FISHING_ENABLED.get()) {
                     // KILLING blow on a fish → the spear is bundled into the floating catch by
-                    // SpearFishingEvents (which fired during the hurt above). Don't drop it here, or
+                    // HuntingEvents (which fired during the hurt above). Don't drop it here, or
                     // the player would get two spears. Remove the dead fish at once so its death
                     // flop/flash doesn't play next to the catch's impaled fish ("two fish hurt").
                     living.discard();
@@ -294,7 +294,7 @@ public class SpearProjectile extends AbstractArrow {
         float localZ = (float) -(world.x * sin - world.z * cos);
         float bodyYaw = this.getYRot() - host.yBodyRot;
         // NPC spears embed as COSMETIC-ONLY: never pullable/droppable (no tool dup) and timed out
-        // like a landed arrow (StuckSpearEvents prunes them).
+        // like a landed arrow (HuntingEvents prunes them).
         long expireAt = dropsRecoverable ? -1L
             : this.level().getGameTime() + NPC_STUCK_DESPAWN_TICKS;
         List<StuckSpear> next = new ArrayList<>(current);

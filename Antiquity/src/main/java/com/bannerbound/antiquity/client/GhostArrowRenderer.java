@@ -24,7 +24,7 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * Draws the ghost preview's browse arrows: camera-facing billboards flanking the floating ghost
  * result (Core's GUI arrow textures), swapping to the highlighted variant when the crosshair ray
- * is on one. Pure presentation — the matching click logic lives in {@code GhostClickEvents}, with
+ * is on one. Pure presentation — the matching click logic lives in {@code GhostRecipeClientEvents}, with
  * {@link GhostClickTargets} as the single source of positions so the visuals and hitboxes agree.
  */
 @OnlyIn(Dist.CLIENT)

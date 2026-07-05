@@ -18,7 +18,7 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * Client-side cache of the base per-item food values. Loaded from the server via
  * {@link com.bannerbound.core.network.FoodValueSyncPayload} on join + datapack reload. Read by
- * the green "Food value" tooltip line — see {@code FoodValueTooltipHandler}.
+ * the green "Food value" tooltip line — see {@code TooltipHandlers}.
  *
  * <p>Expansions can register per-stack <b>value modifiers</b> (e.g. Antiquity halving the line for
  * bland food) via {@link #addModifier}, so the tooltip shows the value a stack would actually

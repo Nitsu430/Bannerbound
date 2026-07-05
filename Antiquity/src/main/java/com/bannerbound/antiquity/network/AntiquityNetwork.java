@@ -3,7 +3,7 @@ package com.bannerbound.antiquity.network;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.RopeFenceInteractions;
+import com.bannerbound.antiquity.RopeFenceEvents;
 import com.bannerbound.antiquity.SpearFishing;
 
 import net.minecraft.server.level.ServerPlayer;
@@ -40,7 +40,7 @@ public final class AntiquityNetwork {
             RopeFenceActionPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() -> {
                 if (context.player() instanceof ServerPlayer player) {
-                    RopeFenceInteractions.serverHandle(player, payload.pos());
+                    RopeFenceEvents.serverHandle(player, payload.pos());
                 }
             }));
         // Fletching minigame: client reports each step; the server owns the session + quality roll.

@@ -23,7 +23,7 @@ import net.minecraft.world.level.Level;
  * hold right-click — the player rubs the paste on (a brushing animation) and, on finish, coats exactly
  * ONE item (never the whole stack — no duping). Food gets a hidden, dose-stacking {@link PoisonedFoodData}
  * (applied a short while after eating); an arrow gets the {@code ARROW_POISON} id (delivered on hit by
- * {@code PoisonArrowEvents}). Carries its {@link PoisonType} so any paste reuses this one item class.
+ * {@code PoisonEvents}). Carries its {@link PoisonType} so any paste reuses this one item class.
  */
 public class PoisonPasteItem extends Item {
     private static final int RUB_TICKS = 30; // ~1.5s of brushing

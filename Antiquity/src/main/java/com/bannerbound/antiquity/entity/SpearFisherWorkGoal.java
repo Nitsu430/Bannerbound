@@ -451,7 +451,7 @@ public class SpearFisherWorkGoal extends GathererWorkGoal {
     }
 
     private void tickReel() {
-        // A hit converts the projectile into a tethered catch (SpearFishingEvents). Pull it home; on
+        // A hit converts the projectile into a tethered catch (HuntingEvents). Pull it home; on
         // arrival it deposits the fish into our drop-off (SpearedFishEntity.grantToDepot).
         SpearedFishEntity catchEntity = findMyCatch();
         if (catchEntity != null) {

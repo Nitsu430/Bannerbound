@@ -55,7 +55,7 @@ public final class GhostClickTargets {
     private GhostClickTargets() {}
 
     /** The ghost target the player is aiming at right now (nearest, and only when it beats the vanilla
-     *  block under the crosshair), or {@code null}. Shared by the click handler ({@code GhostClickEvents})
+     *  block under the crosshair), or {@code null}. Shared by the click handler ({@code GhostRecipeClientEvents})
      *  and the green-crosshair affordance so they always agree on what's clickable. */
     @Nullable
     public static Hover findHovered(Minecraft mc) {

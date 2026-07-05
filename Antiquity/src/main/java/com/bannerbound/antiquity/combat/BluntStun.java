@@ -16,9 +16,9 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
  * struck victim is staggered for {@link #STUN_TICKS} (1s): movement is cut in half (a transient
  * {@code MOVEMENT_SPEED} modifier, the {@link com.bannerbound.antiquity.poison.Poisons} paralysis
  * pattern) and — for a struck player — their vision blurs in and out client-side (driven off the
- * synced {@link BannerboundAntiquity#STUN_UNTIL} deadline by {@code StunClientEffects}).
+ * synced {@link BannerboundAntiquity#STUN_UNTIL} deadline by {@code StatusClientEffects}).
  *
- * <p>Server-side only. {@code StunEvents} arms it on {@link CriticalHitEvent} and clears the speed
+ * <p>Server-side only. {@code PoisonEvents} arms it on {@link CriticalHitEvent} and clears the speed
  * modifier once the deadline passes.
  */
 public final class BluntStun {

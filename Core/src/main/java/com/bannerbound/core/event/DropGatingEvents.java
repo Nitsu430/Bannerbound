@@ -25,7 +25,7 @@ import net.neoforged.neoforge.event.level.BlockEvent;
  * <p>
  * Both handlers run at {@link EventPriority#LOW} so they filter the <i>final</i> drop set — after
  * {@link OreBreakHandler} has applied any ore-disguise swap and after
- * {@code AnimalDropsEvents} has added its bone bootstrap (bones survive via an {@code always_drop}
+ * {@code HuntingEvents} has added its bone bootstrap (bones survive via an {@code always_drop}
  * override). Worker citizens that harvest with {@code Block.getDrops} bypass these events
  * entirely and apply the same filter at their own collection sites.
  */

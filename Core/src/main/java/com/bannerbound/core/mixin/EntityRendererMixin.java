@@ -15,7 +15,7 @@ import net.minecraft.world.entity.Entity;
 /**
  * Suppresses VANILLA's brown leash ribbon. Bannerbound draws EVERY leash itself as the plant-fibre
  * green rope used everywhere else (rope fences / spear-fishing / herding) — see Antiquity's
- * {@code LeashRopeRenderer} — so vanilla's own leash render would double-draw a thin brown line over
+ * {@code RopeRenderEvents} — so vanilla's own leash render would double-draw a thin brown line over
  * ours. Cancelling {@code renderLeash} at HEAD removes the vanilla draw for every leashed entity; the
  * green replacement is drawn in a {@code RenderLevelStageEvent} keyed off the entity's vanilla
  * {@code isLeashed()} state, so no custom data is needed — vanilla leashing drives the link.

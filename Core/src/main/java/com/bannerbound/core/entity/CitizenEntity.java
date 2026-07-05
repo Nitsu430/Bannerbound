@@ -3064,7 +3064,7 @@ public class CitizenEntity extends PathfinderMob {
     /** Tag (gametime) marking a DELIBERATE server-side position jump. Antiquity's rope-fence clamp
      *  keeps every entity on the side of a rope it was on last tick, so an untagged jump that crosses
      *  a rope reads as an illegal crossing and gets shoved straight back — cancelling the teleport.
-     *  The literal is mirrored in Antiquity's {@code RopeFenceCollision} (it can't import Core). */
+     *  The literal is mirrored in Antiquity's {@code RopeFenceEvents} (it can't import Core). */
     public static final String TELEPORT_AT_KEY = "BannerboundTeleportAt";
 
     /** Every intentional position jump of an ALREADY-EXISTING entity (teleportTo / moveTo-snap) must

@@ -50,7 +50,7 @@ public final class SelectionRenderer {
     /** Preview flickers a bit faster so it reads as "in progress" vs the stable committed boxes. */
     private static final float PREVIEW_FLICKER_HZ = 2.4f;
     /** Per-cube translucent settlement-color overlay alpha. Low enough that block textures still
-     *  read clearly through it — same intent as {@link BirdseyeOverlayRenderer}'s slab alphas. */
+     *  read clearly through it — same intent as {@link BirdseyeClientEvents}'s slab alphas. */
     private static final float TINT_ALPHA = 0.18f;
 
     private SelectionRenderer() {

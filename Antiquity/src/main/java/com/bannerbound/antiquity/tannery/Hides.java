@@ -11,7 +11,7 @@ import net.minecraft.world.item.Item;
 
 /**
  * Single source of truth mapping an animal species to its raw-hide item. Used by BOTH acquisition
- * paths — the hunting drop injection ({@code AnimalDropsEvents}) and the herder cull hook
+ * paths — the hunting drop injection ({@code HuntingEvents}) and the herder cull hook
  * ({@code AntiquityHerderHooks}). A species absent from the map yields no hide.
  */
 public final class Hides {

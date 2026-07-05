@@ -29,7 +29,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * The "catch" left behind when a thrown spear kills a fish (see {@code SpearFishingEvents}): a
+ * The "catch" left behind when a thrown spear kills a fish (see {@code HuntingEvents}): a
  * free-floating object that renders the spear angled in the water with the fish impaled on its tip
  * (see {@code SpearedFishEntityRenderer}), bobs at the surface, and — on walk-over pickup — grants
  * the {@link #payload}: the spear plus everything the fish would have dropped, in one go.

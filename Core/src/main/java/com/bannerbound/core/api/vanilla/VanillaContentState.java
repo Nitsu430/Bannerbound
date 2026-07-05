@@ -12,8 +12,8 @@ import com.bannerbound.core.Config;
  * Core config. Standalone Core simply reads {@link Config#VANILLA_CONTENT} (default {@code true},
  * i.e. vanilla untouched).
  *
- * <p>All runtime gates ({@code HostileSpawnGate}, {@code VanillaPortalGate}, Antiquity's
- * {@code VanillaStorageGate}) call {@link #isEnabled()} and behave as vanilla when it returns
+ * <p>All runtime gates ({@code VanillaGates}, {@code VanillaGates}, Antiquity's
+ * {@code VanillaGates}) call {@link #isEnabled()} and behave as vanilla when it returns
  * {@code true}. Static worldgen/loot changes are shipped as datapacks by the expansion instead,
  * since those can't be toggled at runtime.
  */

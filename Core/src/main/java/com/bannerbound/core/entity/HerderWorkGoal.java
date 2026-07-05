@@ -75,7 +75,7 @@ public class HerderWorkGoal extends OrderedWorkGoal {
     public static final String DOMESTICATED_TAG = "BannerboundDomesticated";
     /** Transient tag (gametime) set on an entity we deliberately teleport, so Antiquity's rope-fence
      *  collision accepts the cross-rope jump instead of shoving the entity back to its old side. Mirrored
-     *  by the same literal in {@code RopeFenceCollision} (Core can't be imported there). */
+     *  by the same literal in {@code RopeFenceEvents} (Core can't be imported there). */
     public static final String TELEPORT_AT = CitizenEntity.TELEPORT_AT_KEY;
 
     private static final int START_PAIR = 2;
@@ -988,10 +988,10 @@ public class HerderWorkGoal extends OrderedWorkGoal {
 
     /** Has the herder's settlement researched Animal Husbandry? Gates the herder's breeding behind the same
      *  {@code bannerbound.allow_animal_breeding} flag the player-feed path uses ({@link com.bannerbound.core
-     *  .event.AnimalBreedingGate}). {@code hasFlag(null, …)} is false, so an unsettled herder can't breed. */
+     *  .event.VanillaGates}). {@code hasFlag(null, …)} is false, so an unsettled herder can't breed. */
     private boolean hasBreedingResearch() {
         return com.bannerbound.core.api.research.ResearchManager.hasFlag(
-            citizen.getSettlement(), com.bannerbound.core.event.AnimalBreedingGate.FLAG);
+            citizen.getSettlement(), com.bannerbound.core.event.VanillaGates.FLAG);
     }
 
     private static boolean isDomesticated(Animal a) {

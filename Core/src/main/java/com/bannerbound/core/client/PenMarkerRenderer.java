@@ -98,7 +98,7 @@ public final class PenMarkerRenderer {
             // settlement hasn't researched Animal Husbandry, breeding is off entirely → show that instead of
             // a misleading percentage.
             if (cam.distanceToSqr(cx, cy, cz) <= QUALITY_RANGE_SQ) {
-                if (!ClientResearchState.hasFlag(com.bannerbound.core.event.AnimalBreedingGate.FLAG)) {
+                if (!ClientResearchState.hasFlag(com.bannerbound.core.event.VanillaGates.FLAG)) {
                     drawLabel(pose, buffer, mc.font, "Locked",
                         cx - cam.x, cy - cam.y + LABEL_RISE, cz - cam.z, yaw, pitch, 0xFFAAAAAA);
                 } else {

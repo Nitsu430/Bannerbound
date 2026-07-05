@@ -32,6 +32,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.tags.TagKey;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.Leashable;
@@ -1163,5 +1164,34 @@ public final class AntiquityEvents {
         if (!(level instanceof ServerLevel server)) return;
         server.sendParticles(new BlockParticleOption(ParticleTypes.BLOCK, dust),
             pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5, 12, 0.25, 0.05, 0.25, 0.02);
+    }
+
+    /*
+     * The two-rocks knapping gesture: right-clicking while holding a knappable rock (see
+     * {@link Knapping#KNAPPING_ROCKS}) in BOTH hands opens the knapping screen instead of placing a
+     * rock. Both the block-aimed and air right-clicks are intercepted (and both hands' events canceled,
+     * so neither rock is placed); the screen is opened once, server-side, on the main-hand event.
+     */
+    @SubscribeEvent
+    static void onRightClickBlock(PlayerInteractEvent.RightClickBlock event) {
+        handle(event);
+    }
+
+    @SubscribeEvent
+    static void onRightClickItem(PlayerInteractEvent.RightClickItem event) {
+        handle(event);
+    }
+
+    private static void handle(PlayerInteractEvent event) {
+        Player player = event.getEntity();
+        if (!player.getMainHandItem().is(Knapping.KNAPPING_ROCKS)
+                || !player.getOffhandItem().is(Knapping.KNAPPING_ROCKS)) {
+            return;
+        }
+        // This gesture means "knap" — never place either rock (both subclasses are cancelable).
+        ((net.neoforged.bus.api.ICancellableEvent) event).setCanceled(true);
+        if (event.getHand() == InteractionHand.MAIN_HAND && player instanceof ServerPlayer serverPlayer) {
+            Knapping.tryOpen(serverPlayer);
+        }
     }
 }

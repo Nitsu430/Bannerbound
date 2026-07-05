@@ -12,7 +12,7 @@ import net.neoforged.api.distmarker.OnlyIn;
  * rendered glyphs flip to vanilla "obfuscated" (the cycling random-glyph effect), so the in-world HUD
  * and chat read as a jumbled, swimming mess — worse the drunker you are. Skipped while a screen (menu,
  * inventory, pause) is open, so you can still read your menus. The per-glyph chance is set once per
- * frame by {@link DrunkClientEffects}; {@code DrunkTextMixin} reads it in the font's glyph sink. Cheap:
+ * frame by {@link StatusClientEffects}; {@code DrunkTextMixin} reads it in the font's glyph sink. Cheap:
  * a volatile read + a null-check + one RNG roll per glyph.
  */
 @OnlyIn(Dist.CLIENT)

@@ -13,7 +13,7 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * A poison-flavoured death screen shown instead of the vanilla one when the player dies poisoned (see
- * {@link PoisonClientEffects#onDeathScreenOpening}). Subclasses {@link DeathScreen} so the inherited
+ * {@link StatusClientEffects#onDeathScreenOpening}). Subclasses {@link DeathScreen} so the inherited
  * {@code init()} still builds the Respawn / Title-menu buttons and the post-death delay; we only swap
  * the background wash, the big title and the flavour line — each pulled from lang by the poison's id
  * ({@code death.bannerbound.<id>.title} / {@code .flavor}) and tinted by its {@code tintColor()}.

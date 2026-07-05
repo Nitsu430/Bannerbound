@@ -1,7 +1,7 @@
 package com.bannerbound.antiquity.block;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.LeashRopeEvents;
+import com.bannerbound.antiquity.HerdingEvents;
 import com.bannerbound.antiquity.RopeAnchor;
 import com.bannerbound.antiquity.RopeTies;
 import com.bannerbound.antiquity.block.entity.RopeFencePostBlockEntity;
@@ -89,9 +89,9 @@ public class RopeFencePostBlock extends Block implements EntityBlock {
         }
         // Leading animals on the rope? Tie them to this post (vanilla lead-to-fence) instead of
         // starting a post-to-post rope tie — the leash holder is synced, so both sides agree.
-        if (LeashRopeEvents.hasLedAnimalsNear(player, pos)) {
+        if (HerdingEvents.hasLedAnimalsNear(player, pos)) {
             if (!level.isClientSide) {
-                LeashRopeEvents.tieLedAnimalsToFence(player, level, pos);
+                HerdingEvents.tieLedAnimalsToFence(player, level, pos);
             }
             return ItemInteractionResult.sidedSuccess(level.isClientSide);
         }

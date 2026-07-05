@@ -94,7 +94,7 @@ public final class PoisonPostProcessor {
         pass(desat, blur, vignette, tintAmt, tintR, tintG, tintB, warp, chroma, smear, 0.0F, time);
     }
 
-    /** The blunt-weapon crit DAZE (driven off {@code StunClientEffects}): a brief blur + soft vignette
+    /** The blunt-weapon crit DAZE (driven off {@code StatusClientEffects}): a brief blur + soft vignette
      *  + slight desaturate, no tint/warp/chroma. {@code intensity} (0→1) is the fade envelope; {@code
      *  time} is the smooth game time. Reuses the same Iris-safe framebuffer pass as the poisons. */
     public static void renderStun(float intensity, float time) {

@@ -31,7 +31,7 @@ public final class SpearFishing {
 
     private SpearFishing() {}
 
-    /** Whether {@code player}'s settlement has researched spear fishing. Mirrors AnimalBreedingGate. */
+    /** Whether {@code player}'s settlement has researched spear fishing. Mirrors VanillaGates. */
     public static boolean unlocked(Player player) {
         if (!(player instanceof ServerPlayer serverPlayer)) {
             return false;

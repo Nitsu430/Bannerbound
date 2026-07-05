@@ -2,12 +2,16 @@ package com.bannerbound.antiquity.client;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
+import com.bannerbound.antiquity.block.MasonsBenchBlock;
 import com.bannerbound.antiquity.block.WoodworkingTableBlock;
+import com.bannerbound.antiquity.block.entity.MasonsBenchBlockEntity;
 import com.bannerbound.antiquity.block.entity.WoodworkingTableBlockEntity;
+import com.bannerbound.antiquity.network.CarpentryActionPayload;
 import com.bannerbound.antiquity.network.GhostActionPayload;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Axis;
@@ -22,10 +26,9 @@ import net.minecraft.client.renderer.entity.ItemRenderer;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemStack;
-import java.util.Optional;
-
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.HitResult;
@@ -33,18 +36,46 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
+import net.neoforged.neoforge.network.PacketDistributor;
 
-/**
- * The Carpenter's Table's in-world readout: a flat tabletop budget numeral, floating queued outputs,
- * and the picker's per-craft yield count. The picker item and browse arrows are drawn by the
- * block-entity renderer at {@code ghostPreviewY}. Drawn in a level-stage pass with an explicit buffer flush
- * ({@code PenMarkerRenderer}'s idiom) so the count glyphs actually flush. Layout helpers here are the
- * single source of truth for where the queue chips sit, shared by the click handler + crosshair.
- */
+/** Merged client event handlers for the carpentry and masonry station in-world readouts. */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
-public final class CarpentryReadoutRenderer {
+public final class StationReadoutEvents {
+
+    // ==================== from StationReadoutEvents ====================
+
+    /*
+     * Right-click routing for the in-world QUEUE chips: aiming at a queued item and pressing use removes
+     * that entry. The picker's add/cycle reuses the shared ghost-preview path ({@code GhostRecipeClientEvents});
+     * queue chips sit at different positions, so the two never collide (and this bails if the ghost handler
+     * already consumed the click).
+     */
+    private StationReadoutEvents() {}
+
+    @SubscribeEvent
+    static void onInteract(InputEvent.InteractionKeyMappingTriggered event) {
+        if (event.isCanceled()) return;
+        if (!event.isUseItem() || event.getHand() != InteractionHand.MAIN_HAND) return;
+        StationReadoutEvents.QueueHit hit = StationReadoutEvents.findHoveredQueue(Minecraft.getInstance());
+        if (hit == null) return;
+        event.setCanceled(true);
+        event.setSwingHand(true);
+        PacketDistributor.sendToServer(
+            new CarpentryActionPayload(hit.pos(), CarpentryActionPayload.REMOVE_QUEUE, hit.index()));
+    }
+
+    // ==================== from StationReadoutEvents ====================
+
+    /*
+     * The Carpenter's Table's in-world readout: a flat tabletop budget numeral, floating queued outputs,
+     * and the picker's per-craft yield count. The picker item and browse arrows are drawn by the
+     * block-entity renderer at {@code ghostPreviewY}. Drawn in a level-stage pass with an explicit buffer flush
+     * ({@code PenMarkerRenderer}'s idiom) so the count glyphs actually flush. Layout helpers here are the
+     * single source of truth for where the queue chips sit, shared by the click handler + crosshair.
+     */
     private static final int FULLBRIGHT = 0x00F000F0;
     private static final double QUEUE_Y = 1.08;    // queued outputs sit low over the secondary cell
     private static final double SPACING = 0.34;    // gap between chips in a row
@@ -56,8 +87,6 @@ public final class CarpentryReadoutRenderer {
     static final double CHIP_BOX = 0.28;           // click hitbox size
     static final double SCAN = 7.0;                // render/interact range
     private static final int MAX_CHIPS = 7;
-
-    private CarpentryReadoutRenderer() {}
 
     @SubscribeEvent
     public static void onRenderLevelStage(RenderLevelStageEvent event) {
@@ -340,6 +369,196 @@ public final class CarpentryReadoutRenderer {
         pose.scale(fs, -fs, fs);
         Matrix4f mat = pose.last().pose();
         font.drawInBatch(s, x, y, 0xFFFFFFFF, false, mat, buffer, Font.DisplayMode.NORMAL, 0, FULLBRIGHT);
+        pose.popPose();
+    }
+
+    // ==================== from StationReadoutEvents ====================
+
+    /*
+     * The Mason's Bench's in-world readout — the stone analogue of {@code StationReadoutEvents}: a
+     * flat bench-top budget numeral (total uncommitted stone), floating queued outputs with their
+     * produced count, and the picker's per-craft yield count. The picker item + browse arrows are drawn
+     * by the block-entity renderer at {@code ghostPreviewY}. Drawn in a level-stage pass with an
+     * explicit buffer flush so the count glyphs actually flush.
+     */
+    @SubscribeEvent
+    public static void masonryOnRenderLevelStage(RenderLevelStageEvent event) {
+        if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) return;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null || mc.level == null) return;
+        List<MasonsBenchBlockEntity> benches = nearbyBenches(mc);
+        if (benches.isEmpty()) return;
+
+        Camera camera = event.getCamera();
+        PoseStack pose = event.getPoseStack();
+        MultiBufferSource.BufferSource buffer = mc.renderBuffers().bufferSource();
+        Font font = mc.font;
+        ItemRenderer ir = mc.getItemRenderer();
+        float t = (float) mc.level.getGameTime() + event.getPartialTick().getGameTimeDeltaPartialTick(false);
+        GhostClickTargets.Hover ghostHover = GhostClickTargets.findHovered(mc);
+        QueueHit queueHover = masonryFindHoveredQueue(mc);
+
+        for (MasonsBenchBlockEntity be : benches) {
+            if (MasonChiselState.activeFor(be.getBlockPos())) {
+                continue; // the chisel scene owns the bench top
+            }
+            BlockPos p = be.getBlockPos();
+            double cx = p.getX() + 0.5;
+            double cz = p.getZ() + 0.5;
+
+            if (!be.getStones().isEmpty()) {
+                drawBenchBudget(pose, buffer, font, be, camera);
+            }
+            List<Vec3> qc = queueCenters(be, camera);
+            List<MasonsBenchBlockEntity.ListEntry> queue = be.getBuildList();
+            for (int i = 0; i < qc.size(); i++) {
+                MasonsBenchBlockEntity.ListEntry e = queue.get(i);
+                drawChip(pose, buffer, font, ir, be, camera, new ItemStack(e.output()),
+                    e.units() * e.yieldPerUnit(), qc.get(i), t);
+            }
+            if (queueHover != null && queueHover.pos().equals(p) && queueHover.index() < qc.size()) {
+                masonryDrawBillboardText(pose, buffer, font,
+                    Component.translatable("bannerboundantiquity.masonry.readout.remove").getString(),
+                    qc.get(queueHover.index()).add(0.0, 0.22, 0.0), camera,
+                    HOVER_LABEL_SCALE, 0xFFE8E0C8, LABEL_BG);
+            }
+
+            ItemStack ghost = be.getGhostResult();
+            if (!ghost.isEmpty() && ghost.getCount() > 1) {
+                drawPickerCount(pose, buffer, font, ghost.getCount(),
+                    new Vec3(cx, p.getY() + be.ghostPreviewY(), cz), camera);
+            }
+            if (!ghost.isEmpty() && ghostHover != null && ghostHover.pos().equals(p)) {
+                if (ghostHover.picked().target().action() == GhostActionPayload.FILL) {
+                    masonryDrawBillboardText(pose, buffer, font,
+                        Component.translatable("bannerboundantiquity.masonry.readout.queue").getString(),
+                        ghostHover.picked().target().center().add(0.0, 0.28, 0.0), camera,
+                        HOVER_LABEL_SCALE, 0xFFFFFFFF, LABEL_BG);
+                }
+            }
+        }
+        buffer.endBatch();
+    }
+
+    /** World centers of the queue chips for {@code be} — over the bench's SECONDARY cell. */
+    static List<Vec3> queueCenters(MasonsBenchBlockEntity be, Camera camera) {
+        BlockPos sec = be.getBlockPos().relative(be.getBlockState().getValue(MasonsBenchBlock.FACING));
+        return rowCenters(Math.min(be.getBuildList().size(), MAX_CHIPS),
+            sec.getX() + 0.5, sec.getY() + QUEUE_Y, sec.getZ() + 0.5, horizontalRight(camera));
+    }
+
+    /** Mason's benches within {@link #SCAN} blocks of the player (chunk-scoped, cheap). */
+    static List<MasonsBenchBlockEntity> nearbyBenches(Minecraft mc) {
+        List<MasonsBenchBlockEntity> out = new ArrayList<>();
+        if (mc.player == null || mc.level == null) return out;
+        Vec3 pp = mc.player.position();
+        int pcx = mc.player.chunkPosition().x;
+        int pcz = mc.player.chunkPosition().z;
+        double r2 = SCAN * SCAN;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                for (BlockEntity be : mc.level.getChunk(pcx + dx, pcz + dz).getBlockEntities().values()) {
+                    if (be instanceof MasonsBenchBlockEntity t
+                            && t.getBlockPos().getCenter().distanceToSqr(pp) <= r2) {
+                        out.add(t);
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
+    /** The queue chip the player is aiming at (nearest, and only when it beats the vanilla block). */
+    public static QueueHit masonryFindHoveredQueue(Minecraft mc) {
+        if (mc.player == null || mc.level == null || mc.screen != null || mc.player.isSpectator()) return null;
+        Camera camera = mc.gameRenderer.getMainCamera();
+        Vec3 eye = mc.player.getEyePosition();
+        Vec3 to = eye.add(mc.player.getViewVector(1.0F).normalize().scale(mc.player.blockInteractionRange()));
+        QueueHit best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (MasonsBenchBlockEntity be : nearbyBenches(mc)) {
+            List<Vec3> centers = queueCenters(be, camera);
+            for (int i = 0; i < centers.size(); i++) {
+                Optional<Vec3> hit = boxAt(centers.get(i)).clip(eye, to);
+                if (hit.isPresent()) {
+                    double d = hit.get().distanceToSqr(eye);
+                    if (d < bestDist) {
+                        bestDist = d;
+                        best = new QueueHit(be.getBlockPos(), i);
+                    }
+                }
+            }
+        }
+        if (best == null) return null;
+        HitResult vanilla = mc.hitResult;
+        if (vanilla != null && vanilla.getType() != HitResult.Type.MISS
+                && vanilla.getLocation().distanceToSqr(eye) < bestDist) {
+            return null;
+        }
+        return best;
+    }
+
+    private static void masonryDrawBillboardText(PoseStack pose, MultiBufferSource buffer, Font font, String text,
+                                          Vec3 worldCenter, Camera camera, float scale,
+                                          int color, int backgroundColor) {
+        if (text == null || text.isEmpty()) return;
+        Vec3 cam = camera.getPosition();
+        pose.pushPose();
+        pose.translate(worldCenter.x - cam.x, worldCenter.y - cam.y, worldCenter.z - cam.z);
+        pose.mulPose(camera.rotation());
+        float x = -font.width(text) / 2.0F;
+        float y = -font.lineHeight / 2.0F;
+        pose.pushPose();
+        pose.translate(0.0, 0.0, -0.065);
+        pose.scale(scale, -scale, scale);
+        Matrix4f mat = pose.last().pose();
+        font.drawInBatch(text, x + 1.0F, y + 1.0F, 0xD0140F0A, false,
+            mat, buffer, Font.DisplayMode.NORMAL, 0, FULLBRIGHT);
+        pose.popPose();
+        pose.pushPose();
+        pose.translate(0.0, 0.0, -0.035);
+        pose.scale(scale, -scale, scale);
+        mat = pose.last().pose();
+        font.drawInBatch(text, x, y, color, false,
+            mat, buffer, Font.DisplayMode.NORMAL, backgroundColor, FULLBRIGHT);
+        pose.popPose();
+        pose.popPose();
+    }
+
+    /** Total uncommitted stone painted flat onto the master half, snapped to front/left/right/back. */
+    private static void drawBenchBudget(PoseStack pose, MultiBufferSource buffer, Font font,
+                                        MasonsBenchBlockEntity be, Camera camera) {
+        int remaining = be.remainingTotal();
+        if (remaining <= 0) return;
+        String text = Integer.toString(remaining);
+        BlockPos p = be.getBlockPos();
+        Vec3 cam = camera.getPosition();
+        double cx = p.getX() + 0.5;
+        double cz = p.getZ() + 0.5;
+        float yaw = MasonsBenchRenderer.snappedYawTowardCamera(p, cam);
+        double ox = MasonsBenchRenderer.snappedOffsetX(yaw, 0.22);
+        double oz = MasonsBenchRenderer.snappedOffsetZ(yaw, 0.22);
+        pose.pushPose();
+        pose.translate(cx + ox - cam.x, p.getY() + MasonsBenchRenderer.TOP_Y + 0.012 - cam.y,
+            cz + oz - cam.z);
+        pose.mulPose(Axis.YP.rotationDegrees(yaw));
+        pose.mulPose(Axis.XP.rotationDegrees(-90.0F));
+        float x = -font.width(text) / 2.0F;
+        float y = -font.lineHeight / 2.0F;
+        pose.pushPose();
+        pose.translate(0.0, 0.0, 0.018);
+        pose.scale(BUDGET_SCALE, -BUDGET_SCALE, BUDGET_SCALE);
+        Matrix4f mat = pose.last().pose();
+        font.drawInBatch(text, x + 1.0F, y + 1.0F, 0xE02A2620, false,
+            mat, buffer, Font.DisplayMode.NORMAL, 0, FULLBRIGHT);
+        pose.popPose();
+        pose.pushPose();
+        pose.translate(0.0, 0.0, 0.002);
+        pose.scale(BUDGET_SCALE, -BUDGET_SCALE, BUDGET_SCALE);
+        mat = pose.last().pose();
+        font.drawInBatch(text, x, y, 0xFFE8E0C8, false,
+            mat, buffer, Font.DisplayMode.NORMAL, 0, FULLBRIGHT);
+        pose.popPose();
         pose.popPose();
     }
 }

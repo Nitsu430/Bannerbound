@@ -767,7 +767,7 @@ public class BannerboundAntiquity {
             new Item.Properties());
 
     // ── Manure + Dung (Animal Husbandry) ──────────────────────────────────────────────────────
-    // Penned livestock leave flat manure pats on the floor (ManureEvents). Manure fouls the pen's
+    // Penned livestock leave flat manure pats on the floor (HerdingEvents). Manure fouls the pen's
     // fertility (Core BreedingEvents, via #bannerbound:manure) until it's cleared — faster with a
     // shovel — which yields Dung, a bone-meal-style fertilizer. Herders muck it out as upkeep.
     // No collision (animals walk over it); not requiresCorrectToolForDrops, so a bare-hand clear still
@@ -1491,7 +1491,7 @@ public class BannerboundAntiquity {
         ITEMS.registerItem("arrow",
             com.bannerbound.antiquity.item.CompositeArrowItem::new, new Item.Properties());
     // Poison arrows are NOT a separate item — ANY arrow (the #minecraft:arrows tag) can be COATED via
-    // the poison paste (like food), stamping the ARROW_POISON component; PoisonArrowEvents delivers it
+    // the poison paste (like food), stamping the ARROW_POISON component; PoisonEvents delivers it
     // (impact = apply the poison, tick = colour trail). See ARROW_POISON above.
     // Display-only "work in progress" bow shown lying on the fletching station while its minigame
     // runs (declared per-recipe via the optional "in_progress" field). Never obtainable: no recipe,
@@ -1553,7 +1553,7 @@ public class BannerboundAntiquity {
 
     // Spear-fishing catch — a thrown spear that kills a fish leaves this floating object (the spear
     // with the fish impaled on its tip) instead of loose drops; walk over it to collect the spear +
-    // the fish + its drops (see SpearedFishEntity / SpearFishingEvents). MISC category.
+    // the fish + its drops (see SpearedFishEntity / HuntingEvents). MISC category.
     public static final DeferredHolder<EntityType<?>, EntityType<SpearedFishEntity>> SPEARED_FISH =
         ENTITY_TYPES.register("speared_fish",
             () -> EntityType.Builder.<SpearedFishEntity>of(SpearedFishEntity::new, MobCategory.MISC)

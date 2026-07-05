@@ -7,7 +7,7 @@ import net.minecraft.world.level.Level;
 
 /**
  * Client-side preview state: which tie point (post centre or gate upright) the local player is tying a
- * rope from. Drives the rope-to-hand preview line in {@code RopeTiePreviewRenderer}. (The anchor's
+ * rope from. Drives the rope-to-hand preview line in {@code RopeRenderEvents}. (The anchor's
  * roped <em>model</em> is shown server-authoritatively via blockstate, not here, to avoid flicker.)
  * A single static is fine — only the one local player; never written server-side.
  */

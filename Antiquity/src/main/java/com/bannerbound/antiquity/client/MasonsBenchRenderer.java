@@ -27,7 +27,7 @@ import net.neoforged.api.distmarker.OnlyIn;
  * Renders the Mason's Bench's dynamic <b>items</b> (the deposited stone pile, the spinning picker
  * result + browse arrows, and the chisel-strike animation) — the stone analogue of
  * {@code WoodworkingTableRenderer}. Everything is drawn at the master block's centre (x/z = 0.5).
- * All <b>text</b> (counts, names, the queue) is drawn separately by {@link MasonryReadoutRenderer}.
+ * All <b>text</b> (counts, names, the queue) is drawn separately by {@link StationReadoutEvents}.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal

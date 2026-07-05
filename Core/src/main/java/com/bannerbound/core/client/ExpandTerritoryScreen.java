@@ -34,7 +34,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * Birdseye chunk-claim picker. The world is the UI: the player's camera lifts to a fixed
- * altitude above the town hall (pitch=90°, north-up). The {@link BirdseyeOverlayRenderer}
+ * altitude above the town hall (pitch=90°, north-up). The {@link BirdseyeClientEvents}
  * paints chunks as filled translucent slabs; the player clicks chunks directly on the terrain.
  * <p>
  * Has three phases:

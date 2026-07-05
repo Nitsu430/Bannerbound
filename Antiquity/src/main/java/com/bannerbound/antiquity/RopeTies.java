@@ -378,7 +378,7 @@ public final class RopeTies {
         }
     }
 
-    /** Height of the analytical rope wall — MUST match {@code RopeFenceCollision.FENCE_HEIGHT}, so the
+    /** Height of the analytical rope wall — MUST match {@code RopeFenceEvents.FENCE_HEIGHT}, so the
      *  marker band covers exactly the cells the wall physically blocks. */
     private static final double WALL_HEIGHT = 2.0;
 

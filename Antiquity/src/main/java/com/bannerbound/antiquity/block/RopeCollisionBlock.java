@@ -23,7 +23,7 @@ import net.minecraft.world.phys.shapes.VoxelShape;
  * Invisible marker placed in the cells a rope spans (by {@code RopeTies}, removed when the rope breaks).
  * It has <b>no collision shape of its own</b> — block collision is axis-aligned and can't follow a
  * diagonal rope smoothly (a real band staircases and fights the smooth clamp), so the actual blocking is
- * done analytically per tick by {@code RopeFenceCollision} against the rope's true segment. This block:
+ * done analytically per tick by {@code RopeFenceEvents} against the rope's true segment. This block:
  * <ul>
  *   <li><b>stores the rope line</b> — {@link #ROTATION} (16-step {@code atan2(dz,dx)}) + {@link #OFFSET}
  *       (where the line crosses this cell), used by mob pathing / future tooling;</li>
@@ -78,7 +78,7 @@ public class RopeCollisionBlock extends Block {
      *        clamp-vs-path fight, no side-tracking, no jump-hop loop, no way to squeeze through a
      *        junction. Mobs don't care that a diagonal rope's block wall is staircased.</li>
      *    <li><b>Players (and non-living: items, projectiles): EMPTY.</b> The player's blocking stays the
-     *        smooth analytical clamp in {@code RopeFenceCollision} — a block band under the player was
+     *        smooth analytical clamp in {@code RopeFenceEvents} — a block band under the player was
      *        tried and rejected (janky/staircased feel on diagonals, and block collision dominates the
      *        smooth clamp when both act on the same entity).</li>
      *  </ul>

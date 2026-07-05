@@ -10,7 +10,7 @@ import com.bannerbound.core.api.settlement.Settlement;
 import com.bannerbound.core.api.world.BlockSelection;
 import com.bannerbound.core.api.world.BlockSelectionRegistry;
 import com.bannerbound.core.building.PenEnclosure;
-import com.bannerbound.core.event.AnimalBreedingGate;
+import com.bannerbound.core.event.VanillaGates;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -63,7 +63,7 @@ public final class HerderFoodBonus {
         double rate = Config.HERDER_FOOD_PER_SIZE_PER_SECOND.get();
         if (rate <= 0.0) return 0.0;
         // Livestock food is part of Animal Husbandry — no research, no passive income (matches breeding).
-        if (!ResearchManager.hasFlag(s, AnimalBreedingGate.FLAG)) return 0.0;
+        if (!ResearchManager.hasFlag(s, VanillaGates.FLAG)) return 0.0;
 
         double sizeSum = 0.0;
         for (BlockSelection sel : BlockSelectionRegistry.get(level).getForSettlement(s.id())) {

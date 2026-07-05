@@ -10,29 +10,84 @@ import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.debug.DebugRenderer;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
-/**
- * Renders the in-world chunk-claim overlay while {@link ClientBirdseyeState} is active. Each
- * chunk in the visible window gets a solid translucent slab plus a thin outline so the player
- * can pick chunks directly off the terrain — no GUI panel needed. Roles:
- * <ul>
- *   <li>Own chunks → settlement color (subtler alpha, no hover).</li>
- *   <li>Foreign chunks → dim grey.</li>
- *   <li>Purchasable unclaimed → bright white-blue. Brightens to near-white when the cursor's
- *       world-projected position falls inside this chunk. Faded when unaffordable.</li>
- * </ul>
- * The slab Y is fixed at {@link #SLAB_Y} — high enough that camera is always above, low enough
- * that most overworld terrain is below. Tall mountains can occlude (acceptable).
- */
+/** Client-side event handlers for the birdseye chunk-claim view (merged subscriber class). */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
-public final class BirdseyeOverlayRenderer {
+public final class BirdseyeClientEvents {
+
+    private BirdseyeClientEvents() {}
+
+    // ------------------------------------------------------------------
+    // From BirdseyeClientEvents
+    // ------------------------------------------------------------------
+
+    /*
+     * Belt-and-suspenders enforcement for the birdseye camera. Runs every client tick and:
+     * <ul>
+     *   <li>If {@link ClientBirdseyeState} is active and something stole the camera entity away
+     *       from our ghost, slams it back. Keeps the camera locked even if another mod or vanilla
+     *       code path resets it.</li>
+     *   <li>If the state has gone inactive (screen closed / removed fired) but the camera entity
+     *       is still our last-known ghost (i.e. {@code removed()} didn't propagate cleanly), forces
+     *       it back to the local player. This is what saves us from "ESC closed the GUI but I'm
+     *       still in birdseye view" — a problem the screen alone can't solve if its lifecycle
+     *       hooks get bypassed.</li>
+     * </ul>
+     * We track the last ghost outside of {@link ClientBirdseyeState} because state.exit() wipes
+     * its reference; this guard needs to remember "this is the entity I should NOT let stay
+     * bound" until the next frame after exit.
+     */
+    /** Last ghost we saw bound while state was active. Cleared once we've restored the camera
+     *  away from it; survives state.exit() so we can detect a stale binding. */
+    private static Entity lastKnownGhost;
+
+    @SubscribeEvent
+    public static void onClientTickPost(ClientTickEvent.Post event) {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.player == null) return;
+
+        if (ClientBirdseyeState.isActive()) {
+            Entity ghost = ClientBirdseyeState.ghostCamera();
+            if (ghost == null) return;
+            lastKnownGhost = ghost;
+            if (mc.getCameraEntity() != ghost) {
+                mc.setCameraEntity(ghost);
+            }
+        } else if (lastKnownGhost != null) {
+            // State is inactive but camera might still point at our stale ghost — restore it.
+            if (mc.getCameraEntity() == lastKnownGhost) {
+                mc.setCameraEntity(mc.player);
+            }
+            lastKnownGhost = null;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // From BirdseyeClientEvents
+    // ------------------------------------------------------------------
+
+    /*
+     * Renders the in-world chunk-claim overlay while {@link ClientBirdseyeState} is active. Each
+     * chunk in the visible window gets a solid translucent slab plus a thin outline so the player
+     * can pick chunks directly off the terrain — no GUI panel needed. Roles:
+     * <ul>
+     *   <li>Own chunks → settlement color (subtler alpha, no hover).</li>
+     *   <li>Foreign chunks → dim grey.</li>
+     *   <li>Purchasable unclaimed → bright white-blue. Brightens to near-white when the cursor's
+     *       world-projected position falls inside this chunk. Faded when unaffordable.</li>
+     * </ul>
+     * The slab Y is fixed at {@link #SLAB_Y} — high enough that camera is always above, low enough
+     * that most overworld terrain is below. Tall mountains can occlude (acceptable).
+     */
     /** Slab thickness — thin enough not to obscure terrain features, thick enough to draw
      *  cleanly without z-fighting. */
     private static final float SLAB_HEIGHT = 0.5f;
@@ -42,8 +97,6 @@ public final class BirdseyeOverlayRenderer {
     private static final float FILL_ALPHA_PURCH = 0.32f;
     private static final float FILL_ALPHA_PURCH_HOVER = 0.55f;
     private static final float FILL_ALPHA_PURCH_DISABLED = 0.18f;
-
-    private BirdseyeOverlayRenderer() {}
 
     @SubscribeEvent
     public static void onRenderLevelStage(RenderLevelStageEvent event) {
