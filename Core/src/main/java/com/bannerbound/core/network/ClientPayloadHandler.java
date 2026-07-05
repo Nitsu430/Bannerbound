@@ -560,7 +560,8 @@ public final class ClientPayloadHandler {
             payload.governmentOrdinal(),
             payload.members(),
             payload.foodConsumptionPerSecond(),
-            payload.foodSourceRates()
+            payload.foodSourceRates(),
+            payload.appealCulturePerSecond()
         ));
     }
 
