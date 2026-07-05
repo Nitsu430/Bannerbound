@@ -38,9 +38,6 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID)
 @ApiStatus.Internal
 public final class VanillaStorageGate {
-    private static final String FLAG_BARREL = "bannerbound.unlock.barrel";
-    private static final String FLAG_CHEST = "bannerbound.unlock.chest";
-
     private VanillaStorageGate() {
     }
 
