@@ -14,13 +14,15 @@ import net.minecraft.world.phys.Vec3;
 
 /**
  * The NPC-hunter twin of {@link FleeFromPlayerGoal}: wild prey fears a working Hunter citizen the
- * way it fears a player. The hunter's crouch-stalk uses the same "noise" rule as a sneaking player
- * (detection range drops to {@code FLEE_RANGE_SNEAK}), which is exactly what makes the hunter's
- * stealth approach work — stand up too close and the animal bolts (and the hunt becomes a chase).
- * On the not-scared→scared edge it alarms the herd, so spooking one animal scatters them all.
- *
- * <p>Only <b>hunters at work</b> are threats — citizens strolling past on other business never
- * scatter the wildlife. Same priority slot as the other flee goals; tired/bleeding slows apply.
+ * way it fears a player. Only hunters actively ON THE JOB (isWorking + hunter job type) are threats;
+ * citizens strolling past on other business never scatter the wildlife, and fed/domesticated animals
+ * behave like vanilla livestock and never flee. The hunter's crouch-stalk uses the same "noise" rule
+ * as a sneaking player (detection range drops to {@code FLEE_RANGE_SNEAK}), which is exactly what
+ * makes the stealth approach work: stand up too close and the animal bolts and the hunt becomes a
+ * chase. On the not-scared -> scared edge it alarms the herd once, so spooking one animal scatters
+ * them all; fear is refreshed each tick while chased. Candidate flee points are rejected when they
+ * would run toward the hunter. Prey sprints when the hunter is close and walks otherwise, slowed
+ * while tired/bleeding. Same priority slot as the other flee goals.
  */
 public class FleeFromHunterGoal extends Goal {
     private final PathfinderMob mob;
@@ -42,7 +44,7 @@ public class FleeFromHunterGoal extends Goal {
             return false;
         }
         if (HuntingFear.isTamed(mob)) {
-            return false; // fed/domesticated → behaves like vanilla livestock, never flees
+            return false;
         }
         if (mob.isBaby() && !Config.BABIES_FLEE.get()) {
             return false;
@@ -53,11 +55,10 @@ public class FleeFromHunterGoal extends Goal {
         }
         Vec3 away = DefaultRandomPos.getPosAway(mob, 16, 7, t.position());
         if (away == null || t.distanceToSqr(away) < t.distanceToSqr(mob)) {
-            return false; // no escape route, or it would run toward the hunter
+            return false;
         }
         this.threat = t;
         this.fleeTo = away;
-        // First-scared edge: spook the herd once.
         if (!HuntingFear.isScared(mob)) {
             HuntingFear.alarmHerd(mob, Config.HERD_ALARM_RADIUS.get(), Config.SCARED_DURATION_TICKS.get());
         }
@@ -80,7 +81,7 @@ public class FleeFromHunterGoal extends Goal {
         CitizenEntity t = this.threat != null && isThreat(this.threat) ? this.threat : findThreat();
         if (t != null) {
             mob.getNavigation().setSpeedModifier(speedFor(t));
-            HuntingFear.scare(mob, Config.SCARED_DURATION_TICKS.get()); // stay alarmed while chased
+            HuntingFear.scare(mob, Config.SCARED_DURATION_TICKS.get());
         }
         if (mob.getNavigation().isDone() && t != null) {
             Vec3 away = DefaultRandomPos.getPosAway(mob, 16, 7, t.position());
@@ -98,7 +99,6 @@ public class FleeFromHunterGoal extends Goal {
         mob.getNavigation().stop();
     }
 
-    /** Sprint when the hunter is close, walk otherwise; tired/bleeding animals slow. */
     private double speedFor(CitizenEntity t) {
         double base = mob.distanceToSqr(t) < 49.0 ? sprintSpeed : walkSpeed;
         if (HuntingFear.isTired(mob)) {
@@ -133,7 +133,6 @@ public class FleeFromHunterGoal extends Goal {
         return nearest;
     }
 
-    /** A hunter citizen actively on the job (off-duty citizens never spook wildlife). */
     private static boolean isThreat(CitizenEntity c) {
         return c.isAlive() && c.isWorking() && HunterWorkGoal.JOB_TYPE_ID.equals(c.getJobType());
     }

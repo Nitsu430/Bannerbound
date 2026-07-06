@@ -15,15 +15,22 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client snapshot of every datum the town-hall screen needs to render. Sent once per
- * town-hall open and re-sent after votes / state changes that affect the buttons.
+ * Server -> client snapshot of every datum the town-hall screen renders; sent once per town-hall
+ * open and re-broadcast after any vote or state change that affects the buttons. The government
+ * block drives the Code-of-Laws workflow: with governmentChoiceWindowOpen true and governmentOrdinal
+ * 0 (NONE) the screen shows the "Choose Government" button, and the vote tallies plus the per-player
+ * pick render live progress. onlineMembers (NOT totalMembers) is the vote-threshold denominator -
+ * offline players forfeit their vote, by design.
  *
- * <p><b>Government fields</b> drive the Code-of-Laws workflow: when
- * {@link #governmentChoiceWindowOpen} is true and {@link #governmentOrdinal} is 0 (NONE), the
- * screen shows the "Choose Government" button. Vote tallies + the per-player pick let the
- * button render live progress. {@link #onlineMembers} is the denominator — vote threshold
- * runs against this, not {@link #totalMembers}, per the confirmed design where offline
- * players forfeit their vote.
+ * <p>Field conventions the client depends on: playerGovernmentVote is 0=none / 1=council /
+ * 2=chiefdom; chiefCandidates / chiefCandidateNames / chiefCandidateVotes are parallel;
+ * playerChiefNomination is the all-zero UUID when the player has not nominated. playerIsChief and
+ * playerIsRegent are UI hints only - the server re-checks every gate independently. A Regent is a
+ * stand-in while the chief is offline: routine authority (may start Research) but not weighty
+ * authority (Disband / Expand stay greyed). chiefStepDownReadyTick is -1 when not applicable and
+ * leaveReadyTick is 0 when already free; both are absolute game ticks the screen counts down against
+ * the client's synced level.getGameTime(). identityRgbs are 0xRRGGBB, most-present dye first, never
+ * empty (founding-rgb fallback resolved server-side), driving the name color and accent gradients.
  */
 @ApiStatus.Internal
 public record OpenTownHallScreenPayload(
@@ -36,7 +43,6 @@ public record OpenTownHallScreenPayload(
     int disbandTotalMembers,
     boolean playerHasVotedToDisband,
     boolean disbandVoteActive,
-    // ── Code of Laws + government state ─────────────────────────────────────────────────
     int governmentOrdinal,
     boolean codeOfLawsPromptShown,
     boolean governmentChoiceWindowOpen,
@@ -44,38 +50,16 @@ public record OpenTownHallScreenPayload(
     int councilVoteCount,
     int chiefdomVoteCount,
     int onlineMembers,
-    /** Player's current pick in the Choose-Government vote: 0 = none, 1 = council, 2 = chiefdom. */
     int playerGovernmentVote,
-    // ── Chief election (Chiefdom only, after government type is set) ────────────────────
     boolean chiefdomElectionActive,
-    /** Member UUIDs that can be nominated as chief — parallel arrays with names + counts. */
     List<UUID> chiefCandidates,
     List<String> chiefCandidateNames,
     List<Integer> chiefCandidateVotes,
-    /** Player's current nomination (which candidate they voted for), or all-zero UUID = none. */
     UUID playerChiefNomination,
-    /** True iff this player is the currently-seated Chief in a CHIEFDOM. Drives the Disband /
-     *  Expand-Territory gates client-side. Server-side gates re-check independently — this is
-     *  just the UI hint. False in COUNCIL / NONE governments. */
     boolean playerIsChief,
-    /** Step 15: true iff this player is the current REGENT — temporary stand-in while the
-     *  real Chief is offline. Regents get routine-action authority (Research, suggestions
-     *  are skipped — they CAN start research) but NOT weighty authority (Disband / Expand
-     *  stay greyed). False in Council / NONE / chief-online states. */
     boolean playerIsRegent,
-    /** Absolute game tick at which this player (if the seated Chief) may Step Down — i.e. when
-     *  the anti-cheese term cooldown elapses. {@code -1} when not applicable (not the chief, or a
-     *  pre-feature chief with no anchor). The Step-Down button greys out with a live mm:ss
-     *  countdown computed against the client's synced {@code level.getGameTime()} until then. */
     long chiefStepDownReadyTick,
-    /** Absolute game tick at which this player may Leave the settlement — i.e. when the
-     *  anti-cheese join/found cooldown elapses. {@code 0} when already free to leave. The
-     *  Leave button greys out with a live mm:ss countdown against the client's synced
-     *  {@code level.getGameTime()} until then. */
     long leaveReadyTick,
-    /** Banner-driven identity colors as 0xRRGGBB, most-present dye first, AS MANY as the
-     *  banner has (never empty — founding rgb fallback resolved server-side). Drive the
-     *  screen's name color and every accent gradient. */
     List<Integer> identityRgbs
 ) implements CustomPacketPayload {
 
@@ -103,7 +87,6 @@ public record OpenTownHallScreenPayload(
             ByteBufCodecs.VAR_INT.encode(buf, p.chiefdomVoteCount());
             ByteBufCodecs.VAR_INT.encode(buf, p.onlineMembers());
             ByteBufCodecs.VAR_INT.encode(buf, p.playerGovernmentVote());
-            // Chief election block.
             buf.writeBoolean(p.chiefdomElectionActive());
             ByteBufCodecs.VAR_INT.encode(buf, p.chiefCandidates().size());
             for (int i = 0; i < p.chiefCandidates().size(); i++) {

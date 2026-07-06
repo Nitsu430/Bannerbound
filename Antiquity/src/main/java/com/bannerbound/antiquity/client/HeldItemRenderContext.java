@@ -10,7 +10,7 @@ import net.neoforged.api.distmarker.OnlyIn;
  * Tracks the {@link LivingEntity} whose model (and therefore held item) is being rendered right now.
  *
  * <p>Held-item baked-model wrappers (e.g. {@link SpearHandFlipModel}) only receive an
- * {@code ItemDisplayContext} from {@code applyTransform} — no entity. Keying their per-render decision
+ * {@code ItemDisplayContext} from {@code applyTransform} - no entity. Keying their per-render decision
  * on a global like {@code Minecraft#player} causes cross-talk: when the local player raises a spear,
  * <i>every</i> spear on screen flips ("rotating one spear rotates all spears"). This holder lets the
  * wrapper key on the actual entity being drawn instead, so each spear flips independently.

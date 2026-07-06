@@ -11,8 +11,9 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Keyframed animations for the Mortar and Pestle, exported from Blockbench
- * ({@code MortarandPestleAnimations.java}). Only the pestle "Mix" grind is defined — a 1-second
- * looping cycle the renderer plays five times while a recipe is being ground.
+ * ({@code MortarandPestleAnimations.java}) - regenerate there rather than hand-editing keyframes.
+ * Only the pestle "Mix" grind is defined: a 1-second looping cycle the renderer plays five times
+ * while a recipe is being ground.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal

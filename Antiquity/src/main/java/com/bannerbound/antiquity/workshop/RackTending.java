@@ -21,16 +21,18 @@ import net.minecraft.server.level.ServerLevel;
 /**
  * Shared NPC drying-rack tending, split by {@link DryingRackRecipe#category()}: the Cook tends
  * {@code food} recipes (jerky, dried fish) on its kitchen's racks, General Crafts tends
- * {@code craft} recipes (plant fiber → thatch) on its own — and {@code none} recipes (cured hide,
- * the Tannery's leather line) are touched by neither. Racks are workshop AUXILIARIES (found in the
- * marked set, never registered work blocks), the same pattern as the tannery's clay tank.
+ * {@code craft} recipes (plant fiber -> thatch) on its own, and {@code none} recipes (cured hide,
+ * the Tannery's leather line) are touched by neither. Racks are workshop AUXILIARIES (found in
+ * the marked set, never registered work blocks), the same pattern as the tannery's clay tank.
+ * inFlight counts a recipe's units that hang on the racks whether still drying or dry-but-
+ * uncollected: both are committed, so the Workshops.wantsAnother demand check must subtract them
+ * or executors keep hanging extra inputs. takeDry returns EMPTY if the slot was raced away.
  */
 @ApiStatus.Internal
 final class RackTending {
     private RackTending() {
     }
 
-    /** Every drying rack inside the workshop's marked boxes. */
     static List<BlockPos> racks(ServerLevel sl, Workshop workshop) {
         List<BlockSelection> boxes = BlockSelectionRegistry.get(sl).findByWorkshop(workshop.id());
         List<BlockPos> out = new ArrayList<>();
@@ -41,7 +43,6 @@ final class RackTending {
         return out;
     }
 
-    /** A rack position holding a finished slot of the given category, or {@code null}. */
     @Nullable
     static BlockPos rackWithDry(ServerLevel sl, List<BlockPos> racks, String category) {
         for (BlockPos pos : racks) {
@@ -53,7 +54,6 @@ final class RackTending {
         return null;
     }
 
-    /** The dried result waiting on {@code rackPos} for this category, or EMPTY. */
     static net.minecraft.world.item.ItemStack dryResultAt(ServerLevel sl, BlockPos rackPos, String category) {
         if (!(sl.getBlockEntity(rackPos) instanceof DryingRackBlockEntity rack)) {
             return net.minecraft.world.item.ItemStack.EMPTY;
@@ -62,7 +62,6 @@ final class RackTending {
         return slot < 0 ? net.minecraft.world.item.ItemStack.EMPTY : rack.result(slot).copy();
     }
 
-    /** Take the first finished slot of this category off the rack (EMPTY if raced away). */
     static net.minecraft.world.item.ItemStack takeDry(ServerLevel sl, BlockPos rackPos, String category) {
         if (!(sl.getBlockEntity(rackPos) instanceof DryingRackBlockEntity rack)) {
             return net.minecraft.world.item.ItemStack.EMPTY;
@@ -71,7 +70,6 @@ final class RackTending {
         return slot < 0 ? net.minecraft.world.item.ItemStack.EMPTY : rack.takeSlot(slot);
     }
 
-    /** A rack with a free spot, or {@code null}. */
     @Nullable
     static BlockPos rackWithRoom(ServerLevel sl, List<BlockPos> racks) {
         for (BlockPos pos : racks) {
@@ -82,8 +80,6 @@ final class RackTending {
         return null;
     }
 
-    /** How many of {@code recipe}'s units hang on the workshop's racks — drying OR dry-uncollected;
-     *  both are committed units the {@code Workshops.wantsAnother} demand check must subtract. */
     static int inFlight(ServerLevel sl, List<BlockPos> racks, DryingRackRecipe recipe) {
         int count = 0;
         for (BlockPos pos : racks) {
@@ -95,7 +91,6 @@ final class RackTending {
         return count;
     }
 
-    /** Every loaded drying recipe of {@code category}. */
     static List<DryingRackRecipe> recipes(String category) {
         List<DryingRackRecipe> out = new ArrayList<>();
         for (DryingRackRecipe recipe : DryingRackRecipeManager.all()) {

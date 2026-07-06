@@ -63,6 +63,26 @@ import net.minecraft.world.level.block.Blocks;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
+/**
+ * JEI integration for Antiquity: registers every custom recipe category (crafting stone, fletching,
+ * pottery, bloomery, kiln, mortar, drying rack, carpentry, construction, casting, cold hammer) plus
+ * ingredient info pages and catalysts. Carpentry, Construction, and Casting entries are synthetic
+ * records built in code: carpentry expands WoodFamily x CarpentryOutput plus multi-ingredient
+ * assemblies; casting expands (metal, shape) pairs from the data-driven MetalworkingData /
+ * MetalworkingItems mB tables (mold imprinting mirrors MetalworkingItems#templateShape; the Kiln
+ * category covers firing the imprinted mold); Construction documents in-world right-click
+ * interactions (knapping, tying, fire-lighting, spear fishing, manure/dung...). The two bootstrap
+ * 2x2-inventory-grid recipes (flint knife, cobblestone from rocks) also live under Construction
+ * because the mod gates the uncraftable crafting table out of JEI, which removes the whole vanilla
+ * Crafting category and would take them with it. The fire_sticks entry outputs a Campfire identical
+ * to its input (lit is a blockstate, not an item) so looking up the Campfire surfaces the lighting
+ * interaction; stations with no item form (bloomery, kiln, raft) show ItemStack.EMPTY outputs and
+ * rely on their note text. Knowledge gate: unless Config.JEI_SHOW_UNKNOWN is set, a recipe hides
+ * when its output or every choice of any input is unknown to the local player, but a known output
+ * always shows (the player can craft it, so input scans short-circuit); the gate re-runs from
+ * ClientResearchState/ClientStartingItems listeners and diffs against hiddenRecipes, unhiding the
+ * previous set before hiding the next so toggles never leak stale hides.
+ */
 @JeiPlugin
 @OnlyIn(Dist.CLIENT)
 public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
@@ -143,13 +163,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
                     new ItemStack(Items.STICK),
                     Component.translatable("bannerboundantiquity.jei.construction.cut_sticks.note")
                 ),
-                // The flint knife is the one recipe still made in the vanilla 2×2 inventory grid —
-                // it's the bootstrap tool that carves the crafting stone (which then replaces the
-                // grid). It lives here, in the bootstrap chain, rather than under JEI's vanilla
-                // Crafting category: that category's catalyst is the crafting table, which the mod
-                // gates out of JEI entirely (there's no craftable table), and removing the table
-                // takes the whole Crafting category — and this recipe — with it. Showing it here
-                // keeps the bootstrap discoverable without resurrecting the table in the item list.
                 new ConstructionRecipe(
                     id("flint_knife"),
                     List.of(
@@ -160,10 +173,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
                     new ItemStack(BannerboundAntiquity.FLINT_KNIFE.get()),
                     Component.translatable("bannerboundantiquity.jei.construction.flint_knife.note")
                 ),
-                // Bootstrap cobblestone in the 2×2 inventory grid (4 stone rocks → cobblestone) so
-                // you can carve your first Crafting Stone before any station exists. Lives here for
-                // the same reason as the flint knife: the vanilla Crafting category is gated out of
-                // JEI with the (uncraftable) crafting table.
                 new ConstructionRecipe(
                     id("cobblestone_from_rocks"),
                     List.of(
@@ -214,9 +223,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
                         List.of(new ItemStack(BannerboundAntiquity.FIRE_STICKS.get())),
                         List.of(new ItemStack(Items.CAMPFIRE))
                     ),
-                    // Output a (lit) Campfire so looking the Campfire up surfaces this lighting
-                    // interaction in the recipe view, not just under "uses". Same item as the input
-                    // (lit is a blockstate, not a distinct item); the arrow + note convey lighting.
                     new ItemStack(Items.CAMPFIRE),
                     Component.translatable("bannerboundantiquity.jei.construction.fire_sticks.note")
                 ),
@@ -349,8 +355,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
                     new ItemStack(Items.COD),
                     Component.translatable("bannerboundantiquity.jei.construction.spear_fishing.note")
                 ),
-                // Break a manure pat (by hand, or faster with a shovel) for dung — the bone-meal-style
-                // fertilizer. Manure is left by penned livestock and lowers pen fertility until cleared.
                 new ConstructionRecipe(
                     id("clear_manure"),
                     List.of(
@@ -360,8 +364,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
                     new ItemStack(BannerboundAntiquity.DUNG.get()),
                     Component.translatable("bannerboundantiquity.jei.construction.clear_manure.note")
                 ),
-                // Dung's USE: a bone-meal-style fertilizer (right-click crops/saplings to speed growth).
-                // Shown next to bone meal so looking up either surfaces dung as the era-appropriate option.
                 new ConstructionRecipe(
                     id("fertilize"),
                     List.of(
@@ -378,10 +380,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
         return constructionRecipes;
     }
 
-    /** Imprinting a Clay Mold Base with a wood/stone template tool stamps that shape into the mold
-     *  (an in-world right-click, so it lives in the Construction category). Fire the result in a Kiln
-     *  to get the pourable mold (the Kiln category covers that step). Mirrors
-     *  {@link MetalworkingItems#templateShape}. */
     private static List<ConstructionRecipe> moldImprintRecipes() {
         List<ConstructionRecipe> list = new ArrayList<>();
         ItemStack base = new ItemStack(MetalworkingItems.MOLDS.get("clay_mold_base").get());
@@ -400,7 +398,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
         return list;
     }
 
-    /** Wood/stone template tools that imprint a given mold shape (per {@link MetalworkingItems#templateShape}). */
     private static List<ItemStack> templateChoices(String shape) {
         return switch (shape) {
             case "axe" -> List.of(new ItemStack(Items.WOODEN_AXE), new ItemStack(Items.STONE_AXE));
@@ -422,10 +419,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
         return hammer == null ? List.of() : List.of(new ItemStack(hammer.get()));
     }
 
-    /** Per (metal, shape) crucible-casting recipes — the melt-and-pour core loop, computed from the
-     *  data-driven mB/mold tables ({@link MetalworkingData}, {@link MetalworkingItems}). Charge raw ore
-     *  into a crucible (bronze = copper + tin in ratio), heat it in a Bloomery, then pour the molten
-     *  metal into a fired mold to cast the part. */
     private static List<CastingRecipe> castingRecipes() {
         if (castingRecipes == null) {
             List<CastingRecipe> list = new ArrayList<>();
@@ -441,7 +434,7 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
                     List<List<ItemStack>> inputs = new ArrayList<>();
                     Component note;
                     if (metal.equals("bronze")) {
-                        // Bronze is alloyed in the crucible: keep copper the majority (60–90%).
+                        // Bronze alloy ratio: copper must stay the majority (60-90% of melt); tin ~25% of units.
                         int tinUnits = Math.max(1, Math.round(units * 0.25F));
                         int copperUnits = Math.max(tinUnits + 1, units - tinUnits);
                         inputs.add(oreChoices("copper", copperUnits));
@@ -460,7 +453,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
         return castingRecipes;
     }
 
-    /** The raw-ore stacks (with count) that melt to {@code count} units of a metal in a crucible. */
     private static List<ItemStack> oreChoices(String metal, int count) {
         return switch (metal) {
             case "copper" -> List.of(new ItemStack(Items.RAW_COPPER, count),
@@ -498,8 +490,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
                 ));
             }
         }
-        // Assembly recipes — fixed-result builds from generic planks/sticks (wooden tools, oar,
-        // bowl, ladder, barrel…). Multi-ingredient, so each gets one input slot per ingredient.
         for (CarpentryAssembly assembly : CarpentryAssemblyManager.all()) {
             List<List<ItemStack>> inputs = new ArrayList<>();
             for (CarpentryAssembly.Ingredient ingredient : assembly.ingredients()) {
@@ -632,7 +622,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
         );
     }
 
-    /** Representative crops/saplings dung (and bone meal) can be applied to — for the "fertilize" Uses entry. */
     private static List<ItemStack> fertilizeTargets() {
         return List.of(
             new ItemStack(Items.WHEAT_SEEDS),
@@ -776,25 +765,15 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
         registration.addRecipeCatalyst(BannerboundAntiquity.FLETCHING_STATION.get(), FLETCHING);
         registration.addRecipeCatalyst(BannerboundAntiquity.POTTERY_SLAB.get(), POTTERY);
         registration.addRecipeCatalyst(BannerboundAntiquity.MORTAR_AND_PESTLE.get(), MORTAR);
-        // Any wood's rack works — the oak rack is the category icon/catalyst.
         registration.addRecipeCatalyst(BannerboundAntiquity.DRYING_RACK_BY_WOOD.get("oak").get(), DRYING);
         registration.addRecipeCatalyst(BannerboundAntiquity.WOODWORKING_TABLE.get(), CARPENTRY);
         registration.addRecipeCatalyst(BannerboundAntiquity.FIRE_STICKS.get(), BLOOMERY);
         registration.addRecipeCatalyst(BannerboundAntiquity.BELLOWS_BLOCK_ITEM.get(), BLOOMERY);
-        // The Kiln has no item either (it's a formed 2×2×2). Fire sticks light it (shared with the
-        // bloomery) and charcoal/coal stoke it — both serve as its catalysts.
         registration.addRecipeCatalyst(BannerboundAntiquity.FIRE_STICKS.get(), KILN);
         registration.addRecipeCatalyst(Items.CHARCOAL, KILN);
         registration.addRecipeCatalyst(Items.COAL, KILN);
-        // World-interaction (CONSTRUCTION) recipes are looked up by their INPUT/OUTPUT items, NOT a
-        // catalyst. Registering the consumed items/tools (bone, gravel, flint, the blades, spears, …)
-        // as catalysts made clicking ANY of them dump the WHOLE category instead of just that item's
-        // interactions — un-JEI-like. Each recipe already declares proper input/output slots, so JEI
-        // filters correctly when you look an item up. (Bone Saw stays a CARPENTRY catalyst — that's a
-        // genuine workstation.)
+        // Never register CONSTRUCTION tools/items as catalysts: a catalyst dumps the whole category on click; input/output slots already drive lookup.
         registration.addRecipeCatalyst(BannerboundAntiquity.BONE_SAW.get(), CARPENTRY);
-        // Crucible casting: the crucible holds the melt; each fired mold casts its shape — both lead
-        // here. (Heat comes from the Bloomery, already its own category.)
         registration.addRecipeCatalyst(BannerboundAntiquity.CRUCIBLE.get(), CASTING);
         for (String shape : MetalworkingItems.MOLD_SHAPES) {
             var mold = MetalworkingItems.MOLDS.get("fired_clay_mold_" + shape);
@@ -802,7 +781,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
                 registration.addRecipeCatalyst(mold.get(), CASTING);
             }
         }
-        // Cold-hammer forging happens on the Stone Anvil with a hammer in hand.
         registration.addRecipeCatalyst(BannerboundAntiquity.STONE_ANVIL_ITEM.get(), COLD_HAMMER);
         var stoneHammer = MetalworkingItems.HAMMERS.get("stone_hammer");
         if (stoneHammer != null) {
@@ -872,8 +850,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
         return BannerboundCoreJeiPlugin.shouldHideStack(output);
     }
 
-    /** True when {@code output} is a real, player-known stack — its recipe must always show
-     *  (the player can craft it), so callers short-circuit the input scan when this is true. */
     private static boolean outputKnown(ItemStack output) {
         return output != null && !output.isEmpty() && !BannerboundCoreJeiPlugin.shouldHideStack(output);
     }
@@ -951,7 +927,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
     }
 
     private static boolean shouldHideConstruction(ConstructionRecipe recipe) {
-        // A produced output the player knows → always show (player can make it).
         if (outputKnown(recipe.output())) {
             return false;
         }
@@ -1289,8 +1264,6 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
             builder.addInputSlot(1, 20)
                 .setStandardSlotBackground()
                 .addItemStacks(visibleIngredientChoices(recipe.ingredient()));
-            // Only liquid-based recipes (e.g. dyes/ink) consume a water bottle; dry recipes
-            // such as poisons have an empty base_liquid and take no liquid input.
             if (!recipe.baseLiquid().isBlank()) {
                 builder.addInputSlot(25, 20)
                     .setStandardSlotBackground()

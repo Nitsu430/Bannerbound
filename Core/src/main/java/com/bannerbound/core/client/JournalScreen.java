@@ -15,7 +15,13 @@ import net.minecraft.resources.ResourceLocation;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-/** Full journal view. This is generic: crises, quests, and tutorials all render through it. */
+/**
+ * Full opened journal view -- the expanded counterpart to {@link JournalHudLayer}'s compact HUD
+ * tracker. A {@link PolishedScreen} that renders crises, quests, and tutorials through one generic
+ * layout; the three types differ only by their section label and accent color. Client-only.
+ * Entries come from {@link ClientJournalState#entries()} and scroll inside a scissor-clipped
+ * viewport, with {@code scroll} clamped to {@link #maxScroll()} on every frame and wheel event.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class JournalScreen extends PolishedScreen {

@@ -15,9 +15,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client. Tells a specific player to open the seed-picker UI for a particular farmer
- * selection (identified by its {@code rodId}). The candidate list is computed server-side and
- * sent inline so the client doesn't have to know about modded seeds or future expansions.
+ * S->C: tells a specific player to open the seed-picker UI for a particular farmer selection
+ * (identified by its rodId). The candidate list is computed server-side and sent inline so the
+ * client doesn't have to know about modded seeds or future expansions.
  */
 @ApiStatus.Internal
 public record OpenSeedPickerPayload(UUID rodId, List<String> candidateSeeds, List<String> bonusSeeds)

@@ -11,8 +11,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: a Chiefdom non-chief toggles a suggestion on {@code policyId}. The server
- * adds/removes the suggester from the policy's suggestion set (no chat — the marker is the
+ * Client -> server: a Chiefdom non-chief toggles a suggestion on {@code policyId}. The server
+ * adds/removes the suggester from the policy's suggestion set (no chat - the marker is the
  * feedback) and re-broadcasts so the chief sees the face badge on that policy row.
  */
 @ApiStatus.Internal

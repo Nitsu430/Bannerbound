@@ -1,10 +1,9 @@
-// Made with Blockbench 5.1.4
-// Exported for Minecraft version 1.17 or later with Mojang mappings
-// Paste this class into your mod and generate all required imports
-
-
+/**
+ * Raw Blockbench 5.1.4 export (Mojang mappings, MC 1.17+) of the raft entity model, kept under
+ * resources as a reference next to its assets - NOT on the compile path. Port geometry changes
+ * into the real in-mod raft model by hand.
+ */
 public class raft<T extends Entity> extends EntityModel<T> {
-	// This layer location should be baked with EntityRendererProvider.Context in the entity renderer and passed into this model's constructor
 	public static final ModelLayerLocation LAYER_LOCATION = new ModelLayerLocation(new ResourceLocation("modid", "raft"), "main");
 	private final ModelPart bottom;
 	private final ModelPart left_paddle;

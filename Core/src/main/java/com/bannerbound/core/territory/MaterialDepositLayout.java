@@ -20,10 +20,19 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Deterministic layout for the generic material deposits worked by diggers/quarryworkers:
- * stone boulders plus clay/sand surface pits. Like ore boulders, these are permanent work sites:
- * workers swap source blocks to a worked-out state, yield the material, and a slow heartbeat swaps
- * worked faces back later.
+ * Deterministic layout plus block/drop mapping for the generic material deposits worked by
+ * diggers/quarryworkers: stone boulders (pickaxe) plus clay/sand surface pits (shovel). Like ore
+ * boulders these are permanent work sites -- workers swap source blocks to a worked-out body state,
+ * yield the material, and MaterialDepositRegen slowly swaps worked faces back. Spot positions derive
+ * purely from world seed + chunk + offset (posRand), so a deposit reproduces identically across
+ * sessions; changing the mixing constants shifts every existing deposit.
+ *
+ * <p>isStoneBoulder covers real building stone (STONE, LIMESTONE) plus the andesite/diorite/granite
+ * "red herring" deposits that read as special on the scout map but only yield common decorative
+ * stone. All stone boulders are gated behind quarry research; the clay/sand pits are not. LIMESTONE
+ * is resolved from Antiquity by string id (bannerboundantiquity:limestone) so Core stays standalone:
+ * without Antiquity a limestone deposit falls back to a vanilla stone/cobblestone stand-in and is
+ * still fully workable.
  */
 @ApiStatus.Internal
 public final class MaterialDepositLayout {
@@ -34,8 +43,6 @@ public final class MaterialDepositLayout {
     private static final float STONE_SOURCE_CHANCE = 0.70f;
     private static final float PIT_SOURCE_CHANCE = 0.78f;
 
-    /** Antiquity's real limestone block/item id. Resolved by string so Core stays standalone — without
-     *  Antiquity, limestone deposits fall back to a vanilla stone/cobblestone stand-in. */
     private static final ResourceLocation LIMESTONE_ID =
         ResourceLocation.fromNamespaceAndPath("bannerboundantiquity", "limestone");
 
@@ -48,10 +55,6 @@ public final class MaterialDepositLayout {
         return isStoneBoulder(type) || type == ChunkResource.CLAY || type == ChunkResource.SAND;
     }
 
-    /** Stone-boulder deposits (worked with a pickaxe, like ore boulders): real building stones
-     *  (STONE, LIMESTONE) plus the andesite/diorite/granite "red herring" deposits that read as a
-     *  special chunk on the scout map but only yield common decorative stone. All are gated behind the
-     *  quarry research, unlike the clay/sand surface pits. */
     public static boolean isStoneBoulder(ChunkResource type) {
         return type == ChunkResource.STONE || type == ChunkResource.LIMESTONE
             || type == ChunkResource.ANDESITE || type == ChunkResource.DIORITE
@@ -102,13 +105,10 @@ public final class MaterialDepositLayout {
         };
     }
 
-    /** Antiquity's limestone block, if the expansion is installed. */
     private static java.util.Optional<Block> limestoneBlock() {
         return BuiltInRegistries.BLOCK.getOptional(LIMESTONE_ID);
     }
 
-    /** Antiquity's limestone item, falling back to cobblestone so a limestone deposit is always
-     *  workable (yields a stand-in) even without the Antiquity expansion. */
     private static Item limestoneItem() {
         return BuiltInRegistries.ITEM.getOptional(LIMESTONE_ID).orElse(Items.COBBLESTONE);
     }

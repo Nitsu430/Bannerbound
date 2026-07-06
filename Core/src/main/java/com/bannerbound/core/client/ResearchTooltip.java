@@ -23,25 +23,30 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Shared rich tooltip for a research node — title, description, effect lines, an unlocked-items
- * grid, and cost/progress/queue/lock status. Extracted so the research screen(s) present
- * identical information.
- *
- * <p>The flat {@link ResearchScreen} keeps its own inline copy; new screens call this.
+ * Shared rich tooltip for a research node: title, description, effect lines, an unlocked-items
+ * grid, and cost/progress/queue/lock status. Extracted so every research screen presents identical
+ * information; the flat {@link ResearchScreen} keeps its own inline copy, new screens call
+ * {@link #render}. The panel interleaves text lines with an item-slot grid because a vanilla
+ * tooltip cannot draw both, and the grid bypasses the unknown-item swap so players preview what a
+ * node grants before it is researched. Effect lines derive from a node's feature/flag strings:
+ * known prefixes format bespoke lines, otherwise a "bannerbound.research.effect.&lt;suffix&gt;" lang
+ * key is looked up; a flag with no such key is an internal gating flag and is suppressed so the raw
+ * key never leaks into the tooltip -- add that lang entry to surface a green effect line. The
+ * Ponder hint mirrors Create's "Hold [W] to Ponder" treatment (DARK_GRAY text plus a '|' progress
+ * bar that fills as the player holds W) and only appears when a Create-aware expansion is loaded and
+ * the node has a scene. ITEM_CELL is 18px = 16 sprite + 2 padding.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ResearchTooltip {
 
     private static final int ITEMS_PER_ROW = 6;
-    private static final int ITEM_CELL = 18; // 16 sprite + 2 padding
+    private static final int ITEM_CELL = 18;
 
     private ResearchTooltip() {}
 
-    /** Builds and draws the tooltip for {@code def} at the cursor, clamped to the screen. */
     public static void render(GuiGraphics graphics, Font font, ResearchDefinition def,
                               int mouseX, int mouseY, int screenW, int screenH) {
-        // Header: title + description + effects.
         List<Component> header = new ArrayList<>();
         header.add(Component.literal(def.name()).withColor(0xFF2A1808));
         if (!def.description().isEmpty()) {
@@ -52,7 +57,6 @@ public final class ResearchTooltip {
         }
         appendEffectLines(def, header);
 
-        // Unlocked-items grid.
         List<ItemStack> items = new ArrayList<>();
         for (String id : def.unlocksItems()) {
             ResourceLocation rl = ResourceLocation.tryParse(id);
@@ -62,7 +66,6 @@ public final class ResearchTooltip {
             items.add(new ItemStack(item));
         }
 
-        // Footer: cost / progress / time, queue position, age + prereq locks.
         List<Component> footer = new ArrayList<>();
         if (def.cost() > 0) {
             if (ClientResearchState.isCompleted(def.id())) {
@@ -90,9 +93,6 @@ public final class ResearchTooltip {
             footer.add(Component.translatable("bannerbound.research.prereq_locked")
                 .withColor(0xFF8E2018));
         }
-        // Ponder hint — only when a Create-aware expansion is loaded AND this node has a scene.
-        // Component matches Create's "Hold [W] to Ponder" treatment: DARK_GRAY text, with a
-        // progress bar of GRAY/DARK_GRAY '|' chars filling left-to-right as the player holds W.
         if (!def.ponderScene().isEmpty() && ResearchPonderBridge.isAvailable()) {
             footer.add(ResearchPonderBridge.holdToPonderHint(font));
         }
@@ -103,7 +103,6 @@ public final class ResearchTooltip {
         draw(graphics, font, header, itemsHeader, items, footer, mouseX, mouseY, screenW, screenH);
     }
 
-    /** Panel that interleaves text lines with an item-slot grid (vanilla can't draw both). */
     private static void draw(GuiGraphics graphics, Font font, List<Component> header,
                              Component itemsHeader, List<ItemStack> items, List<Component> footer,
                              int mouseX, int mouseY, int screenW, int screenH) {
@@ -255,10 +254,6 @@ public final class ResearchTooltip {
                 ? Component.translatable(langKey).withColor(0xFF2C5E2A)
                 : Component.translatable(langKey, arg).withColor(0xFF2C5E2A);
         }
-        // No lang entry — this is an internal gating flag (e.g. bannerbound.unlock.digger) whose
-        // player-facing meaning lives in the node's description, not a green effect line. Suppress
-        // it so the raw key never leaks into the tooltip. A meaningful effect gets a line by adding
-        // a "bannerbound.research.effect.<suffix>" lang entry; everything else stays silent.
         return null;
     }
 

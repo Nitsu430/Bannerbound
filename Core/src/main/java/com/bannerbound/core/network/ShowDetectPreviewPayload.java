@@ -12,11 +12,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: flash the detected shell of the home at {@code housePos} for {@code durationTicks}.
- * The detected boxes are already in {@link com.bannerbound.core.client.ClientSelectionState} (they
- * were broadcast as HOME selections), so this only needs to tell the client which home to draw and
- * for how long — the renderer reuses the home silhouette in a fixed colour. Stored in
- * {@link com.bannerbound.core.client.DetectPreviewState}.
+ * Server -> client: flash the detected shell of the home at housePos for durationTicks. The detected
+ * boxes are already in com.bannerbound.core.client.ClientSelectionState (they were broadcast as HOME
+ * selections), so this only needs to tell the client which home to draw and for how long - the
+ * renderer reuses the home silhouette in a fixed colour. Stored in
+ * com.bannerbound.core.client.DetectPreviewState.
  */
 @ApiStatus.Internal
 public record ShowDetectPreviewPayload(BlockPos housePos, int durationTicks) implements CustomPacketPayload {

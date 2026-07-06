@@ -17,7 +17,7 @@ import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
- * Datapack loader for modular {@link ArrowPart}s — reads every JSON under
+ * Datapack loader for modular {@link ArrowPart}s - reads every JSON under
  * {@code data/<namespace>/arrow_parts/}. Registered as a reload listener in {@code AntiquityEvents};
  * the parsed set lands in {@link ArrowPartRegistry} and is then synced to clients
  * ({@link com.bannerbound.antiquity.network.ArrowPartsSyncPayload}) for rendering. {@code applyEntries}

@@ -17,8 +17,9 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
 /**
  * Once-per-in-game-day home upkeep: each valid, occupied home eats one day's worth of its active
  * luxuries ({@link HomeDemand#consumeDaily}) out of its own pantry. Fires at the day boundary
- * (dawn), so luxuries are an ongoing economic sink — a stocked pantry drains over days and the
- * demand lapses until the stocker (later, a market) refills it.
+ * (dawn), so luxuries are an ongoing economic sink - a stocked pantry drains over days and the
+ * demand lapses until the stocker (later, a market) refills it. Dormant settlements (all members
+ * offline, frozen "in amber") skip the drain.
  *
  * <p>Lag-safe: the per-tick work is a single day-index compare; the once-a-day pass skips homes in
  * unloaded chunks (no force-load).
@@ -36,17 +37,17 @@ public final class HomeUpkeep {
         ServerLevel sl = event.getServer().overworld();
         long day = sl.getDayTime() / 24_000L;
         if (day == lastDay) return;
-        if (lastDay == Long.MIN_VALUE) { // first observed tick (world load) — set baseline, don't fire
+        if (lastDay == Long.MIN_VALUE) { // world-load baseline: don't fire a day of consumption
             lastDay = day;
             return;
         }
         lastDay = day;
         for (Settlement s : SettlementData.get(sl).all()) {
-            if (s.isDormant()) continue; // frozen "in amber" — no luxury drain while all offline
+            if (s.isDormant()) continue;
             for (Home h : s.homes().values()) {
                 if (h.status() != Home.Status.VALID || h.residents().isEmpty()) continue;
                 ChunkPos cp = new ChunkPos(h.pos());
-                if (!sl.hasChunk(cp.x, cp.z)) continue; // unloaded → skip, no force-load
+                if (!sl.hasChunk(cp.x, cp.z)) continue; // never force-load unloaded chunks
                 HomeDemand.consumeDaily(sl, s, h);
             }
         }

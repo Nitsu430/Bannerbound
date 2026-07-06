@@ -28,7 +28,7 @@ import net.minecraft.world.level.block.Block;
  *
  * Values are clamped to {@code [-1, 1]}. Block ids are resolved to {@link Block} instances at
  * load time so the per-tick chunk scan never touches the registry. A block with no entry has a
- * base appeal of {@code 0} (bland). A culture style <i>overrides</i> these per-block — see
+ * base appeal of {@code 0} (bland). A culture style <i>overrides</i> these per-block -- see
  * {@link com.bannerbound.core.api.settlement.AppealResolver}.
  */
 public class BlockAppealLoader extends SimpleJsonResourceReloadListener {
@@ -67,7 +67,6 @@ public class BlockAppealLoader extends SimpleJsonResourceReloadListener {
         BannerboundCore.LOGGER.info("Loaded {} block appeal definitions", map.size());
     }
 
-    /** Base appeal of {@code block}; {@code 0} when undefined. */
     public static float base(Block block) {
         return BASE.getOrDefault(block, 0f);
     }

@@ -11,7 +11,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: flip the active/inactive state of a workstation. Server validates that the
+ * Client -> server: flip the active/inactive state of a workstation. Server validates that the
  * requesting player is in the workstation's settlement before applying. Used by the workstation
  * GUI's active/inactive checkbox.
  */

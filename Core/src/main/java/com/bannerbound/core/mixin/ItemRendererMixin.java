@@ -16,8 +16,11 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 
 /**
- * Swap the baked model for any unknown item to bannerbound:item/question_mark so the item
- * renders as a question mark in inventory, hotbar, as a dropped entity, and in third-person hands.
+ * Swaps the baked model for any item unknown to the local player's civ to
+ * bannerbound:item/question_mark, so it renders as a question mark in inventory, hotbar, as a
+ * dropped entity, and in third-person hands. Render code that explicitly wants the real model (e.g.
+ * the research tooltip's "Unlocked Items:" grid, where question marks would defeat the point) sets
+ * UnknownItemHelper's bypass flag, which short-circuits the swap.
  */
 @Mixin(ItemRenderer.class)
 @ApiStatus.Internal
@@ -26,8 +29,6 @@ public class ItemRendererMixin {
             at = @At("RETURN"), cancellable = true)
     private void bannerbound$swapModelForUnknown(ItemStack stack, Level level, LivingEntity entity, int seed,
                                              CallbackInfoReturnable<BakedModel> cir) {
-        // Bypass flag set by render code that explicitly wants the real model (e.g. research
-        // tooltip's "Unlocked Items:" grid — showing question marks there defeats the point).
         if (UnknownItemHelper.isBypassActive()) {
             return;
         }

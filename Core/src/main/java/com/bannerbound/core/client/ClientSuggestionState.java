@@ -14,9 +14,11 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Client mirror of the player's settlement's suggestion-marker state. Keyed by research id;
- * each entry is the list of suggesters in click order, used by the research screen to draw
- * the [+N] + skin-head badge row above each suggested node.
+ * Client mirror of the player's settlement's suggestion-marker state, split into science and culture
+ * maps keyed by research id. Each entry is the list of suggesters in click order, used by the
+ * research screen to draw the [+N] + skin-head badge row above each suggested node; the Suggestions
+ * tab aggregates the full maps into its row list. Maps are volatile and replaced wholesale from
+ * SuggestionStateSyncPayload, so readers on any thread see a consistent immutable snapshot.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -48,7 +50,6 @@ public final class ClientSuggestionState {
         List<UUID> s = culture.get(researchId);
         return s == null ? List.of() : s;
     }
-    /** Full suggestion maps — the Suggestions tab aggregates these into its row list. */
     public static Map<String, List<UUID>> getAllScience() { return science; }
     public static Map<String, List<UUID>> getAllCulture() { return culture; }
 }

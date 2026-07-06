@@ -24,11 +24,17 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
 /**
- * Draws the assigned crop's yield item floating above each farmer selection — a 3D "waypoint"
- * so the player can see at a glance what's planted there. Only renders while the local player
- * is holding a Foreman's Rod that's been configured for the "farmer" workstation type, so a
- * digger-rod doesn't see clutter from other workstations. One marker per selection at the
- * selection's geometric center, Y = maxY + 3, billboarded to the camera.
+ * Draws the assigned crop's yield item floating above each farmer selection as a 3D "waypoint" so
+ * the player can see at a glance what is planted there. Runs on the render thread during the
+ * AFTER_TRANSLUCENT_BLOCKS level stage. Only renders while the local player holds a Foreman's Rod
+ * configured for the "farmer" workstation type, so a digger-rod does not see clutter from fields it
+ * does not manage. One marker per selection at the selection's geometric center, Y = maxY + 3,
+ * billboarded to the camera. When a field is bound to a single citizen (not "all farmers") the
+ * citizen's face is drawn below the icon like a multiplayer TAB-list head; "all" fields get no
+ * face. That face is a 1-quad billboard compositing the skin's 8x8 face region -- base face at
+ * uv (8,8)..(16,16) of the 64x64 sheet, plus the hat overlay at (40,8)..(48,16) nudged toward the
+ * camera so it sits on top. The citizen lookup map is built at most once per frame, and only when a
+ * bound field actually needs a face.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
@@ -48,8 +54,6 @@ public final class SeedMarkerRenderer {
         if (player == null || mc.level == null) return;
         ItemStack rodStack = heldRodStack(player);
         if (rodStack == null) return;
-        // Only show markers while the player's rod is set to "farmer" — otherwise a digger-rod
-        // would see seed icons floating over fields it doesn't manage.
         String rodType = rodStack.get(BannerboundCore.FOREMAN_WORKSTATION_TYPE.get());
         if (!"farmer".equals(rodType)) return;
 
@@ -61,7 +65,7 @@ public final class SeedMarkerRenderer {
         PoseStack pose = event.getPoseStack();
         MultiBufferSource.BufferSource buffer = mc.renderBuffers().bufferSource();
         ItemRenderer itemRenderer = mc.getItemRenderer();
-        java.util.Map<java.util.UUID, com.bannerbound.core.entity.CitizenEntity> citizens = null; // lazy
+        java.util.Map<java.util.UUID, com.bannerbound.core.entity.CitizenEntity> citizens = null;
 
         for (BlockSelection sel : ClientSelectionState.getAll()) {
             if (sel.completed()) continue;
@@ -91,8 +95,6 @@ public final class SeedMarkerRenderer {
                 0);
             pose.popPose();
 
-            // If this field belongs to ONE citizen (not "all farmers"), draw their face below the icon
-            // — like a TAB-list head. "All" fields get no face.
             if (!sel.targetsAllWorkers()) {
                 if (citizens == null) citizens = collectCitizens(mc);
                 com.bannerbound.core.entity.CitizenEntity owner = citizens.get(sel.assignedCitizenId());
@@ -111,30 +113,26 @@ public final class SeedMarkerRenderer {
     }
 
     private static final float FACE_SIZE = 0.9f;
-    private static final float FACE_DROP = 1.25f;   // below the yield icon
+    private static final float FACE_DROP = 1.25f;
 
-    /** Draws the citizen's face (skin face layer + hat overlay) as a 1-quad billboard in the current
-     *  pose. Mirrors how the multiplayer TAB list composites a head from the skin's 8×8 face region. */
     private static void drawFace(PoseStack pose, MultiBufferSource buffer,
                                  net.minecraft.resources.ResourceLocation skin, float size) {
         org.joml.Matrix4f m = pose.last().pose();
         net.minecraft.client.renderer.RenderType type =
             net.minecraft.client.renderer.RenderType.entityCutoutNoCull(skin);
-        // Base face: skin pixels (8,8)..(16,16) of a 64×64 sheet.
         drawQuad(m, buffer.getBuffer(type), size, 8f / 64f, 16f / 64f, 0f);
-        // Hat overlay: (40,8)..(48,16), nudged toward the camera so it sits on top.
         drawQuad(m, buffer.getBuffer(type), size, 40f / 64f, 48f / 64f, 0.01f);
     }
 
     private static void drawQuad(org.joml.Matrix4f m, com.mojang.blaze3d.vertex.VertexConsumer vc,
                                  float size, float u0, float u1, float z) {
         float h = size / 2f;
-        float v0 = 8f / 64f, v1 = 16f / 64f;   // top / bottom of the face row
+        float v0 = 8f / 64f, v1 = 16f / 64f;
         int light = 0x00F000F0;
-        quadVertex(vc, m, -h, -h, z, u0, v1, light);  // bottom-left
-        quadVertex(vc, m,  h, -h, z, u1, v1, light);  // bottom-right
-        quadVertex(vc, m,  h,  h, z, u1, v0, light);  // top-right
-        quadVertex(vc, m, -h,  h, z, u0, v0, light);  // top-left
+        quadVertex(vc, m, -h, -h, z, u0, v1, light);
+        quadVertex(vc, m,  h, -h, z, u1, v1, light);
+        quadVertex(vc, m,  h,  h, z, u1, v0, light);
+        quadVertex(vc, m, -h,  h, z, u0, v0, light);
     }
 
     private static void quadVertex(com.mojang.blaze3d.vertex.VertexConsumer vc, org.joml.Matrix4f m,
@@ -147,7 +145,6 @@ public final class SeedMarkerRenderer {
             .setNormal(0f, 0f, 1f);
     }
 
-    /** The skin texture for {@code citizen}, via its live renderer (same art the entity uses). */
     private static net.minecraft.resources.ResourceLocation skinFor(Minecraft mc,
             com.bannerbound.core.entity.CitizenEntity citizen) {
         var renderer = mc.getEntityRenderDispatcher().getRenderer(citizen);
@@ -155,7 +152,6 @@ public final class SeedMarkerRenderer {
         return net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("bannerbound", "textures/entity/citizen.png");
     }
 
-    /** Map of loaded citizens by UUID, built once per frame only when a bound field needs a face. */
     private static java.util.Map<java.util.UUID, com.bannerbound.core.entity.CitizenEntity> collectCitizens(Minecraft mc) {
         java.util.Map<java.util.UUID, com.bannerbound.core.entity.CitizenEntity> out = new java.util.HashMap<>();
         if (mc.level == null) return out;

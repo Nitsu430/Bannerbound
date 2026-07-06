@@ -20,8 +20,14 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * The barbarian parley: opened when the player right-clicks a messenger at their hall. Shows the camp's
- * greeting + its data-driven demands and trade offers, with accept / refuse / trade buttons that send a
- * {@link BarbarianParleyActionPayload} back to the server (which re-validates everything).
+ * greeting plus its data-driven demands and trade offers, with accept / refuse / trade buttons that send
+ * a {@link BarbarianParleyActionPayload} back to the server (which re-validates everything). Trade sends
+ * keep the window open; every other action closes it. The panel sizes itself to its content in init().
+ *
+ * Item labels are built from Components, never string concatenation (which would stringify a name into a
+ * "translation{key=...}" debug blob). Un-researched goods still reveal their TRUE name via
+ * getDescription() (which sidesteps the unknown-name mask on ItemStack#getHoverName), because a barter
+ * offer you can't read is useless and meeting a foreign trader is how a young civ learns a good exists.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -31,7 +37,7 @@ public final class BarbarianParleyScreen extends PolishedScreen {
     private int panelX;
     private int panelY;
     private int panelH;
-    private int textTop; // where backdrop text starts
+    private int textTop;
 
     public BarbarianParleyScreen(OpenBarbarianParleyPayload data) {
         super(Component.literal(data.campName()));
@@ -40,13 +46,12 @@ public final class BarbarianParleyScreen extends PolishedScreen {
 
     @Override
     protected void init() {
-        // Size the panel to its content: greeting + demands header/rows + a button per action.
         int greetingLines = wrappedLineCount(this.font, greeting(), PANEL_W - 24);
-        int demandRows = data.demands().isEmpty() ? 0 : data.demands().size() + 1; // +1 header
+        int demandRows = data.demands().isEmpty() ? 0 : data.demands().size() + 1;
         int buttons = data.trades().size()
-            + (data.demands().isEmpty() ? 0 : 1) // accept
-            + (data.demands().isEmpty() ? 0 : 1) // refuse
-            + 1; // leave
+            + (data.demands().isEmpty() ? 0 : 1)
+            + (data.demands().isEmpty() ? 0 : 1)
+            + 1;
         panelH = 50 + greetingLines * (this.font.lineHeight + 1) + demandRows * 12 + 8 + buttons * 24 + 12;
         panelX = (this.width - PANEL_W) / 2;
         panelY = (this.height - panelH) / 2;
@@ -78,8 +83,7 @@ public final class BarbarianParleyScreen extends PolishedScreen {
         for (int i = 0; i < data.trades().size(); i++) {
             OpenBarbarianParleyPayload.Trade t = data.trades().get(i);
             final int idx = i;
-            // Compose with Components (NOT string concatenation, which would stringify the name into a
-            // "translation{key=…}" debug blob — the original bug).
+            // Compose with Components; string concatenation would stringify the name into a debug blob.
             Component give = Component.literal(t.giveCount() + "× ").append(itemName(t.giveItem()));
             Component get = Component.literal(t.getCount() + "× ").append(itemName(t.getItem()));
             Component label = Component.translatable("bannerbound.barbarian.parley.btn.trade", give, get);
@@ -97,14 +101,13 @@ public final class BarbarianParleyScreen extends PolishedScreen {
     private void send(int action, int tradeIndex) {
         PacketDistributor.sendToServer(new BarbarianParleyActionPayload(data.messengerEntityId(),
             action, tradeIndex));
-        if (action != BarbarianParleyActionPayload.TRADE) this.onClose(); // trades keep the window open
+        if (action != BarbarianParleyActionPayload.TRADE) this.onClose();
     }
 
     @Override
     protected void renderPolishedBackdrop(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         g.fill(panelX, panelY, panelX + PANEL_W, panelY + panelH, 0xE6101820);
         g.renderOutline(panelX, panelY, PANEL_W, panelH, 0xFF3A4450);
-        // Header: camp name in its colour + the type.
         int color = 0xFF000000 | (data.campColor() & 0xFFFFFF);
         g.drawString(this.font, Component.literal(data.campName()).withStyle(s -> s.withColor(color)),
             panelX + 12, panelY + 10, color, true);
@@ -141,16 +144,11 @@ public final class BarbarianParleyScreen extends PolishedScreen {
 
     private static Component itemName(String id) {
         ItemStack stack = new ItemStack(item(id));
-        // Known goods keep their normal name (incl. the civ's coined word). Un-researched goods reveal
-        // their TRUE name anyway: a barter offer you can't read is useless, and meeting a foreign trader
-        // is itself how a young civ learns a good exists. getDescription() sidesteps the unknown-name
-        // mask, which only hooks ItemStack#getHoverName.
         return UnknownItemHelper.isUnknownForLocalPlayer(stack)
             ? item(id).getDescription()
             : stack.getHoverName();
     }
 
-    /** Coloured stance word for the header ("hostile"/"neutral"/"friendly"). */
     private Component relationLabel() {
         com.bannerbound.core.barbarian.CampRelationState[] vals =
             com.bannerbound.core.barbarian.CampRelationState.values();

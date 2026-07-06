@@ -14,7 +14,12 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.saveddata.SavedData;
 
-/** World SavedData containing per-player Chronicle unlock/read state. */
+/**
+ * Overworld SavedData holding each player's Chronicle state: which entries are unlocked, which
+ * have been seen, and the auto-pin-tutorial preference. Always fetched via get() against the
+ * overworld data storage so every dimension shares one store. PlayerState mutators return true
+ * only when something actually changed, letting callers decide when to setDirty and re-sync.
+ */
 public final class CodexPlayerData extends SavedData {
     private static final String DATA_NAME = "bannerbound_chronicle_players";
     private final Map<UUID, PlayerState> states = new HashMap<>();
@@ -55,7 +60,7 @@ public final class CodexPlayerData extends SavedData {
             PlayerState state = new PlayerState();
             state.unlocked.addAll(readStrings(playerTag.getList("Unlocked", Tag.TAG_STRING)));
             state.seen.addAll(readStrings(playerTag.getList("Seen", Tag.TAG_STRING)));
-            // Default ON when absent (existing saves predate the toggle).
+            // Save-format invariant: absent tag = pre-toggle save, so default auto-pin ON.
             state.autoPinTutorial = !playerTag.contains("AutoPinTutorial")
                 || playerTag.getBoolean("AutoPinTutorial");
             data.states.put(playerTag.getUUID("Player"), state);
@@ -88,7 +93,6 @@ public final class CodexPlayerData extends SavedData {
             return autoPinTutorial;
         }
 
-        /** Sets the auto-pin preference; returns true if it changed. */
         boolean setAutoPinTutorial(boolean value) {
             if (autoPinTutorial == value) return false;
             autoPinTutorial = value;

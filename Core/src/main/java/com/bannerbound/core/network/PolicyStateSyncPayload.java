@@ -16,15 +16,13 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client snapshot of a settlement's policy state, consumed by {@code ClientPolicyState}
- * and rendered by the town hall's Policies tab. Sent to every member whenever the policy state
- * changes (propose / vote / suggest / enact / retract) so all members' tabs stay live without
- * re-opening the town hall.
- *
- * <p>{@code pendingSlot} is -1 when there's no pending change. {@code pendingAddId} /
- * {@code pendingRemoveId} are empty strings when not applicable. The confirm-vote lists are
- * parallel (voter[i] cast agree[i]); they're only populated in a Council with a pending change.
- * The suggestion lists are parallel (suggestionPolicyIds[i] was suggested by suggestionVoters[i]).
+ * Server -> client snapshot of a settlement's policy state, consumed by ClientPolicyState and
+ * rendered by the town hall's Policies tab. Sent to every member whenever the policy state changes
+ * (propose / vote / suggest / enact / retract) so all members' tabs stay live without re-opening the
+ * town hall. pendingSlot is -1 when there's no pending change; pendingAddId / pendingRemoveId are
+ * empty strings when not applicable. The confirm-vote lists are parallel (voter[i] cast agree[i])
+ * and only populated in a Council with a pending change. The suggestion lists are parallel
+ * (suggestionPolicyIds[i] was suggested by suggestionVoters[i]).
  */
 @ApiStatus.Internal
 public record PolicyStateSyncPayload(

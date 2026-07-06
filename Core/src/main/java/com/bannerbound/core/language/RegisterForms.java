@@ -2,7 +2,10 @@ package com.bannerbound.core.language;
 
 import com.bannerbound.core.api.settlement.Era;
 
-/** Bundle of contextual forms derived from the same underlying generated word. */
+/**
+ * Bundle of the contextual forms (one per LanguageRegister) derived from a single generated word.
+ * defaultWord and defaultName pick the era- and role-appropriate register.
+ */
 public record RegisterForms(
     String spoken,
     String written,

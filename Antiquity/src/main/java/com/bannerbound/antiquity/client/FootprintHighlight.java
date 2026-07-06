@@ -11,31 +11,27 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * Client-side "which tracks belong to the same animal" highlight for the hunting tracker. Examining
  * (right-clicking) a footprint remembers the animal that left it; {@link GroundDecalRenderer} then
- * tints every still-active track from that same animal cyan so the trail reads as one continuous
- * path. Re-examining any track re-arms the tint (and can switch to a different animal).
+ * tints every still-active track from that same animal cyan (lerping the track colour white->cyan
+ * by {@link #strength}) so the trail reads as one continuous path. Re-examining any track re-arms
+ * the tint and can switch to a different animal.
  *
- * <p>The whole effect is gated behind the {@code hunting_instincts} research — without it,
- * {@link #examine} is a no-op and tracks render their normal colour. Holds a single "current
- * highlight" (one animal at a time), faded out over {@link #FADE_TICKS} since the last examine.
+ * <p>The whole effect is gated behind the {@code hunting_instincts} research: without the flag (or
+ * on an ungrouped decal) {@link #examine} is a no-op and tracks render their normal colour. Holds a
+ * single "current highlight" (one animal at a time, groupId, -1 = none), fading linearly to zero
+ * over FADE_TICKS (~10s, long enough to walk a trail) from the last examine's client game-time.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class FootprintHighlight {
-    /** Research flag that lets a hunter read which tracks share an animal. Kept as a constant so the
-     *  Research Tree Editor auto-discovers it (matches the {@code *FLAG*} scan convention). */
+    // Constant whose name contains FLAG so the Research Tree Editor's *FLAG* scan auto-discovers it.
     public static final String FLAG_HUNTING_INSTINCTS = "bannerbound.hunting_instincts";
-    /** Cyan tint holds then fades over this many ticks (~10s) — long enough to walk a trail. */
     private static final float FADE_TICKS = 200.0F;
 
-    private static int groupId = -1;              // animal currently highlighted, -1 = none
-    private static long startGameTime = Long.MIN_VALUE; // client game-time the highlight was (re)armed
+    private static int groupId = -1;
+    private static long startGameTime = Long.MIN_VALUE;
 
     private FootprintHighlight() {}
 
-    /**
-     * Examining a track: if {@code hunting_instincts} is researched, light up every active track left
-     * by the same animal in cyan. No research (or an ungrouped decal) → no-op.
-     */
     public static void examine(GroundDecalEntity decal) {
         int group = decal.getGroupId();
         if (group < 0 || !ClientResearchState.hasFlag(FLAG_HUNTING_INSTINCTS)) {
@@ -45,11 +41,6 @@ public final class FootprintHighlight {
         startGameTime = decal.level().getGameTime();
     }
 
-    /**
-     * Cyan-tint strength in [0,1] for a track belonging to {@code group}: 0 when it isn't the
-     * highlighted animal or the highlight has faded, fading linearly to 0 over {@link #FADE_TICKS}.
-     * The renderer lerps the track colour white→cyan by this amount.
-     */
     public static float strength(int group, long gameTime, float partialTick) {
         if (group < 0 || group != groupId) {
             return 0.0F;

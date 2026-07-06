@@ -19,10 +19,15 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * Client-side capture of the world clicks that drive drop-location edit mode (see
- * {@link DropLocationEditState}). Right-click on a block marks it as the drop-off (after a quick
- * client-side storage check; the server re-validates claim + container before confirming with a
- * bell). Left-click — or pressing Escape, handled via the screen — cancels the mode. The clicks are
- * canceled so the held item doesn't also act (place a block, open the chest, etc.).
+ * {@link DropLocationEditState}). Right-click on a block marks it as the drop-off; left-click, or
+ * opening any screen (Escape), cancels the mode. Leaving edit mode clears the client state AND sends
+ * CancelDropLocationEditPayload so the server drops its guard flag and the next right-click opens
+ * containers normally again.
+ *
+ * Design note: the right-click handler suppresses ONLY the held-item use, deliberately NOT the block
+ * use. Letting the block-use packet reach the server is what lets DropLocationServerGuard mark the
+ * block (and cancel the container-open) authoritatively with no client/server race; the server
+ * replies with EndDropLocationEditPayload on success.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
@@ -34,10 +39,7 @@ public final class DropLocationEditClick {
     public static void onRightClickBlock(PlayerInteractEvent.RightClickBlock event) {
         if (!DropLocationEditState.isActive()) return;
         if (!(event.getEntity() instanceof LocalPlayer)) return;
-        // Suppress only the HELD-ITEM use so the player doesn't place a block while marking. We do
-        // NOT cancel the block use here — letting the use-packet reach the server is what lets
-        // DropLocationServerGuard mark the block (and cancel the container-open) authoritatively,
-        // with no client/server race. The server replies with EndDropLocationEditPayload on success.
+        // Suppress only held-item use; must NOT cancel block use or the server never gets to mark.
         event.setUseItem(net.neoforged.neoforge.common.util.TriState.FALSE);
     }
 
@@ -56,7 +58,6 @@ public final class DropLocationEditClick {
         cancel(player);
     }
 
-    /** Cancel edit mode if the player opens any screen (e.g. presses Escape) while editing. */
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
         if (!DropLocationEditState.isActive()) return;
@@ -71,8 +72,6 @@ public final class DropLocationEditClick {
             .withStyle(ChatFormatting.GRAY), true);
     }
 
-    /** Leave edit mode: clear the client state AND tell the server to drop its guard flag (so the
-     *  next block right-click opens containers normally again). */
     private static void exitEditMode() {
         DropLocationEditState.clear();
         PacketDistributor.sendToServer(new com.bannerbound.core.network.CancelDropLocationEditPayload());

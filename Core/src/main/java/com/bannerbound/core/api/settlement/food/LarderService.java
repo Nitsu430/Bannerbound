@@ -23,13 +23,15 @@ import net.neoforged.neoforge.items.wrapper.InvWrapper;
 
 /**
  * Passive settlement larder (COOKING_PLAN.md). Valid food sitting in the settlement's claimed,
- * currently-loaded storage contributes a passive food/sec bonus: {@code storedFoodValue ×
- * Config.STORED_FOOD_RATE_PER_VALUE}. The food itself is <b>not consumed</b> by this scan — only the
- * spoilage system ({@link LarderHooks}) ever removes it, so "got enough cod for the day until it
- * spoils" just works without per-item management. Block-based food stores (cooking pots) count too.
- *
- * <p>Gated on Storage Logistics research: a settlement without it has no larder, so stored items stay
- * plain player food and contribute nothing. Called once/sec from {@code ImmigrationManager}.
+ * currently-loaded storage contributes a passive food/sec bonus (storedFoodValue x
+ * Config.STORED_FOOD_RATE_PER_VALUE). The food is NOT consumed by this scan; only the spoilage
+ * system (LarderHooks) ever removes it, so "got enough cod for the day until it spoils" just works
+ * without per-item management. Block-based food stores (cooking pots) count too. Gated on Storage
+ * Logistics research (STORAGE_RESEARCH_FLAG): a settlement without it has no larder and stored
+ * items stay plain player food. refresh() is called once/sec from ImmigrationManager; it rescans
+ * claimed storage, runs each stack through LarderHooks (processors, then value contributors,
+ * multipliers, exclusions), re-normalizes each container to re-merge fragmented spoiled stacks,
+ * then adds block-based stores and writes the total + passive food/sec back onto the settlement.
  */
 @ApiStatus.Internal
 public final class LarderService {
@@ -37,7 +39,6 @@ public final class LarderService {
 
     public static final String STORAGE_RESEARCH_FLAG = "bannerbound.unlock.stocker";
 
-    /** Rescan claimed storage and set the settlement's stored food value + passive food/sec. */
     public static void refresh(ServerLevel level, Settlement s) {
         if (!ResearchManager.hasFlag(s, STORAGE_RESEARCH_FLAG)) {
             s.setStoredFoodValue(0.0);
@@ -49,7 +50,6 @@ public final class LarderService {
             for (int slot = 0; slot < handler.getSlots(); slot++) {
                 ItemStack raw = handler.getStackInSlot(slot);
                 if (raw.isEmpty()) continue;
-                // Cheap value lookup before any spoilage NBT work.
                 double quick = Math.max(FoodValueLoader.effective(raw.getItem(), s),
                                         LarderHooks.extraValue(raw, level));
                 if (quick <= 0.0) continue;
@@ -58,13 +58,10 @@ public final class LarderService {
                 double per = Math.max(FoodValueLoader.effective(stack.getItem(), s),
                                       LarderHooks.extraValue(stack, level));
                 if (per <= 0.0) continue;
-                // Per-stack value modifiers (e.g. bland food is worth half) ride on top of the base value.
                 valueTotal += per * LarderHooks.valueMultiplier(stack, level) * stack.getCount();
             }
-            // Re-merge stacks the per-slot stamping/spoiling fragmented (mainly spoiled_food).
             LarderHooks.normalize(handler, level);
         }
-        // Block-based food stores (cooking pots) are part of the reserve too.
         for (LarderHooks.FoodStore store : LarderHooks.stores(level, s)) {
             valueTotal += Math.max(0.0, store.availableFoodValue());
         }
@@ -82,7 +79,6 @@ public final class LarderService {
         return processed;
     }
 
-    /** Every container in the settlement's claimed, currently-loaded chunks, as item handlers. */
     private static List<IItemHandler> storageHandlers(ServerLevel level, Settlement s) {
         List<IItemHandler> out = new ArrayList<>();
         for (long packed : s.claimedChunks()) {
@@ -92,7 +88,7 @@ public final class LarderService {
             for (BlockPos pos : chunk.getBlockEntities().keySet()) {
                 if (DropOffContainers.isSecondaryChestHalf(level, pos)) continue;
                 IItemHandler h = level.getCapability(Capabilities.ItemHandler.BLOCK, pos, null);
-                // Prefer a writable view so the spoilage stamp can persist; fall back to InvWrapper.
+                // Prefer a writable view so the spoilage stamp persists; else wrap the Container.
                 if (!(h instanceof IItemHandlerModifiable) && level.getBlockEntity(pos) instanceof Container c) {
                     h = new InvWrapper(c);
                 }

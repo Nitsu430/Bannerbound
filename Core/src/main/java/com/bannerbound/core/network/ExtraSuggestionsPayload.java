@@ -16,14 +16,12 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: the two suggestion kinds that have no existing sync of their own — exile and tablet-issue —
- * for the Town Hall "Suggestions" tab. The other four kinds (science / culture / policy / palette)
- * already reach the client via {@code SuggestionStateSyncPayload} / {@code PolicyStateSyncPayload} /
- * {@code PaletteStateSyncPayload}; the tab aggregates all six from the client caches.
- *
- * @param exiles  one entry per citizen with at least one exile suggester (name baked server-side
- *                so the client doesn't need the roster)
- * @param tabletSuggesters members who suggested issuing a registration tablet/paper
+ * S->C: the two suggestion kinds that have no sync of their own -- exile and tablet-issue -- for the
+ * Town Hall "Suggestions" tab. The other four kinds (science / culture / policy / palette) already
+ * reach the client via SuggestionStateSyncPayload / PolicyStateSyncPayload / PaletteStateSyncPayload;
+ * the tab aggregates all six from the client caches. exiles holds one entry per citizen with at least
+ * one exile suggester (name baked server-side so the client needs no roster); tabletSuggesters lists
+ * members who suggested issuing a registration tablet/paper.
  */
 @ApiStatus.Internal
 public record ExtraSuggestionsPayload(

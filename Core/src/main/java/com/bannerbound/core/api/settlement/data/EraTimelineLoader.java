@@ -16,22 +16,19 @@ import net.minecraft.util.GsonHelper;
 import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
- * Loads the era → starting-year timeline used by the world-year HUD. Reads JSON from
- * {@code data/<namespace>/era_times/*.json}; every file is parsed as a map of era key
- * (lowercase {@link Era#key}) to a {@code { "start_year": <int> }} object. Files from
- * multiple namespaces are unioned; later definitions for the same era key win, which lets
- * an expansion datapack override the base timeline without replacing the whole file.
- * <p>
- * Years are signed ints — negative = BC, positive = AD. {@code ancient} typically starts
- * deep in BC territory (e.g. -100000); {@code future} sits a century or two past the present.
- * Eras missing from the JSON fall back to {@link #DEFAULT_START_YEARS}, so the loader never
- * leaves the HUD in a broken state.
+ * Loads the era -> starting-year timeline used by the world-year HUD from
+ * data/<namespace>/era_times/*.json. Every file is a map of era key (lowercase Era.key) to a
+ * { "start_year": <int> } object; files from multiple namespaces are unioned and later
+ * definitions for the same era key win, so an expansion datapack can override the base timeline
+ * without replacing the whole file. Years are signed ints (negative = BC, positive = AD): ancient
+ * typically starts deep in BC (e.g. -100000), future sits a century or two past the present. Eras
+ * missing from the JSON fall back to DEFAULT_START_YEARS (buildDefaults) so the loader never
+ * leaves the HUD broken; getAll() exposes the full map for sync.
  */
 public final class EraTimelineLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "era_times";
     private static final Gson GSON = new Gson();
 
-    /** Conservative fallback so the HUD has something to show even if no JSON is loaded. */
     private static final Map<Era, Integer> DEFAULT_START_YEARS = buildDefaults();
     private static volatile Map<Era, Integer> START_YEARS = DEFAULT_START_YEARS;
 
@@ -63,13 +60,11 @@ public final class EraTimelineLoader extends SimpleJsonResourceReloadListener {
         BannerboundCore.LOGGER.info("Loaded era timeline: {} eras", merged.size());
     }
 
-    /** Start year for {@code era}. Always returns a value (defaults if unconfigured). */
     public static int getStartYear(Era era) {
         Integer y = START_YEARS.get(era);
         return y != null ? y : DEFAULT_START_YEARS.getOrDefault(era, 0);
     }
 
-    /** Returns the full era → start_year map for sync. */
     public static Map<Era, Integer> getAll() {
         return START_YEARS;
     }

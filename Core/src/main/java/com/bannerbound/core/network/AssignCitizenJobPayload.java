@@ -10,8 +10,8 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: assign (or clear, when {@code typeId} is empty) a citizen's job from the Job tab. The
- *  server re-checks management permission + that the type is research-unlocked. */
+/** C->S: assign (or clear, when typeId is empty) a citizen's job from the Job tab. Server
+ *  re-checks management permission and that the type is research-unlocked. */
 @ApiStatus.Internal
 public record AssignCitizenJobPayload(int entityId, String typeId) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<AssignCitizenJobPayload> TYPE =

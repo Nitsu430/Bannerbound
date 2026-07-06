@@ -12,8 +12,8 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Container screen for the Basket — a 3×3 storage grid over the player inventory. Hand-drawn
- * panel, same flat style as Core's workstation screens.
+ * Container screen for the Basket: a 3x3 storage grid over the player inventory. Hand-drawn panel
+ * (no background texture), same flat style as Core's workstation screens.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal

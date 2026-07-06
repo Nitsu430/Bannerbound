@@ -16,8 +16,11 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Ponder storyboards for the Mason's Bench — the stone-working twin of the Carpenter's Table.
- * Scenes registered under {@code bannerboundantiquity:masonry}.
+ * Ponder storyboards for the Mason's Bench - the 2-block stone-working twin of the Woodworking
+ * Table (stack a stone budget, browse the floating ghost output, dress the batch with the
+ * stone-chisel strike minigame). Scenes registered under {@code bannerboundantiquity:masonry}.
+ * Built at runtime on the shared blank platform (see PonderUtil.basePlate); pile contents and
+ * insert animations are faked by rewriting the bench BE's Stones NBT.
  */
 @OnlyIn(Dist.CLIENT)
 public final class MasonryScenes {
@@ -52,7 +55,6 @@ public final class MasonryScenes {
         placeBench(scene, util);
         scene.idle(10);
 
-        // Load stone into the pile.
         scene.overlay().showControls(util.vector().topOf(main), Pointing.DOWN, 50)
             .rightClick().withItem(PonderUtil.stack("minecraft:cobblestone", 8));
         scene.idle(5);
@@ -70,7 +72,6 @@ public final class MasonryScenes {
             .placeNearTarget();
         scene.idle(80);
 
-        // Pick an output.
         scene.overlay().showText(80)
             .text("The floating ghost shows slabs, stairs, walls and bricks — browse and click to queue.")
             .pointAt(util.vector().topOf(main).add(0, 0.8, 0))
@@ -78,7 +79,6 @@ public final class MasonryScenes {
             .placeNearTarget();
         scene.idle(80);
 
-        // Chisel it.
         scene.overlay().showControls(util.vector().topOf(main), Pointing.DOWN, 50)
             .rightClick().withItem(PonderUtil.stack("bannerboundantiquity:stone_chisel"));
         scene.idle(5);

@@ -17,10 +17,12 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.level.BlockEvent;
 
 /**
- * Server-side place hook for the Stockpile block: when one is placed, register a fresh
- * {@link com.bannerbound.core.api.settlement.Stockpile} on the settlement owning the chunk and stash
- * its id on the BE (mirrors {@code HousingEvents.onHousePlace}). Enclosure validity is then kept up
- * to date by the BE's periodic scan, so no per-edit hook is needed for v1.
+ * Server-side block hooks for the Stockpile: on place, register a fresh Stockpile on the settlement
+ * owning the chunk and stash its id on the BE (mirrors HousingEvents.onHousePlace); enclosure
+ * validity is then kept current by the BE's periodic scan, so no per-edit hook is needed for v1.
+ * On break of a settlement's marked preferred-storage depot, clear the marking so the Labor tab
+ * stops pointing at a depot that's gone -- that handler runs at LOWEST priority so a break already
+ * cancelled by chunk protection doesn't wrongly clear it.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -34,11 +36,6 @@ public final class StockpileEvents {
         StockpileBlock.registerOnPlace(sl, event.getPos());
     }
 
-    /**
-     * If the settlement's marked preferred-storage depot block is broken, clear the marking so the
-     * Labor tab no longer points at a depot that's gone. Runs at LOWEST priority so a break cancelled
-     * by chunk protection doesn't wrongly clear it.
-     */
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onPreferredStorageBreak(BlockEvent.BreakEvent event) {
         if (event.isCanceled()) return;

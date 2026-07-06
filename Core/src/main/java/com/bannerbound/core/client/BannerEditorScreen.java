@@ -33,25 +33,37 @@ import net.minecraft.world.level.block.entity.BannerPatternLayers;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The Heraldry banner editor (Heraldry culture research → town hall "Banner" button).
- * Up to six pattern layers over the faction base color; each layer occupies one earned
- * Heraldry point while it exists (removing a layer frees the point).
+ * The Heraldry banner editor (Heraldry culture research -> town hall "Banner" button). Up to six
+ * pattern layers over the faction base color; each layer occupies one earned Heraldry point while
+ * it exists (removing a layer frees the point). Geometry is computed once in init() and shared by
+ * drawPanel and the mouse hit-tests, so the layout and the click regions must stay in sync.
  *
- * <p>Layout, left to right: the layer list (▲▼ reorder, ✕ remove, click to select) with the
- * Add button and the Heraldry point pips; the live preview — a real waving banner (vanilla
- * world-banner sway formula) in a framed inset, with the design's LIVE identity colors below
- * it; the paged pattern grid (mini flags drawn in the selected layer's color) and the 16-dye
- * palette. Flag rendering reuses the vanilla loom's technique —
- * {@code BannerRenderer.renderPatterns} on the baked BANNER "flag" model part.
+ * <p>Layout, left to right: the layer list (up/down reorder, x remove, click to select) with the
+ * Add button and the Heraldry point pips; the live preview (a real waving banner, vanilla
+ * world-banner sway formula, in a framed inset, with the design's live identity colors below it);
+ * the paged pattern grid (mini flags in the selected layer's color) and the 16-dye palette. Flag
+ * rendering reuses the vanilla loom's technique: BannerRenderer.renderPatterns on the baked BANNER
+ * "flag" model part.
  *
- * <p>The identity swatches are the design's consequence made visible: the banner's dominant
- * dye BECOMES the settlement's primary color on save, the runner-up its accent
- * ({@link FactionBanner#identityDyes} — same math the server runs). Don't fight the design;
- * become it.
+ * <p>The identity swatches are the design's consequence made visible: the banner's dominant dye
+ * BECOMES the settlement's primary color on save, the runner-up its accent, and any further dye
+ * holding >=5% of the cloth becomes trim (FactionBanner.identityDyes, the same math the server
+ * runs; 1..n swatches, first primary, second accent, the rest trim). The take-copy button hands
+ * out cosmetic copies of the saved faction banner - place as many as you like for decoration; they
+ * only register as THE banner when the main one is down - paid from settlement storage, one dye
+ * per color in the design.
  *
- * <p>Server state arrives via {@link OpenBannerEditorPayload}; edits happen on a local
- * working copy and only Save sends a {@link SaveBannerDesignPayload}. The server re-validates
- * everything and answers with a fresh snapshot ({@link #applyServerState}).
+ * <p>Server state arrives via OpenBannerEditorPayload; edits happen on a local working copy
+ * (WorkingLayer, which becomes a Settlement.BannerLayer on save) and only Save sends a
+ * SaveBannerDesignPayload. The server re-validates everything and answers with a fresh snapshot
+ * (applyServerState).
+ *
+ * <p>renderFlag draws the baked BANNER "flag" part straight-on via BannerRenderer.renderPatterns:
+ * x,y is the cloth's top-left on screen, one model unit = scale/16 px, the cloth is 20x40 units
+ * (so scale 28 -> 35x70 px). Derived from the full transform chain (scale -> +/-0.5 recenter ->
+ * unflip -> the flag part's own -32/16 offset -> cube x:-10..10, y:0..40), the cloth's top-left
+ * lands at translate + (-0.125*s, -2.5*s); the 0.125/2.5 translate constants and flagPart.y = -32
+ * come from that chain, not from anything local.
  */
 public class BannerEditorScreen extends PolishedScreen {
 
@@ -70,7 +82,6 @@ public class BannerEditorScreen extends PolishedScreen {
     private static final int COL_ROW = 0xFF1A1A1A;
     private static final int COL_ROW_HOVER = 0xFF242424;
 
-    /** One working layer (mutable while editing; becomes a Settlement.BannerLayer on save). */
     private static final class WorkingLayer {
         Holder<BannerPattern> pattern;
         DyeColor color;
@@ -90,7 +101,6 @@ public class BannerEditorScreen extends PolishedScreen {
     private int patternPage;
     private ModelPart flagPart;
 
-    // Geometry computed in init(), shared by drawPanel + mouse hit tests.
     private int panelX, panelY;
     private int listX, listY, listW, rowH;
     private int frameX, frameY, frameW, frameH;
@@ -108,7 +118,6 @@ public class BannerEditorScreen extends PolishedScreen {
         loadLayers(payload);
     }
 
-    /** Server refresh after a save (or a re-request): authoritative design + points. */
     public void applyServerState(OpenBannerEditorPayload payload) {
         this.pointsEarned = payload.pointsEarned();
         loadLayers(payload);
@@ -135,8 +144,6 @@ public class BannerEditorScreen extends PolishedScreen {
         return Math.max(0, pointsEarned - working.size());
     }
 
-    /** The identity colors this WORKING design would earn on save — same math as the server.
-     *  As many entries as the design has colors holding ≥5% of the cloth. */
     private List<DyeColor> liveIdentity() {
         if (working.isEmpty()) return List.of(baseDye);
         List<Settlement.BannerLayer> layers = new ArrayList<>();
@@ -203,9 +210,6 @@ public class BannerEditorScreen extends PolishedScreen {
             btn -> this.onClose())
             .bounds(panelX + 12, btnY, 68, 18)
             .build());
-        // Hands out a cosmetic copy of the saved faction banner — place as many as you like
-        // for decoration (they only register as THE banner when the main one is down). Paid
-        // for from settlement storage: one dye per color in the design.
         Button takeCopyButton = PolishButton.polished(
             Component.translatable("bannerbound.banner.editor.take_copy"),
             btn -> PacketDistributor.sendToServer(RequestBannerCopyPayload.INSTANCE))
@@ -236,7 +240,6 @@ public class BannerEditorScreen extends PolishedScreen {
 
     private void addLayer() {
         if (working.size() >= MAX_LAYERS || pointsAvailable() <= 0 || allPatterns.isEmpty()) return;
-        // Contrast default so a fresh layer is visible immediately on any base color.
         DyeColor start = baseDye == DyeColor.WHITE ? DyeColor.BLACK : DyeColor.WHITE;
         working.add(new WorkingLayer(allPatterns.get(0), start));
         selected = working.size() - 1;
@@ -250,7 +253,6 @@ public class BannerEditorScreen extends PolishedScreen {
         refreshButtons();
     }
 
-    /** Swaps a layer with its neighbor; the selection follows the moved layer. */
     private void moveLayer(int index, int dir) {
         int target = index + dir;
         if (index < 0 || index >= working.size() || target < 0 || target >= working.size()) return;
@@ -289,7 +291,6 @@ public class BannerEditorScreen extends PolishedScreen {
         for (DyeColor dye : identity) accents.add(argb(dye));
         int accentPrimary = accents.get(0);
 
-        // ── Chrome: panel, header band, identity-gradient border + divider ──
         graphics.fill(panelX, panelY, panelX + PANEL_W, panelY + PANEL_H, COL_BG);
         graphics.fill(panelX, panelY, panelX + PANEL_W, panelY + 22, COL_HEADER);
         drawIdentityBorder(graphics, panelX, panelY, PANEL_W, PANEL_H, accents);
@@ -297,7 +298,6 @@ public class BannerEditorScreen extends PolishedScreen {
         graphics.drawCenteredString(this.font, this.getTitle(),
             panelX + PANEL_W / 2, panelY + 7, 0xFFFFFFFF);
 
-        // ── Layer list ──
         graphics.drawString(this.font,
             Component.translatable("bannerbound.banner.editor.layers"), listX, listY - 10, 0xFFAAAAAA);
         for (int i = 0; i < MAX_LAYERS; i++) {
@@ -328,7 +328,6 @@ public class BannerEditorScreen extends PolishedScreen {
             }
         }
 
-        // ── Heraldry point pips: bright = free, dim = held by a layer ──
         int pipsY = listY + MAX_LAYERS * rowH + 30;
         graphics.drawString(this.font,
             Component.translatable("bannerbound.banner.editor.points_label"),
@@ -348,15 +347,11 @@ public class BannerEditorScreen extends PolishedScreen {
                 listX, pipsY + 12, listW, 0xFF707070);
         }
 
-        // ── Preview: framed, waving, true to the world banner ──
         graphics.fill(frameX, frameY, frameX + frameW, frameY + frameH, COL_INSET);
         graphics.renderOutline(frameX, frameY, frameW, frameH, COL_LINE);
         renderFlag(graphics, frameX + (frameW - 35) / 2, frameY + 12, 28f,
             baseDye, workingPatterns(), true, partialTick);
 
-        // ── Live identity: what this design makes you — one swatch per identity color,
-        // however many the design earns (1..n). First = primary, second = accent, the rest
-        // are trim. The row recenters as colors come and go. ──
         int colCenter = frameX + frameW / 2;
         graphics.drawCenteredString(this.font,
             Component.translatable("bannerbound.banner.editor.identity"),
@@ -383,7 +378,6 @@ public class BannerEditorScreen extends PolishedScreen {
             graphics.renderTooltip(this.font, identityTip, mouseX, mouseY);
         }
 
-        // ── Pattern grid (inset; mini previews in the selected layer's color) ──
         graphics.fill(gridX - 4, gridY - 4, gridX + GRID_COLS * GRID_CELL_W + 4,
             gridY + GRID_ROWS * GRID_CELL_H + 4, COL_INSET);
         graphics.renderOutline(gridX - 4, gridY - 4, GRID_COLS * GRID_CELL_W + 8,
@@ -417,12 +411,10 @@ public class BannerEditorScreen extends PolishedScreen {
             }
         }
 
-        // Page indicator centered between the ◀ ▶ buttons.
         int pageCount = Math.max(1, (allPatterns.size() + perPage - 1) / perPage);
         graphics.drawCenteredString(this.font, (patternPage + 1) + "/" + pageCount,
             gridX + GRID_COLS * GRID_CELL_W / 2, paletteY - 14, 0xFF808080);
 
-        // ── Dye palette ──
         for (DyeColor dye : DyeColor.values()) {
             int sx = paletteX + (dye.getId() % 8) * 14;
             int sy = paletteY + (dye.getId() / 8) * 14;
@@ -435,26 +427,18 @@ public class BannerEditorScreen extends PolishedScreen {
                 hoveredTip = Component.translatable("color.minecraft." + dye.getName());
             }
         }
-        // Tooltips drawn LAST so they layer over everything in the panel.
+        // Tooltips drawn last so they layer over the whole panel.
         if (hoveredTip != null) {
             graphics.renderTooltip(this.font, hoveredTip, mouseX, mouseY);
         }
     }
 
-    /**
-     * Vanilla loom technique: the baked BANNER "flag" model part rendered straight-on through
-     * {@code BannerRenderer.renderPatterns}. {@code x,y} is the cloth's top-left on screen;
-     * one model unit = scale/16 px, the cloth is 20×40 units (so scale 28 → 35×70 px).
-     * Derived from the full transform chain (scale → ±0.5 recenter → unflip → the flag part's
-     * own -32/16 offset → cube x:-10..10, y:0..40): the cloth's top-left lands at
-     * translate + (-0.125·s, -2.5·s). {@code wave} applies the world banner's sway formula —
-     * the editor preview breathes like the real flag in the plaza.
-     */
     private void renderFlag(GuiGraphics graphics, int x, int y, float scale,
                             DyeColor base, BannerPatternLayers patterns,
                             boolean wave, float partialTick) {
         PoseStack pose = graphics.pose();
         pose.pushPose();
+        // 0.125/2.5 translate and flagPart.y=-32 are derived (see class doc), not eyeball-tunable.
         pose.translate(x + scale * 0.125f, y + scale * 2.5f, 100);
         pose.scale(scale, -scale, 1f);
         pose.translate(0.5f, 0.5f, 0.5f);
@@ -478,7 +462,6 @@ public class BannerEditorScreen extends PolishedScreen {
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (button == 0) {
-            // Layer rows: ▲ ▼ reorder, ✕ remove, anywhere else selects.
             for (int i = 0; i < working.size(); i++) {
                 int rowY = listY + i * rowH;
                 if (mouseY >= rowY && mouseY < rowY + rowH - 2
@@ -495,7 +478,6 @@ public class BannerEditorScreen extends PolishedScreen {
                     return true;
                 }
             }
-            // Pattern grid → set the selected layer's pattern.
             if (selected >= 0) {
                 int perPage = GRID_COLS * GRID_ROWS;
                 int start = patternPage * perPage;
@@ -508,7 +490,6 @@ public class BannerEditorScreen extends PolishedScreen {
                         return true;
                     }
                 }
-                // Dye palette → set the selected layer's color.
                 for (DyeColor dye : DyeColor.values()) {
                     int sx = paletteX + (dye.getId() % 8) * 14;
                     int sy = paletteY + (dye.getId() / 8) * 14;

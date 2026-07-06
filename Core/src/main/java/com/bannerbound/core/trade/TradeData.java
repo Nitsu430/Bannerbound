@@ -18,12 +18,12 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.saveddata.SavedData;
 
 /**
- * Top-level {@link SavedData} for settlement-to-settlement trade deals. A deal spans TWO parties, so
- * it lives here (one home, one owner) rather than on either {@code Settlement}. Attached to the
- * <b>overworld</b>; call {@link #get(ServerLevel)} server-side. Mutators call {@link #setDirty()}.
- *
- * <p>Resolved deals are kept briefly for the record, then swept by {@code TradeManager} once stale
- * (no history UI yet — the map stays small).
+ * Top-level SavedData for settlement-to-settlement trade deals. A deal spans TWO parties, so it lives
+ * here rather than on either Settlement; it is attached to the OVERWORLD, so call get(ServerLevel)
+ * server-side, and every mutator calls setDirty(). Query helpers back the Diplomacy tab: activeBetween
+ * finds the one active deal for a pair (order-independent), activeFor lists a settlement's active
+ * deals, and unreadCountFor drives the tab's unread badge. Resolved deals linger briefly for the
+ * record then TradeManager sweeps them once stale (no history UI yet, so the map stays small).
  */
 public class TradeData extends SavedData {
     private static final String DATA_NAME = "bannerbound_trades";
@@ -60,7 +60,6 @@ public class TradeData extends SavedData {
         setDirty();
     }
 
-    /** The single ACTIVE deal between this pair (order-independent), or null. */
     @Nullable
     public TradeDeal activeBetween(UUID a, UUID b) {
         for (TradeDeal d : deals.values()) {
@@ -69,7 +68,6 @@ public class TradeData extends SavedData {
         return null;
     }
 
-    /** Every active deal this settlement participates in. */
     public List<TradeDeal> activeFor(UUID settlementId) {
         List<TradeDeal> out = new ArrayList<>();
         for (TradeDeal d : deals.values()) {
@@ -78,8 +76,6 @@ public class TradeData extends SavedData {
         return out;
     }
 
-    /** Active deals where it's {@code settlementId}'s turn to respond and the terms are unread —
-     *  drives the Diplomacy-tab badge. */
     public int unreadCountFor(UUID settlementId, UUID withPartner) {
         TradeDeal d = activeBetween(settlementId, withPartner);
         return d != null && d.unreadForAwaiting

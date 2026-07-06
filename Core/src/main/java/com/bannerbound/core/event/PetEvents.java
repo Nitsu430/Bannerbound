@@ -11,10 +11,10 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
 
 /**
- * Re-attaches the {@link com.bannerbound.core.entity.PetFollowCitizenGoal} to citizen-bonded
- * wolves whenever they (re-)enter a level. Runtime-added goals don't survive a reload, so a
- * bonded wolf loaded from disk would otherwise stop following its citizen — this restores the
- * goal from the wolf's persistent {@code bb_pet_settlement} tag.
+ * Re-attaches PetFollowCitizenGoal to citizen-bonded wolves whenever they (re-)enter a level
+ * (EntityJoinLevelEvent). Runtime-added goals don't survive a save/reload, so a bonded wolf loaded
+ * from disk would otherwise stop following its citizen; this restores the goal from the wolf's
+ * persistent bb_pet_settlement tag.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal

@@ -24,20 +24,21 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * The Armorer's Workbench design screen — v1 of the player-designed-armor editor (ARMOR_PLAN.md).
- * Shows a live 3D render of the designed helmet that the player orbits by dragging, with each of the
- * four <b>zones</b> (dome / front / cheeks / neck) independently set to None, Leather, or Metal — the
- * {@code zones:{zone→material}} design schema from the plan. Crafting an item comes next; this
- * validates the render + per-zone design pipeline end-to-end.
- *
- * <p>The 3D draw follows vanilla's in-inventory model idiom: translate to the preview centre, scale
- * with a negated Z (GUI depth runs into the screen), then apply the orbit pitch/yaw. {@link #BASE_PITCH},
- * {@link #BASE_YAW}, {@link #MODEL_Y} and {@link #MODEL_SCALE} are the tuning knobs.
+ * The Armorer's Workbench design screen: v1 of the player-designed-armor editor (ARMOR_PLAN.md),
+ * opened via ArmorerClientHandler/OpenArmorerPayload. Shows a live 3D render of the designed helmet
+ * that the player orbits by dragging, with each of the four zones (dome / front / cheeks / neck)
+ * independently toggled between None, Leather, and Metal -- the zones:{zone->material} design schema
+ * from the plan, drawn as one geometry with the skin texture swapped per material ("geometry once,
+ * skin per material"). Crafting an item comes next; this validates the render + per-zone design
+ * pipeline end-to-end. The 3D draw follows vanilla's in-inventory model idiom: translate to the
+ * preview centre, scale with a negated Z (GUI depth runs into the screen), then apply the orbit
+ * pitch/yaw -- the pose ops in renderHelmet are order-dependent. {@link #BASE_PITCH} (look slightly
+ * down onto the dome), {@link #BASE_YAW} (three-quarter view), {@link #MODEL_Y} (model-space centring
+ * nudge) and {@link #MODEL_SCALE} are the tuning knobs; nudge them in-game if the render is off.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ArmorerScreen extends PolishedScreen {
-    /** Per-zone material — one geometry, swapped skin (the "geometry once, skin per material" rule). */
     private enum Skin {
         NONE(null, "Off", ChatFormatting.GRAY),
         LEATHER("leather_helmet", "Leather", ChatFormatting.GOLD),
@@ -60,7 +61,6 @@ public final class ArmorerScreen extends PolishedScreen {
         }
     }
 
-    /** The four design zones, paired with the model bone they drive. */
     private enum Zone {
         DOME(HelmetModel.DOME, "Dome"),
         FRONT(HelmetModel.FRONT, "Front"),
@@ -76,14 +76,9 @@ public final class ArmorerScreen extends PolishedScreen {
         }
     }
 
-    // ── Tuning knobs (nudge in-game if the render is off) ───────────────────────────────────────
-    /** Base tilt so we look slightly down onto the dome; user orbit adds to this. */
     private static final float BASE_PITCH = 8.0F;
-    /** Base spin so the cap reads three-quarter rather than dead-on (drag to find the face). */
     private static final float BASE_YAW = 30.0F;
-    /** Small model-space vertical nudge to centre the cap on the anchor. */
     private static final float MODEL_Y = 0.0F;
-    /** On-screen size. */
     private static final float MODEL_SCALE = 70.0F;
 
     private static final int PANEL_W = 280;
@@ -96,7 +91,6 @@ public final class ArmorerScreen extends PolishedScreen {
     private final EnumMap<Zone, Skin> design = new EnumMap<>(Zone.class);
     private HelmetModel model;
 
-    // Accumulated orbit from mouse drag.
     private float yaw = 0.0F;
     private float pitch = 0.0F;
 
@@ -114,7 +108,6 @@ public final class ArmorerScreen extends PolishedScreen {
         int cx = this.width / 2;
         int top = this.height / 2 - PANEL_H / 2;
 
-        // One toggle button per zone, in a 2×2 grid along the bottom of the panel.
         int bw = 124;
         int bh = 20;
         int gridLeft = cx - bw - 4;
@@ -151,11 +144,9 @@ public final class ArmorerScreen extends PolishedScreen {
         g.renderOutline(left, top, PANEL_W, PANEL_H, COL_PANEL_BORDER);
         g.drawCenteredString(this.font, this.title, cx, top + 8, COL_TITLE);
 
-        // The live 3D helmet, orbiting under the title (sits above the button grid).
         renderHelmet(g, cx, top + 95);
     }
 
-    /** Draws the enabled zones of the helmet in the GUI (vanilla in-inventory model idiom). */
     private void renderHelmet(GuiGraphics g, int cx, int cy) {
         if (model == null) return;
         g.pose().pushPose();
@@ -165,13 +156,13 @@ public final class ArmorerScreen extends PolishedScreen {
         g.pose().mulPose(Axis.ZP.rotationDegrees(180.0F));     // vanilla in-inventory base orientation
         g.pose().mulPose(Axis.XP.rotationDegrees(BASE_PITCH + pitch));
         g.pose().mulPose(Axis.YP.rotationDegrees(BASE_YAW + yaw));
-        g.pose().translate(0.0F, MODEL_Y, 0.0F); // small model-space centring nudge
+        g.pose().translate(0.0F, MODEL_Y, 0.0F);
 
         Lighting.setupForEntityInInventory();
         MultiBufferSource.BufferSource buffers = g.bufferSource();
         for (Zone z : Zone.values()) {
             Skin s = design.get(z);
-            if (s.texture == null) continue; // Off → not drawn
+            if (s.texture == null) continue;
             model.renderZone(z.bone, g.pose(),
                 buffers.getBuffer(RenderType.entityCutoutNoCull(s.texture)),
                 0xF000F0, OverlayTexture.NO_OVERLAY, 0xFFFFFFFF);

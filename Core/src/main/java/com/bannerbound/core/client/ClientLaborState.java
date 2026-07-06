@@ -12,8 +12,10 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * Client-side cache of the settlement's gatherer-labor state for the Town Hall "Labor" tab. The
  * server keeps it fresh via {@link LaborStatePayload} (on town-hall open and after edits). Holds the
- * unlocked gatherer jobs in priority order with per-job enabled flag + current/target worker counts,
- * and the global auto-assign flag.
+ * unlocked gatherer jobs in priority order with per-job enabled flag, current worker count, and
+ * player-set cap ({@code -1} = no limit), plus the global auto-assign flag, the Workload Share
+ * policy flag (delegates Labor-tab editing to every member), and the packed BlockPos of the
+ * preferred storage ({@link Long#MIN_VALUE} = none).
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -42,12 +44,9 @@ public final class ClientLaborState {
     public static List<String> getJobIds() { return jobIds; }
     public static List<Boolean> getEnabled() { return enabled; }
     public static List<Integer> getCurrent() { return current; }
-    /** Player-set worker cap per job ({@code -1} = no limit), parallel to {@link #getJobIds()}. */
     public static List<Integer> getCaps() { return caps; }
     public static boolean isAutoAssign() { return autoAssign; }
-    /** Whether the Workload Share policy is active (delegates Labor-tab editing to every member). */
     public static boolean isWorkloadShareActive() { return workloadShareActive; }
-    /** Packed BlockPos of the settlement's preferred storage, or {@link Long#MIN_VALUE} if none. */
     public static long getPreferredStorage() { return preferredStorage; }
     public static boolean hasPreferredStorage() { return preferredStorage != Long.MIN_VALUE; }
 }

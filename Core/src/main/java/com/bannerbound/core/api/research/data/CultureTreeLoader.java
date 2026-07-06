@@ -26,7 +26,11 @@ import net.minecraft.util.profiling.ProfilerFiller;
  * {@link ResearchTreeLoader}; same {@link ResearchDefinition} record, separate datapack
  * folder + separate static map. Lets the Culture tab in {@code ResearchScreen} render an
  * independent board while reusing every piece of the science-tree machinery (definition
- * record, JSON schema, on-disk auto-unlock flag).
+ * record, JSON schema, on-disk auto-unlock flag). Shorthand unlock keys expand to flags
+ * exactly as in ResearchTreeLoader: "unlocks.policy" -> "unlock.policy.<id>",
+ * "unlocks.palette" -> "unlock.palette.<id>", and "unlocks.policy_slot" -> one
+ * "unlock.policy_slot.<TYPE>" flag per entry (duplicates kept - each grants one slot;
+ * Settlement.researchGrantedPolicySlots counts these flags across both trees).
  */
 public class CultureTreeLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "culture";
@@ -66,17 +70,12 @@ public class CultureTreeLoader extends SimpleJsonResourceReloadListener {
                     unlocksItems = readStringArray(unlocks, "items");
                     unlocksFeatures = readStringArray(unlocks, "features");
                     unlocksFlags = readStringArray(unlocks, "flags");
-                    // Mirror ResearchTreeLoader: "unlocks.policy" â†’ "unlock.policy.<id>" flags.
                     for (String policyId : readStringArray(unlocks, "policy")) {
                         unlocksFlags.add("unlock.policy." + policyId);
                     }
-                    // Mirror: "unlocks.palette" â†’ "unlock.palette.<id>" flags.
                     for (String paletteId : readStringArray(unlocks, "palette")) {
                         unlocksFlags.add("unlock.palette." + paletteId);
                     }
-                    // Mirror ResearchTreeLoader: "unlocks.policy_slot" adds one
-                    // "unlock.policy_slot.<TYPE>" flag per entry (duplicates kept — each grants one
-                    // slot). Settlement.researchGrantedPolicySlots counts these across both trees.
                     for (String slotType : readStringArray(unlocks, "policy_slot")) {
                         com.bannerbound.core.api.settlement.PolicyType t =
                             com.bannerbound.core.api.settlement.PolicyType.byName(slotType);
@@ -106,8 +105,6 @@ public class CultureTreeLoader extends SimpleJsonResourceReloadListener {
         BannerboundCore.LOGGER.info("Loaded culture tree with {} nodes", map.size());
     }
 
-    /** Optional {@code "government_type"} â†’ Government, null when absent. Mirror of the same
-     *  helper in {@link ResearchTreeLoader}. */
     @org.jetbrains.annotations.Nullable
     private static com.bannerbound.core.api.settlement.Settlement.Government parseGovernmentType(
             JsonObject obj, ResourceLocation key) {

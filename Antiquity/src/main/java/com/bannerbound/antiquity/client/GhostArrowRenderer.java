@@ -22,10 +22,14 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Draws the ghost preview's browse arrows: camera-facing billboards flanking the floating ghost
- * result (Core's GUI arrow textures), swapping to the highlighted variant when the crosshair ray
- * is on one. Pure presentation — the matching click logic lives in {@code GhostRecipeClientEvents}, with
- * {@link GhostClickTargets} as the single source of positions so the visuals and hitboxes agree.
+ * Draws the ghost recipe preview's browse arrows: camera-facing billboards flanking the floating
+ * ghost result (Core's GUI arrow textures, swapping to the highlighted variant when the crosshair
+ * ray is on one). Pure presentation; the matching click logic lives in GhostRecipeClientEvents,
+ * with {@link GhostClickTargets} as the single source of positions so visuals and hitboxes agree.
+ * Call {@link #render} from the station's BER with the pose at the block origin; it no-ops unless
+ * the target list has 3+ entries (result plus two arrows, i.e. at least 2 browsable candidates).
+ * Quads use the text render type (nametag-style): it has no normals, so no directional diffuse
+ * darkens the sprite and FULL_BRIGHT is honored, making the arrows read like the flat GUI texture.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -36,23 +40,20 @@ public final class GhostArrowRenderer {
         ResourceLocation.fromNamespaceAndPath("bannerbound", "textures/gui/arrow_left_highlighted.png");
     private static final ResourceLocation RIGHT =
         ResourceLocation.fromNamespaceAndPath("bannerbound", "textures/gui/arrow_right.png");
-    /** Sic — the Core texture file is named with this typo. */
+    // Sic: the Core texture file itself is named with this "highighted" typo.
     private static final ResourceLocation RIGHT_HL =
         ResourceLocation.fromNamespaceAndPath("bannerbound", "textures/gui/arrow_right_highighted.png");
 
-    /** Half-size of the arrow billboard quad. */
     private static final float SIZE = 0.16F;
 
     private GhostArrowRenderer() {}
 
-    /** Renders both browse arrows for {@code be} (no-op unless ≥2 candidates are browsable).
-     *  Call from the BER with the pose at the block origin. */
     public static void render(BlockEntity be, PoseStack pose, MultiBufferSource buffers) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
         Camera camera = mc.gameRenderer.getMainCamera();
         List<GhostClickTargets.Target> targets = GhostClickTargets.targetsFor(be, camera);
-        if (targets.size() < 3) return; // result only — nothing to browse
+        if (targets.size() < 3) return;
         GhostClickTargets.Picked hovered = GhostClickTargets.pick(targets,
             mc.player.getEyePosition(), mc.player.getViewVector(1.0F), mc.player.blockInteractionRange());
         BlockPos pos = be.getBlockPos();
@@ -72,12 +73,9 @@ public final class GhostArrowRenderer {
         pose.pushPose();
         pose.translate(center.x - pos.getX(), center.y - pos.getY(), center.z - pos.getZ());
         pose.mulPose(camera.rotation());
-        // The text render type (nametag-style): no normals → no directional diffuse darkening the
-        // sprite, and FULL_BRIGHT is honored, so the arrows read like the GUI texture.
         VertexConsumer vc = buffers.getBuffer(RenderType.text(tex));
         PoseStack.Pose last = pose.last();
-        // Camera-rotated frame: +X = screen-right, +Y = screen-up. Emit both windings so the quad
-        // shows whichever way the cull state lands.
+        // Emit BOTH windings on purpose so the quad shows whichever way the cull state lands.
         vertex(vc, last, -size, -size, 0.0F, 1.0F);
         vertex(vc, last, size, -size, 1.0F, 1.0F);
         vertex(vc, last, size, size, 1.0F, 0.0F);

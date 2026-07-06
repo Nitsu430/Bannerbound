@@ -15,12 +15,11 @@ import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * After a creative tab finishes building its contents, re-lay any section-enabled tab into labelled
- * bands (see {@link CreativeSections}). We replace the two backing collections wholesale because
- * vanilla stores them in an {@code ItemStackLinkedSet}, which dedupes by type+components and cannot
- * hold the blank {@link ItemStack#EMPTY} spacer rows the banners are drawn over.
- *
- * <p>Tabs without registered sections are left exactly as vanilla built them.
+ * After a creative tab finishes building its contents, re-lays any section-enabled tab into labelled
+ * bands (see CreativeSections). We replace both backing collections wholesale because vanilla stores
+ * them in an ItemStackLinkedSet, which dedupes by type+components and cannot hold the blank
+ * ItemStack.EMPTY spacer rows the banners are drawn over. Tabs without registered sections are left
+ * exactly as vanilla built them.
  */
 @Mixin(CreativeModeTab.class)
 public class CreativeModeTabMixin {

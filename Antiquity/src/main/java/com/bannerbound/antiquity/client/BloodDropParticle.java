@@ -12,20 +12,23 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * A red blood droplet: it's flung out, falls under gravity, and vanishes the instant it hits the
- * ground — a little burst of blood from a wounded animal. Used by the bleed pulses and spear hits.
+ * ground - a little burst of blood from a wounded animal. Used by the bleed pulses and spear hits.
+ * Tuning is deliberate: gravity 0.4 (the vanilla-ish 0.06 just hangs in the air), doubled quad size
+ * for visibility, a slight upward burst (+0.08 yd) so drops arc, and physics on so onGround removes
+ * the particle the moment it lands.
  */
 @OnlyIn(Dist.CLIENT)
 public class BloodDropParticle extends TextureSheetParticle {
     protected BloodDropParticle(ClientLevel level, double x, double y, double z,
                                 double dx, double dy, double dz) {
         super(level, x, y, z);
-        this.gravity = 0.4F;           // clearly falls under gravity (0.06 just hangs)
-        this.setColor(0.45F, 0.0F, 0.0F); // dark blood red
-        this.quadSize *= 2.0F;         // big, clearly-visible droplets
+        this.gravity = 0.4F;
+        this.setColor(0.45F, 0.0F, 0.0F);
+        this.quadSize *= 2.0F;
         this.lifetime = 60;
-        this.hasPhysics = true;        // collides with the ground
+        this.hasPhysics = true;
         this.xd = dx;
-        this.yd = dy + 0.08;           // slight upward burst, then gravity arcs it down
+        this.yd = dy + 0.08;
         this.zd = dz;
     }
 
@@ -38,7 +41,7 @@ public class BloodDropParticle extends TextureSheetParticle {
     public void tick() {
         super.tick();
         if (this.onGround) {
-            this.remove(); // disappears when it lands
+            this.remove();
         }
     }
 

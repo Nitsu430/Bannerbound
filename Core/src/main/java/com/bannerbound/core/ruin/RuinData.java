@@ -14,16 +14,17 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.saveddata.SavedData;
 
 /**
- * Persistent list of in-progress <b>ruination jobs</b> — areas (chunk sets) whose structures are
- * slowly crumbling to ruins (see {@link RuinManager}). Generic and palette-agnostic: used by both
- * razed AI city-states and disbanded/razed player settlements. Overworld-attached.
+ * Persistent list of in-progress ruination jobs - areas (chunk sets) whose structures are slowly
+ * crumbling to ruins (see {@link RuinManager}). Generic and palette-agnostic: used by both razed AI
+ * city-states and disbanded/razed player settlements. Overworld-attached. Each {@link RuinJob}
+ * tracks its chunks, the last decay tick, and a "no blocks left" idle counter; all three persist to
+ * NBT under the "Chunks"/"LastTick"/"Idle" keys.
  */
 public class RuinData extends SavedData {
     private static final String DATA_NAME = "bannerbound_ruins";
 
     private final List<RuinJob> jobs = new ArrayList<>();
 
-    /** One crumbling area: its chunks, the last decay tick, and a "no blocks left" idle counter. */
     public static final class RuinJob {
         public final Set<Long> chunks;
         public long lastTick;

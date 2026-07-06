@@ -7,7 +7,7 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Client-side TTL holder for the {@code /bannerbound chunktype <radius>} debug overlay — the grid of
+ * Client-side TTL holder for the {@code /bannerbound chunktype <radius>} debug overlay: the grid of
  * chunk-resource ordinals to float icons over, centred on a chunk, until it expires. Drawn by
  * {@link ChunkTypeOverlayRenderer}.
  */

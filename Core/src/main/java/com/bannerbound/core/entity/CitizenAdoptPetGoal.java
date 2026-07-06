@@ -91,7 +91,7 @@ public class CitizenAdoptPetGoal extends Goal {
                 if (s != null && !target.isTame()) {
                     PetBonding.bond(target, citizen, s);
                 }
-                tripTicks = 0; // done
+                tripTicks = 0;
             }
         } else if (citizen.getNavigation().isDone()) {
             citizen.getNavigation().moveTo(target, speedModifier);

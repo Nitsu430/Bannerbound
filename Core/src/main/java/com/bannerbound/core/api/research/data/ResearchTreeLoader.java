@@ -22,8 +22,18 @@ import net.minecraft.util.GsonHelper;
 import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
- * Loads research nodes from data/&lt;namespace&gt;/research/&lt;id&gt;.json. The full ResourceLocation
- * is used as the node id (e.g. "bannerboundantiquity:knapping"), so cross-pack references work.
+ * Loads research (science-tree) nodes from data/&lt;namespace&gt;/research/&lt;id&gt;.json. The full
+ * ResourceLocation is used as the node id (e.g. "bannerboundantiquity:knapping"), so cross-pack
+ * references work. Template for its twins {@link CultureTreeLoader}/{@link FaithTreeLoader},
+ * which reuse the same {@link ResearchDefinition} record and JSON schema. Shorthand unlock keys
+ * fold into plain flags so every consumer queries the one hasFlag path - no separate unlock
+ * channel: "unlocks.policy" -> "unlock.policy.<id>" (queried by PolicyRegistry),
+ * "unlocks.palette" -> "unlock.palette.<id>" (PaletteLoader.availableFor), and
+ * "unlocks.policy_slot" -> one "unlock.policy_slot.<TYPE>" flag per entry, duplicates kept on
+ * purpose (each entry grants one slot of that type; Settlement.researchGrantedPolicySlots
+ * counts these flags across both trees). Optional "government_type"
+ * ("COUNCIL"/"CHIEFDOM"/"NONE") restricts a node to that government; absent or bad values mean
+ * visible under any government.
  */
 public class ResearchTreeLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "research";
@@ -66,20 +76,12 @@ public class ResearchTreeLoader extends SimpleJsonResourceReloadListener {
                     unlocksItems = readStringArray(unlocks, "items");
                     unlocksFeatures = readStringArray(unlocks, "features");
                     unlocksFlags = readStringArray(unlocks, "flags");
-                    // "unlocks.policy": ["nightshift"] folds into a flag "unlock.policy.nightshift"
-                    // so PolicyRegistry can query availability via the same hasFlag path as any
-                    // other capability gate â€” no separate unlock channel needed.
                     for (String policyId : readStringArray(unlocks, "policy")) {
                         unlocksFlags.add("unlock.policy." + policyId);
                     }
-                    // "unlocks.palette": ["brown_haven"] â†’ "unlock.palette.brown_haven", queried by
-                    // PaletteLoader.availableFor via the same hasFlag path.
                     for (String paletteId : readStringArray(unlocks, "palette")) {
                         unlocksFlags.add("unlock.palette." + paletteId);
                     }
-                    // "unlocks.policy_slot": ["ECONOMIC","DIPLOMATIC"] adds one "unlock.policy_slot.<TYPE>"
-                    // flag per entry (duplicates kept on purpose — each entry grants one slot of that
-                    // type). Settlement.researchGrantedPolicySlots counts these across both trees.
                     for (String slotType : readStringArray(unlocks, "policy_slot")) {
                         com.bannerbound.core.api.settlement.PolicyType t =
                             com.bannerbound.core.api.settlement.PolicyType.byName(slotType);
@@ -109,9 +111,6 @@ public class ResearchTreeLoader extends SimpleJsonResourceReloadListener {
         BannerboundCore.LOGGER.info("Loaded research tree with {} nodes", map.size());
     }
 
-    /** Parses an optional {@code "government_type"} string ("COUNCIL" / "CHIEFDOM" / "NONE")
-     *  into a {@link com.bannerbound.core.api.settlement.Settlement.Government}, or null when
-     *  absent (= visible under any government). Bad values log a warning and fall back to null. */
     @org.jetbrains.annotations.Nullable
     private static com.bannerbound.core.api.settlement.Settlement.Government parseGovernmentType(
             JsonObject obj, ResourceLocation key) {

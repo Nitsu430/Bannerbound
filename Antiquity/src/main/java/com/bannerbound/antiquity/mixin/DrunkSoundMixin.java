@@ -11,13 +11,11 @@ import com.bannerbound.antiquity.client.DrunkAudio;
 import com.mojang.blaze3d.audio.Channel;
 
 /**
- * Grog drunkenness audio (GROG_PLAN.md Phase 3.5): two hooks on the sound channel —
- * <ul>
- *   <li>after {@code setPitch}, re-pitch the source by the woozy wobble ({@link DrunkAudio#pitchFactor()});</li>
- *   <li>when a channel {@code play}s, attach the drunk EFX chain (muffle + reverb + slapback) to it
- *       ({@link DrunkAudio#applyEfx(int)}).</li>
- * </ul>
- * Sober → both are no-ops. Same render thread the channel already drives OpenAL on.
+ * Grog drunkenness audio (GROG_PLAN.md Phase 3.5): two hooks on the sound channel. After
+ * {@code setPitch}, re-pitch the source by the woozy wobble ({@link DrunkAudio#pitchFactor()});
+ * when a channel {@code play}s, attach the drunk EFX chain (muffle + reverb + slapback) via
+ * {@link DrunkAudio#applyEfx(int)}. Sober -> both are no-ops. Runs on the same thread the
+ * channel already drives OpenAL on.
  */
 @Mixin(Channel.class)
 public class DrunkSoundMixin {

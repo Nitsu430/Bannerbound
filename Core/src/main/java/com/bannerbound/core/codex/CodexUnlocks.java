@@ -6,7 +6,11 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 
-/** Public Chronicle API for expansion mods, commands, and scripted systems. */
+/**
+ * Public Chronicle facade for expansion mods, commands, and scripted systems: a thin, stable
+ * wrapper over CodexManager offering ResourceLocation and String overloads to unlock, lock, and
+ * open entries, plus fire custom trigger events for a player or a whole settlement.
+ */
 public final class CodexUnlocks {
     private CodexUnlocks() {
     }

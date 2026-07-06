@@ -11,7 +11,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: the open Stockpile terminal's "Detect" button — re-scan the enclosure and flash
+ * Client -> server: the open Stockpile terminal's "Detect" button - re-scan the enclosure and flash
  * its wireframe (green floor, blue containers, red fail spot) behind the GUI, like the House Detect.
  */
 @ApiStatus.Internal

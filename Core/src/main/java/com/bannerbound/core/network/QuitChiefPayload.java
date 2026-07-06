@@ -10,13 +10,12 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: the seated Chief is stepping down. Server clears {@code chiefPlayerId} (which opens
- * the chief-election window again via {@code chiefdomElectionWindowOpen()}) and broadcasts
- * the news. The regent recompute fires automatically afterward — if the now-ex-chief stays
- * online they may end up as their own settlement's regent until a new chief is elected.
- *
- * <p>No fields — the actor is the {@code IPayloadContext}'s player; the server validates that
- * the caller actually IS the chief before honouring the click.
+ * C->S: the seated Chief is stepping down. Server clears chiefPlayerId (which opens the
+ * chief-election window again via chiefdomElectionWindowOpen()) and broadcasts the news. The
+ * regent recompute fires automatically afterward -- if the now-ex-chief stays online they may end
+ * up as their own settlement's regent until a new chief is elected. No fields: the actor is the
+ * IPayloadContext's player; the server validates the caller actually IS the chief before honouring
+ * the click.
  */
 @ApiStatus.Internal
 public record QuitChiefPayload() implements CustomPacketPayload {

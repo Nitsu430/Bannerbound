@@ -10,7 +10,7 @@ import net.minecraft.world.item.crafting.Ingredient;
 
 /**
  * A data-driven Mortar and Pestle grinding recipe. Grinding {@code ingredient} into the bowl's
- * {@code baseLiquid} produces a result after 5 grinds — a new liquid, an item, or both. Loaded
+ * {@code baseLiquid} produces a result after 5 grinds - a new liquid, an item, or both. Loaded
  * by {@link MortarRecipeManager} from {@code data/<namespace>/mortar_recipes/*.json}.
  * <p>
  * Examples:
@@ -32,7 +32,6 @@ public record MortarRecipe(Ingredient ingredient, String baseLiquid, String resu
         ItemStack.CODEC.optionalFieldOf("result_item", ItemStack.EMPTY).forGetter(MortarRecipe::resultItem)
     ).apply(instance, MortarRecipe::new));
 
-    /** True if {@code stack} is this recipe's ingredient. */
     public boolean matchesIngredient(ItemStack stack) {
         return ingredient.test(stack);
     }

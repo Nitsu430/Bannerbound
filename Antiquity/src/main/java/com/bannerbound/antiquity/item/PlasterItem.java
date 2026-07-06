@@ -16,8 +16,8 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Plaster — applied as a face <i>layer</i> (not a block): right-click a solid block face to coat it
- * (consumes one plaster), sneak-right-click to strip the coat. The coat is stored per-face in the
+ * Plaster - applied as a face <i>layer</i> (not a block): right-click a full solid block face to
+ * coat it (consumes one plaster), sneak-right-click to strip the coat. The coat is stored per-face in the
  * chunk decoration attachment and drawn flush onto the face, so the adjacent cell stays free. Plaster
  * is the lower layer; trim (paint brush) draws on top and is independent. Gameplay effects (appeal +
  * blast/break resistance) read the same store. See {@link FaceDecorations}.
@@ -36,7 +36,7 @@ public class PlasterItem extends Item {
 
         BlockState clicked = level.getBlockState(pos);
         if (!clicked.isFaceSturdy(level, pos, face)) {
-            return InteractionResult.PASS; // only full, solid faces take plaster
+            return InteractionResult.PASS;
         }
         boolean strip = player != null && player.isSecondaryUseActive();
 
@@ -50,7 +50,7 @@ public class PlasterItem extends Item {
                 server.playSound(null, pos, SoundEvents.ROOTED_DIRT_BREAK, SoundSource.BLOCKS, 0.7F, 0.9F);
             } else {
                 if (cur.plaster()) {
-                    return InteractionResult.PASS; // already coated
+                    return InteractionResult.PASS;
                 }
                 FaceDecorations.set(server, pos, face, cur.withPlaster(true));
                 if (player == null || !player.getAbilities().instabuild) {

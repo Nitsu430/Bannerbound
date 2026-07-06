@@ -15,9 +15,11 @@ import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Menu for the Basket — a 3×3 grid of storage slots plus the player inventory. The basket's
- * 9 slots are backed directly by the {@link BasketBlockEntity} (which is itself a Container);
- * the client side uses a throwaway {@link SimpleContainer}, kept in sync by the vanilla menu.
+ * Menu for the Basket: a 3x3 grid of storage slots plus the standard player inventory and hotbar.
+ * Server-side the nine basket slots are backed directly by the {@link BasketBlockEntity} (which is
+ * itself a Container); the client constructor substitutes a throwaway {@link SimpleContainer} that
+ * the vanilla menu-sync machinery keeps populated. Slot coordinates centre the basket grid in the
+ * standard 176-wide panel layout.
  */
 @ApiStatus.Internal
 public class BasketMenu extends AbstractContainerMenu {
@@ -35,25 +37,22 @@ public class BasketMenu extends AbstractContainerMenu {
 
     public BasketMenu(int containerId, Inventory playerInv, RegistryFriendlyByteBuf buf) {
         super(BannerboundAntiquity.BASKET_MENU.get(), containerId);
-        buf.readBlockPos(); // basket position — sent for parity, not needed client-side
+        buf.readBlockPos(); // must consume the server-written pos to keep the buffer aligned; unused client-side
         this.container = new SimpleContainer(BasketBlockEntity.SIZE);
         addSlots(playerInv);
     }
 
     private void addSlots(Inventory playerInv) {
-        // 3×3 basket grid, centred in the 176-wide panel.
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 3; col++) {
                 this.addSlot(new Slot(container, row * 3 + col, 62 + col * 18, 18 + row * 18));
             }
         }
-        // Player inventory.
         for (int row = 0; row < 3; row++) {
             for (int col = 0; col < 9; col++) {
                 this.addSlot(new Slot(playerInv, 9 + row * 9 + col, 8 + col * 18, 84 + row * 18));
             }
         }
-        // Hotbar.
         for (int col = 0; col < 9; col++) {
             this.addSlot(new Slot(playerInv, col, 8 + col * 18, 142));
         }

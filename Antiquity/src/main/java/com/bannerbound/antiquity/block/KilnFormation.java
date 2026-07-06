@@ -19,21 +19,19 @@ import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Detects and forms the Kiln. Whenever a clayed cobblestone is created (by claying — see
- * {@code AntiquityEvents} — or placed directly), this checks the up-to-eight 2×2×2 cubes that
- * include that block; the first cube made entirely of clayed cobblestone is replaced with a Kiln.
- * The min-corner of the cube becomes the controller ({@code PART == 0}); the other seven cells
- * encode their offset in {@link KilnBlock#PART}.
+ * Detects and forms the Kiln. Whenever a clayed cobblestone is created (by claying - see
+ * {@code AntiquityEvents} - or placed directly), tryForm checks the up-to-eight 2x2x2 cubes that
+ * include that block (the changed pos can sit at any of the 8 corners, so each candidate
+ * min-corner is tried); the first cube made entirely of clayed cobblestone is replaced with a
+ * Kiln facing the player. The min-corner of the cube becomes the controller ({@code PART == 0});
+ * the other seven cells encode their offset in {@link KilnBlock#PART} as dx*4 + dy*2 + dz.
+ * Server-side only - tryForm no-ops on the client.
  */
 @ApiStatus.Internal
 public final class KilnFormation {
     private KilnFormation() {
     }
 
-    /**
-     * Tries to form a kiln using {@code changedPos} as one of its cells. Returns true (and forms it)
-     * on the first all-clayed 2×2×2 cube found. Server-side only.
-     */
     public static boolean tryForm(Level level, BlockPos changedPos, @Nullable Player player) {
         if (level.isClientSide) {
             return false;
@@ -42,7 +40,6 @@ public final class KilnFormation {
         if (!level.getBlockState(changedPos).is(clayed)) {
             return false;
         }
-        // changedPos can sit at any of the 8 corners of a candidate cube — try each min-corner.
         for (int ox = 0; ox <= 1; ox++) {
             for (int oy = 0; oy <= 1; oy++) {
                 for (int oz = 0; oz <= 1; oz++) {
@@ -83,7 +80,6 @@ public final class KilnFormation {
                 }
             }
         }
-        // A settling "thunk" plus a brief poof of dust + smoke as the structure knits together.
         level.playSound(null, corner, SoundType.STONE.getPlaceSound(), SoundSource.BLOCKS, 1.0F, 0.8F);
         level.playSound(null, corner, SoundEvents.GRAVEL_PLACE, SoundSource.BLOCKS, 0.9F, 0.7F);
         if (level instanceof ServerLevel server) {

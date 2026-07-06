@@ -27,50 +27,51 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Renders a {@link SpearedFishEntity}: the spear's 3D model angled tip-down into the water with the
- * speared fish's real vanilla model impaled near the tip. The spear half reuses {@link
- * SpearProjectileRenderer}'s tip-anchor approach; the fish half bakes the vanilla cod/salmon/
- * pufferfish/tropical models (no custom layer definitions — vanilla already registers these).
+ * Renders a {@link SpearedFishEntity}: the spear's 3D model with the speared fish's real vanilla
+ * model impaled near the tip, the WHOLE catch angled along the direction the spear was travelling
+ * when it struck (pierce yaw/pitch, mirroring {@link SpearProjectileRenderer}'s in-flight
+ * orientation) so spear + fish read as one rigid catch tilted the way it pierced, not a fixed
+ * planted pose. When the catch is rope-tethered, the green rope is drawn from the base pose (no
+ * per-catch spin) back to the thrower's hand; the owner is resolved via the synced entity id so it
+ * works for a player OR a spear-fisher citizen (the client can't find a citizen by UUID alone).
  *
- * <p>Every numeric constant below is a <b>visual tunable</b> — the spear/fish poses are eyeballed and
- * meant to be nudged in-game until the shaft reads as passing through the fish at the waterline (the
- * same convention the project's other renderers follow).
+ * <p>The spear half reuses SpearProjectileRenderer's tip-anchor approach: SPEAR_MODEL_PITCH (-45)
+ * brings the model's authored 45-degrees-up diagonal onto the flight axis, and ANCHOR_* = (0.5 - tip)
+ * cancels ItemRenderer.renderStatic's internal translate(-0.5) so the TIP lands on the entity origin
+ * with the shaft trailing back. The fish half bakes the vanilla cod/salmon/pufferfish/tropical models
+ * (no custom layer definitions - vanilla already registers these; cod doubles as the fallback for
+ * unexpected fish types). FISH_FLOP rolls the fish onto its side for a limp "caught" read; entity
+ * models are authored Y-down, so the fish is mirrored with scale(-1,-1,1) and then its off-pivot body
+ * translated onto the local origin so the flop rotates it about its own centre instead of throwing it
+ * sideways. FISH_CENTER_Y is -22/16: vanilla fish models place the body ~22px (1.375 blocks) above
+ * the root pivot - NOT the 1.501 lift mob renderers use (that's for ~2-block humanoids); salmon's
+ * body is at 20px but the 0.12-block difference is negligible. FISH_CENTER_Z (~-3/16) pierces
+ * mid-body. The tropical fish's base texture is an untinted silhouette, so it gets a solid
+ * TROPICAL_TINT. Every numeric constant here is a visual tunable - the poses are eyeballed and meant
+ * to be nudged in-game until the shaft reads as passing through the fish at the waterline (the same
+ * convention the project's other renderers follow). getTextureLocation is unused (each part picks its
+ * own render type) but the base class requires one.</p>
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class SpearedFishEntityRenderer extends EntityRenderer<SpearedFishEntity> {
-    // ── Spear pose (mirrors SpearProjectileRenderer's tip anchor + flight orientation) ──
-    /** Brings the model's authored 45°-up diagonal onto the flight axis (same as the in-flight
-     *  renderer's MODEL_PITCH_CORRECTION) — so the planted catch reads like the spear that flew. */
     private static final float SPEAR_MODEL_PITCH = -45.0F;
     private static final float SPEAR_SCALE = 1.0F;
     private static final float TIP_X = 30.0F / 16.0F;
     private static final float TIP_Y = 28.0F / 16.0F;
     private static final float TIP_Z = 8.5F / 16.0F;
-    // +0.5 cancels ItemRenderer.renderStatic's internal translate(-0.5) so the TIP lands on origin.
     private static final float ANCHOR_X = 0.5F - TIP_X;
     private static final float ANCHOR_Y = 0.5F - TIP_Y;
     private static final float ANCHOR_Z = 0.5F - TIP_Z;
 
-    // ── Fish pose (impaled at the spear tip ≈ the entity origin) ──
     private static final float FISH_SCALE = 0.9F;
-    /** Final position nudge of the fish on the tip (the spear tip already sits at the entity origin,
-     *  so 0,0,0 = right on the point). */
     private static final float FISH_X = 0.0F;
     private static final float FISH_Y = 0.0F;
     private static final float FISH_Z = 0.0F;
-    /** Tilt the fish head-up/down about its swim axis. 0 = flat. */
     private static final float FISH_PITCH = 0.0F;
-    /** Roll the fish onto its side for a limp, speared "caught" read. */
     private static final float FISH_FLOP = 90.0F;
-    /** Bring the fish's BODY onto the local origin so the flop rotates it about its own centre (not
-     *  throwing it sideways). Vanilla fish models place the body ~22px (= 1.375 blocks) above the
-     *  root pivot and a few px back along Z — this is {@code -bodyOffset/16}. NOT the 1.501 lift mob
-     *  renderers use (that's for ~2-block humanoids). Salmon's body is at 20px; the 0.12-block
-     *  difference is negligible. Tune in-game if a fish sits slightly off the point. */
-    private static final float FISH_CENTER_Y = -1.375F; // -22/16
-    private static final float FISH_CENTER_Z = -0.19F;  // ≈ -3/16, pierce mid-body
-    /** Solid tint for the tropical fish (its base texture is an untinted silhouette). */
+    private static final float FISH_CENTER_Y = -1.375F;
+    private static final float FISH_CENTER_Z = -0.19F;
     private static final int TROPICAL_TINT = 0xFFF08000;
     private static final int NO_TINT = 0xFFFFFFFF;
 
@@ -100,20 +101,16 @@ public class SpearedFishEntityRenderer extends EntityRenderer<SpearedFishEntity>
 
     @Override
     public ResourceLocation getTextureLocation(SpearedFishEntity entity) {
-        return COD_TEX; // unused (each part picks its own render type); base class requires it
+        return COD_TEX;
     }
 
     @Override
     public void render(SpearedFishEntity entity, float entityYaw, float partialTicks, PoseStack pose,
                        MultiBufferSource buffer, int packedLight) {
         pose.pushPose();
-        // Angle the WHOLE speared-fish along the direction the spear was travelling when it struck
-        // (mirrors SpearProjectileRenderer's in-flight orientation), so spear + fish stay one rigid
-        // catch tilted the way it pierced — not a fixed planted pose.
         pose.mulPose(Axis.YP.rotationDegrees(entity.getPierceYaw() - 90.0F));
         pose.mulPose(Axis.ZP.rotationDegrees(entity.getPiercePitch() + SPEAR_MODEL_PITCH));
 
-        // ── Spear: tip anchored at the origin, shaft trailing back along the flight axis ──
         ItemStack spear = entity.getSpearItem();
         if (!spear.isEmpty()) {
             pose.pushPose();
@@ -124,16 +121,15 @@ public class SpearedFishEntityRenderer extends EntityRenderer<SpearedFishEntity>
             pose.popPose();
         }
 
-        // ── Fish: the real vanilla model, impaled near the tip ──
         EntityModel<Entity> model = modelFor(entity.getFishType());
         ResourceLocation texture = textureFor(entity.getFishType());
         int tint = "minecraft:tropical_fish".equals(entity.getFishType()) ? TROPICAL_TINT : NO_TINT;
         pose.pushPose();
-        pose.translate(FISH_X, FISH_Y, FISH_Z);             // sit on the tip (= origin)
-        pose.mulPose(Axis.ZP.rotationDegrees(FISH_FLOP));   // flop onto its side
-        pose.mulPose(Axis.XP.rotationDegrees(FISH_PITCH));  // head-up/down tilt
-        // Entity models are authored Y-down → mirror with scale(-1,-1,1), then translate the model's
-        // off-pivot body onto the local origin so the flop above rotated it about its own centre.
+        pose.translate(FISH_X, FISH_Y, FISH_Z);
+        pose.mulPose(Axis.ZP.rotationDegrees(FISH_FLOP));
+        pose.mulPose(Axis.XP.rotationDegrees(FISH_PITCH));
+        // Order matters: mirror the Y-down model FIRST, then re-center its off-pivot body so the flop
+        // above rotated it about its own centre.
         pose.scale(-FISH_SCALE, -FISH_SCALE, FISH_SCALE);
         pose.translate(0.0F, FISH_CENTER_Y, FISH_CENTER_Z);
         VertexConsumer vc = buffer.getBuffer(RenderType.entityCutoutNoCull(texture));
@@ -142,9 +138,6 @@ public class SpearedFishEntityRenderer extends EntityRenderer<SpearedFishEntity>
 
         pose.popPose();
 
-        // Rope-tethered catch: green rope back to the thrower's hand (base pose, no per-catch spin).
-        // The owner is resolved via the synced entity id so it works for a player OR a spear-fisher
-        // citizen NPC (the client can't find a citizen by UUID alone).
         if (entity.isTethered()
                 && entity.getTetherOwner() instanceof net.minecraft.world.entity.LivingEntity owner) {
             RopeRenderer.render(pose, buffer, packedLight, partialTicks, entity, owner, 0.15F);
@@ -157,7 +150,7 @@ public class SpearedFishEntityRenderer extends EntityRenderer<SpearedFishEntity>
             case "minecraft:salmon" -> this.salmonModel;
             case "minecraft:pufferfish" -> this.pufferfishModel;
             case "minecraft:tropical_fish" -> this.tropicalModel;
-            default -> this.codModel; // cod + any unexpected fish
+            default -> this.codModel;
         };
     }
 

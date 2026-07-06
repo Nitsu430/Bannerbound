@@ -14,9 +14,12 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Debug overlay (toggle with {@code /bannerbound ai_profiler}) showing the server-side citizen tick
- * cost: total ms/tick across all loaded citizens, the count, and the average µs per citizen — so we
- * can directly compare a Tribe (work-scanning on) vs a Village (cheap brain) and see if it's cheaper.
- * Reads the {@link CitizenAiProfiler} snapshot directly (same JVM in single-player).
+ * cost: total ms/tick across all loaded citizens, the count, and the average us per citizen -- so a
+ * Tribe (work-scanning on) can be compared directly against a Village (cheap brain). Reads the
+ * {@link CitizenAiProfiler} snapshot directly (same JVM in single-player). Projects the measured
+ * per-citizen cost onto PROJECT_CITIZENS (400, a busy ~8-settlement server) and onto slower CPUs via
+ * the MID/LOW factors -- crude heuristics, NOT benchmarks -- against the 50 ms / 20 TPS tick budget,
+ * colouring each line green (< 50% of budget), yellow (< 100%), or red (over).
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -26,13 +29,10 @@ public final class CitizenAiProfilerHudLayer implements LayeredDraw.Layer {
     private CitizenAiProfilerHudLayer() {
     }
 
-    /** Citizen count to extrapolate to — a busy server (≈8 settlements × ~50 loaded citizens). */
     private static final int PROJECT_CITIZENS = 400;
-    /** 20 TPS budget: a server tick must finish in 50 ms or TPS drops. */
     private static final double TICK_BUDGET_MS = 50.0;
-    /** Rough single-thread slowdown vs a top-tier CPU (heuristic, NOT a benchmark). */
-    private static final double MID_FACTOR = 1.8;   // mid-range desktop
-    private static final double LOW_FACTOR = 3.5;   // low-end / old / handheld
+    private static final double MID_FACTOR = 1.8;
+    private static final double LOW_FACTOR = 3.5;
 
     @Override
     public void render(GuiGraphics graphics, DeltaTracker delta) {
@@ -42,8 +42,7 @@ public final class CitizenAiProfilerHudLayer implements LayeredDraw.Layer {
 
         Font font = mc.font;
         double usEach = CitizenAiProfiler.lastMicrosPerCitizen();
-        // Project: this CPU's per-citizen cost × a busy-server count, then × slower-CPU factors.
-        double projThis = usEach * PROJECT_CITIZENS / 1000.0;       // ms on THIS cpu
+        double projThis = usEach * PROJECT_CITIZENS / 1000.0;
         double projMid = projThis * MID_FACTOR;
         double projLow = projThis * LOW_FACTOR;
 
@@ -73,7 +72,6 @@ public final class CitizenAiProfilerHudLayer implements LayeredDraw.Layer {
         return (int) Math.round(ms / TICK_BUDGET_MS * 100.0);
     }
 
-    /** Green < 50% of budget, yellow < 100%, red over budget. */
     private static String col(double ms) {
         double frac = ms / TICK_BUDGET_MS;
         return frac < 0.5 ? "§a" : frac < 1.0 ? "§e" : "§c";

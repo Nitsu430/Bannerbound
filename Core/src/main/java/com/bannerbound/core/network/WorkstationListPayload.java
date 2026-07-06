@@ -16,7 +16,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: list of workstations in a settlement, sent in response to
+ * Server -> client: list of workstations in a settlement, sent in response to
  * {@link RequestWorkstationsPayload}. The citizen entity id ties the response back to the citizen
  * that requested it so the picker screen can keep both halves of the assignment in scope.
  */

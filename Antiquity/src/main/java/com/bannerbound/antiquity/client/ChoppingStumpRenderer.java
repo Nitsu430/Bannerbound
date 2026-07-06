@@ -30,19 +30,22 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.client.model.data.ModelData;
 
 /**
- * Renders the Chopping Stump using the AUTHORED {@code chopping_stump} model (its geometry + UV
- * layout) but re-textured with the source log's sprites — so an oak stump shows oak bark/end-grain,
- * birch shows birch, etc., without stretching the texture the way a squished log cube did. Each of
- * the stump model's quads is re-sprited: top-face quads → the log's end (ring) sprite, the rest →
- * the log's side (bark) sprite, remapping the UVs proportionally so the stump's UV mapping is kept.
- * Then the deposited logs render on top, sliding in from the side the player deposited from.
+ * Renders the Chopping Stump using the AUTHORED chopping_stump model (its geometry + UV layout) but
+ * re-textured with the source log's sprites -- an oak stump shows oak bark/end-grain, birch shows
+ * birch, etc., without the stretching a squished log cube produced. Each stump quad is re-sprited by
+ * its geometric facing (up/down -> the log's end/ring sprite, everything else -> the bark sprite),
+ * remapping its UVs proportionally into the target sprite so the stump's own UV mapping is kept.
+ * Gotcha baked into the sampling: the log is a full cube, so its end/side quads sit in the culled
+ * UP/NORTH buckets, while the stump's quads live in the null bucket (its faces are not on block
+ * boundaries) -- hence sprites are pulled from cull buckets but stump quads are classified by
+ * quad.getDirection(). Deposited logs then render on top of the stump (TOP_Y = stump height 6/16),
+ * sliding in from the side the player deposited from over SLIDE_TICKS.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class ChoppingStumpRenderer implements BlockEntityRenderer<ChoppingStumpBlockEntity> {
-    /** Logs rest just above the stump top (6/16). */
     private static final double TOP_Y = 6.0 / 16.0;
-    /** Vertex layout of {@code DefaultVertexFormat.BLOCK}: 8 ints/vertex, texture UV at ints 4–5. */
+    // DefaultVertexFormat.BLOCK layout: 8 ints per vertex, texture UV at ints 4-5.
     private static final int VERTEX_INTS = 8;
     private static final int UV_INT_OFFSET = 4;
     private static final RandomSource RANDOM = RandomSource.create();
@@ -60,7 +63,6 @@ public class ChoppingStumpRenderer implements BlockEntityRenderer<ChoppingStumpB
         renderDepositedLogs(be, partialTick, pose, buffers, light);
     }
 
-    /** Draws the authored stump model with the source log's sprites swapped in. */
     private void renderStumpBody(ChoppingStumpBlockEntity be, PoseStack pose,
                                  MultiBufferSource buffers, int light, int overlay) {
         BlockRenderDispatcher brd = Minecraft.getInstance().getBlockRenderer();
@@ -70,14 +72,11 @@ public class ChoppingStumpRenderer implements BlockEntityRenderer<ChoppingStumpB
         BakedModel stumpModel = brd.getBlockModel(stumpState);
         BakedModel logModel = brd.getBlockModel(logState);
 
-        // The log is a full cube, so its end (up) and side (north) faces are culled into those
-        // buckets. The stump's faces aren't on block boundaries, so they live in the null bucket —
-        // we classify each by its geometric direction instead (up/down → end, sides → bark).
         TextureAtlasSprite logEnd = firstSprite(logModel, logState, Direction.UP);
         TextureAtlasSprite logSide = firstSprite(logModel, logState, Direction.NORTH);
         if (logEnd == null) logEnd = logSide;
         if (logSide == null) logSide = logEnd;
-        if (logSide == null) return; // log model had no usable sprites — nothing to draw
+        if (logSide == null) return;
 
         VertexConsumer vc = buffers.getBuffer(ItemBlockRenderTypes.getRenderType(logState, false));
         var posePose = pose.last();
@@ -107,12 +106,12 @@ public class ChoppingStumpRenderer implements BlockEntityRenderer<ChoppingStumpB
         pose.pushPose();
         pose.translate(0.5 + dir.getStepX() * slide, TOP_Y + 0.12, 0.5 + dir.getStepZ() * slide);
         pose.scale(0.55F, 0.55F, 0.55F);
-        pose.mulPose(Axis.XP.rotationDegrees(90.0F)); // lay the log on its side
+        pose.mulPose(Axis.XP.rotationDegrees(90.0F));
         int copies = logs.getCount() > 1 ? 2 : 1;
         for (int i = 0; i < copies; i++) {
             pose.pushPose();
             if (i == 1) {
-                pose.translate(0.28, 0.28, 0.16); // second copy offset so the two don't z-fight
+                pose.translate(0.28, 0.28, 0.16); // offset the second copy so the two don't z-fight
             }
             itemRenderer.renderStatic(logs, ItemDisplayContext.FIXED, light, OverlayTexture.NO_OVERLAY,
                 pose, buffers, be.getLevel(), 0);
@@ -130,8 +129,6 @@ public class ChoppingStumpRenderer implements BlockEntityRenderer<ChoppingStumpB
         return quads.isEmpty() ? null : quads.get(0).getSprite();
     }
 
-    /** Copy {@code quad} but remap its UVs from its own sprite into {@code target} (proportionally),
-     *  so the stump model's UV layout is preserved while drawing the log's texture. */
     private static BakedQuad resprite(BakedQuad quad, TextureAtlasSprite target) {
         TextureAtlasSprite from = quad.getSprite();
         int[] verts = quad.getVertices().clone();

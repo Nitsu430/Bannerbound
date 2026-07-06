@@ -22,8 +22,8 @@ import net.minecraft.world.item.Item;
 
 /**
  * Loads how long each food keeps before it spoils, from {@code data/<ns>/food_spoilage/*.json}.
- * Each per-item number (and {@code default_food_ticks}) is the food's <b>total mean lifetime</b> in
- * ticks (20/sec, 24000 = one Minecraft day) — the average time from fresh to fully spoiled. Files are
+ * Each per-item number (and {@code default_food_ticks}) is the food's total MEAN lifetime in ticks
+ * (20/sec, 24000 = one Minecraft day) - the average time from fresh to fully spoiled. Files are
  * merged, later files winning per item id, so datapacks can retune.
  *
  * <pre>{@code
@@ -36,27 +36,25 @@ import net.minecraft.world.item.Item;
  * }
  * }</pre>
  *
- * <p>Spoilage is <i>level-based and probabilistic</i> (see {@code Spoilage} and {@link
- * com.bannerbound.antiquity.item.FoodSpoilage}): the lifetime is split into a fresh phase
- * ({@code 1 - bland_fraction} of it) and a bland phase ({@code bland_fraction} of it), and each
- * phase's mean duration sets the per-second chance a stack drops to the next level. This table is
- * consulted server-side only — the resulting freshness level rides the stack as a component, so
- * clients never need the table. Spoilage is an Antiquity (hardcore-survival) layer; Core stays vanilla
- * and knows nothing of it (COOKING_PLAN.md).
+ * <p>Spoilage is level-based and probabilistic (see {@code Spoilage} and {@link
+ * com.bannerbound.antiquity.item.FoodSpoilage}): the lifetime splits into a fresh phase
+ * ({@code 1 - bland_fraction} of it) and a bland phase, and each phase's mean duration sets the
+ * per-second chance a stack drops to the next level; {@link #freshTicks}/{@link #blandTicks} expose
+ * those means. {@link #lifeTicks} returns -1 for items that never spoil; explicit entries win, then
+ * any item carrying vanilla FOOD falls back to {@code default_food_ticks} ({@code <= 0} disables
+ * the fallback). Salted food's per-roll spoil chance is divided by {@link #saltLifeMultiplier}.
+ * This table is consulted server-side only - the resulting freshness level rides the stack as a
+ * component, so clients never need the table. Spoilage is an Antiquity (hardcore-survival) layer;
+ * Core stays vanilla and knows nothing of it (COOKING_PLAN.md).
  */
 public class FoodSpoilageData extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "food_spoilage";
     private static final Gson GSON = new Gson();
 
-    /** Explicit per-item total lifetimes (ticks). */
     private static volatile Map<Item, Integer> TICKS = Collections.emptyMap();
-    /** Items that never spoil even though they're edible. */
     private static volatile Set<Item> NON_PERISHABLE = Collections.emptySet();
-    /** Fallback total lifetime for any edible item with no explicit entry; {@code <= 0} disables it. */
     private static volatile int defaultFoodTicks = 0;
-    /** Fraction of the lifetime spent in the BLAND phase (the rest is FRESH). Default 0.4. */
     private static volatile float blandFraction = 0.4f;
-    /** Salted food keeps this many times longer (lower per-roll spoil chance). Default 2.0. */
     private static volatile float saltLifeMultiplier = 2.0f;
 
     public FoodSpoilageData() {
@@ -120,10 +118,6 @@ public class FoodSpoilageData extends SimpleJsonResourceReloadListener {
         return BuiltInRegistries.ITEM.get(rl);
     }
 
-    /**
-     * Total mean lifetime of {@code item}, in ticks, or {@code -1} if it never spoils. Explicit
-     * entries win; otherwise any item carrying vanilla {@link DataComponents#FOOD} uses the default.
-     */
     public static int lifeTicks(Item item) {
         if (item == null || NON_PERISHABLE.contains(item)) return -1;
         Integer explicit = TICKS.get(item);
@@ -134,24 +128,20 @@ public class FoodSpoilageData extends SimpleJsonResourceReloadListener {
         return -1;
     }
 
-    /** Mean ticks {@code item} stays FRESH before turning bland ({@code -1} if it never spoils). */
     public static int freshTicks(Item item) {
         int total = lifeTicks(item);
         return total <= 0 ? total : Math.max(1, Math.round(total * (1f - blandFraction)));
     }
 
-    /** Mean ticks {@code item} stays BLAND before spoiling ({@code -1} if it never spoils). */
     public static int blandTicks(Item item) {
         int total = lifeTicks(item);
         return total <= 0 ? total : Math.max(1, Math.round(total * blandFraction));
     }
 
-    /** Whether {@code item} spoils at all. */
     public static boolean isPerishable(Item item) {
         return lifeTicks(item) > 0;
     }
 
-    /** How many times longer salted food keeps (its per-roll spoil chance is divided by this). */
     public static float saltLifeMultiplier() {
         return saltLifeMultiplier;
     }

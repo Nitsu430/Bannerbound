@@ -32,24 +32,23 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * The Mortar and Pestle block. Body + dynamic liquid are drawn by {@code MortarAndPestleRenderer};
- * the JSON block model is intentionally empty.
- * <p>
- * Interaction:
- * <ul>
- *   <li>Right-click with a water bottle → fills the bowl with water.</li>
- *   <li>Right-click with a recipe ingredient → puts it in (swaps if one's already inside).</li>
- *   <li>Right-click empty-handed → runs one grind (5 are needed to finish a recipe).</li>
- *   <li>Right-click a dyeable item on a bowl of finished dye → dyes up to 8 of it, empties the bowl.</li>
- *   <li>Shift-right-click empty-handed → takes the ingredient out.</li>
- *   <li>Shift-right-click with an empty bottle → scoops the water back out
- *       (handled in {@code AntiquityEvents}, since vanilla skips block use when sneaking + holding).</li>
- * </ul>
+ * The Mortar and Pestle block. Body + dynamic liquid are drawn by {@code MortarAndPestleRenderer}
+ * (a BER, kept so the pestle Mix animation stays possible); the JSON block model is intentionally
+ * empty. All interactions are refused while a grind is mixing or another player/NPC holds the
+ * {@code WorkBlockLocks} lock. Right-click with a water bottle fills the bowl; a recipe ingredient
+ * loads the bowl (item-output recipes like bricks/poison pastes are batchable up to MAX_BATCH and
+ * grind a whole stack at once, liquid-output recipes like ink/dyes take exactly one; loading a
+ * different ingredient hands the previous one back); a dyeable item on a bowl of finished dye dyes
+ * up to DYE_BATCH = 8 of it (one dip's worth) and empties the bowl. Empty-handed right-click starts
+ * the press-and-grind minigame - research-gated by Herbalism via {@code MortarGrind.canGrindAt},
+ * reporting the lock in red rather than failing silently. Shift + empty hand takes the loaded batch
+ * out; shift + empty bottle scoops the water back out, but that lives in {@code AntiquityEvents}
+ * because vanilla skips block use when sneaking while holding an item. Breaking the block drops the
+ * loaded ingredient and aborts any live grind session.
  */
 public class MortarAndPestleBlock extends Block implements EntityBlock {
     public static final MapCodec<MortarAndPestleBlock> CODEC = simpleCodec(MortarAndPestleBlock::new);
     private static final VoxelShape SHAPE = Block.box(3.0, 0.0, 3.0, 13.0, 12.0, 13.0);
-    /** Most items a single dip in the dye can colour at once. */
     private static final int DYE_BATCH = 8;
 
     public MortarAndPestleBlock(BlockBehaviour.Properties properties) {
@@ -79,14 +78,9 @@ public class MortarAndPestleBlock extends Block implements EntityBlock {
         return SHAPE;
     }
 
-    /**
-     * The bowl's collision box isn't a full block, so vanilla's default classifies the tile as walkable
-     * and NPCs path straight onto it and physically snag. Mark it un-pathfindable so every pathfinder
-     * routes around it (the same fix the basket and the other partial-collision workstations carry).
-     */
     @Override
     protected boolean isPathfindable(BlockState state, net.minecraft.world.level.pathfinder.PathComputationType type) {
-        return false;
+        return false; // non-full-cube shape: must stay un-pathfindable or NPCs path onto the bowl and snag
     }
 
     @Override
@@ -98,10 +92,9 @@ public class MortarAndPestleBlock extends Block implements EntityBlock {
         }
         if (mortar.isMixing()
                 || com.bannerbound.core.api.workshop.WorkBlockLocks.isLockedByOther(pos, player.getUUID())) {
-            return ItemInteractionResult.CONSUME; // locked while another grind is in progress
+            return ItemInteractionResult.CONSUME;
         }
 
-        // Water bottle → pour water into the bowl, hand back an empty bottle.
         if (!mortar.hasLiquid() && isWaterBottle(stack)) {
             if (!level.isClientSide) {
                 mortar.setLiquid("water");
@@ -111,7 +104,6 @@ public class MortarAndPestleBlock extends Block implements EntityBlock {
             return ItemInteractionResult.sidedSuccess(level.isClientSide);
         }
 
-        // Finished dye + a dyeable item → dye up to a batch of the item and use up the liquid.
         DyeColor dye = MortarDyeing.dyeColorFor(mortar.getLiquidId());
         if (dye != null && !stack.isEmpty()) {
             int batch = Math.min(DYE_BATCH, stack.getCount());
@@ -133,8 +125,6 @@ public class MortarAndPestleBlock extends Block implements EntityBlock {
             }
         }
 
-        // Recipe ingredient → load a batch. Item-output recipes (bricks, poison pastes) hold up to
-        // MAX_BATCH and grind a whole stack at once; liquid-output recipes (ink, dyes) take just one.
         if (!stack.isEmpty() && MortarRecipeManager.hasRecipeFor(stack)) {
             int cap = MortarRecipeManager.isBatchable(stack)
                 ? MortarAndPestleBlockEntity.MAX_BATCH : 1;
@@ -143,7 +133,7 @@ public class MortarAndPestleBlock extends Block implements EntityBlock {
             int alreadyIn = canTopUp ? existing.getCount() : 0;
             int add = Math.min(cap - alreadyIn, stack.getCount());
             if (add <= 0) {
-                return ItemInteractionResult.CONSUME; // bowl already full of this ingredient
+                return ItemInteractionResult.CONSUME;
             }
             if (!level.isClientSide) {
                 if (canTopUp) {
@@ -176,14 +166,13 @@ public class MortarAndPestleBlock extends Block implements EntityBlock {
         }
         if (mortar.isMixing()
                 || com.bannerbound.core.api.workshop.WorkBlockLocks.isLockedByOther(pos, player.getUUID())) {
-            return InteractionResult.CONSUME; // locked while another grind is in progress
+            return InteractionResult.CONSUME;
         }
-        // A non-empty hand here means a no-recipe item fell through useItemOn — don't act.
+        // A non-empty hand here means a no-recipe item fell through useItemOn -> don't grind/extract.
         if (!player.getMainHandItem().isEmpty()) {
             return InteractionResult.PASS;
         }
 
-        // Shift + empty hand → take the whole loaded batch out.
         if (player.isSecondaryUseActive()) {
             ItemStack inside = mortar.getIngredient();
             if (!inside.isEmpty()) {
@@ -195,12 +184,10 @@ public class MortarAndPestleBlock extends Block implements EntityBlock {
             return InteractionResult.PASS;
         }
 
-        // Plain + empty hand → open the press-and-grind minigame (needs a valid ingredient + liquid).
         if (player instanceof net.minecraft.server.level.ServerPlayer sp
                 && !mortar.getIngredient().isEmpty()
                 && MortarRecipeManager.find(mortar.getIngredient(), mortar.getLiquidId()) != null) {
             if (!com.bannerbound.antiquity.MortarGrind.canGrindAt(level, pos)) {
-                // Grinding is gated by Herbalism — say so rather than failing silently.
                 sp.displayClientMessage(net.minecraft.network.chat.Component
                     .translatable("bannerboundantiquity.mortar.locked")
                     .withStyle(net.minecraft.ChatFormatting.RED), true);
@@ -232,7 +219,6 @@ public class MortarAndPestleBlock extends Block implements EntityBlock {
         return contents != null && contents.is(Potions.WATER);
     }
 
-    /** Consumes one of {@code used} and gives {@code result} to the player (creative is exempt). */
     private static void giveBack(Player player, InteractionHand hand, ItemStack used, ItemStack result) {
         if (player.hasInfiniteMaterials()) {
             return;
@@ -245,7 +231,6 @@ public class MortarAndPestleBlock extends Block implements EntityBlock {
         }
     }
 
-    /** Adds {@code stack} to the player's inventory, dropping it in the world if there's no room. */
     private static void giveOrDrop(Player player, ItemStack stack) {
         if (!player.getInventory().add(stack)) {
             player.drop(stack, false);

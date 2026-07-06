@@ -9,8 +9,12 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 
 /**
- * Generic objective/journal entry. Stored either on a settlement or in player-scoped journal
- * data; crises only use settlement entries, but tutorials can use the same shape later.
+ * A generic objective/journal entry - the shared shape for crises (settlement-scoped) and, later,
+ * tutorials (player-scoped). Mutable fields (title/subtitle/priority/deadline/objectives plus the
+ * resolved/failed flags) are NBT round-tripped by save/load; resolve() stamps resolvedTick so
+ * shouldShowOnHud keeps a finished entry visible for HUD_RESOLVED_LINGER_TICKS before it drops.
+ * targetPos is an optional packed BlockPos (0 = none) that drives the HUD direction text and the
+ * world waypoint marker.
  */
 public final class JournalEntry {
     public static final long HUD_RESOLVED_LINGER_TICKS = 20L * 20L;
@@ -30,8 +34,6 @@ public final class JournalEntry {
     private String sourceId;
     private String chronicleEntry;
     private List<JournalObjective> objectives;
-    /** Optional world target this entry points at (a camp centre, etc.), packed BlockPos; 0 = none.
-     *  Drives the client HUD direction text + the world waypoint marker. */
     private long targetPos;
 
     public JournalEntry(UUID instanceId, String entryId, JournalEntryType type,

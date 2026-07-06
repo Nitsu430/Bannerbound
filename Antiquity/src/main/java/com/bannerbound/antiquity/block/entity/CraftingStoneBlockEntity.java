@@ -27,40 +27,40 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity for the Crafting Stone. Holds a loose pile of items placed one-at-a-time (mixed
- * types allowed, capped at {@link #MAX_ITEMS} total). Whenever the pile matches a
- * {@link CraftingStoneRecipe}, {@link #cachedResult} holds the output so the renderer can show a
- * floating spinning preview; shift-clicking crafts it. Sync mirrors the bloomery pattern.
+ * Block entity for the Crafting Stone: a loose pile of items placed one at a time (mixed types,
+ * capped at MAX_ITEMS total) that is crafted via shift-click whenever the pile exactly matches a
+ * CraftingStoneRecipe. Each distinct stack owns one grid cell and piles up visually; the renderer
+ * slide-animates only the top item of the last-touched cell (insertAnimTicks / insertDir /
+ * lastSlideCell, slide length SLIDE_TICKS matches the bloomery). The ghost preview shows the
+ * still-missing ingredients plus result of a researched candidate recipe the pile could become;
+ * browse arrows appear when ghostCandidateCount >= 2. The selection is sticky: ghostChoice keeps
+ * the chosen recipe selected while ingredients land (the candidate list shrinks underneath it),
+ * and once the player explicitly cycles or clicks (ghostLocked) it never auto-switches -- the
+ * preview hides on an incompatible pile rather than jumping recipes, and if the pile incidentally
+ * completes a DIFFERENT recipe (e.g. 2 sticks = fire sticks while building a bone axe) the
+ * craftable result floats above the kept ghost instead of hijacking the choice. Lock and choice
+ * clear only when the pile empties. resolveRecipe() prefers the browsed/locked choice among exact
+ * matches (two recipes can share the same contents) and feeds BOTH the preview and craft(), so
+ * what is shown -- including transfer_quality behaviour -- is always what is crafted. Recipes
+ * flagged transfer_quality stamp the result with the best TOOL_QUALITY among consumed ingredients
+ * so a knapped head's craftsmanship rides onto the finished tool. Candidates are filtered by
+ * CraftGating research. Mutators (insertOne/removeOne/craft/cycleGhost) are server-side only;
+ * setChanged() pushes a full block-update sync to clients, mirroring the bloomery pattern.
  */
 @ApiStatus.Internal
 public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipeWorkstation {
-    /** Max total items (sum of counts) the stone can hold. */
     public static final int MAX_ITEMS = 9;
-    /** Ticks the just-placed item's slide-in animation runs (matches the bloomery). */
     public static final int SLIDE_TICKS = 6;
 
     private final List<ItemStack> contents = new ArrayList<>();
-    /** Server-computed result for the current pile (EMPTY = no valid recipe). Synced for the renderer. */
     private ItemStack cachedResult = ItemStack.EMPTY;
-    /** Server-picked "could become" preview: the STILL-MISSING ingredients of the first researched
-     *  candidate recipe (count = how many more of that item), plus its result. Both empty whenever
-     *  the pile is empty, junk, or an exact match. Synced for the renderer's ghost silhouettes. */
     private List<ItemStack> ghostIngredients = List.of();
     private ItemStack ghostResult = ItemStack.EMPTY;
-    /** How many researched candidates the pile could become (synced; browse arrows show when ≥2). */
     private int ghostCandidateCount = 0;
-    /** Sticky browse selection — result item of the candidate the player last cycled to. Keeps the
-     *  chosen recipe selected while ingredients land (the candidate list shrinks underneath it). */
     private Item ghostChoice = null;
-    /** True once the player explicitly picked (cycled the arrows / clicked the ghost result): the
-     *  selection stops auto-switching, and the preview hides instead of jumping recipes if the
-     *  pile turns incompatible. Cleared when the pile empties. */
     private boolean ghostLocked = false;
     private int insertAnimTicks = 0;
-    /** Horizontal side the last-placed item slides in from (the side the placing player stood). */
     private Direction insertDir = Direction.NORTH;
-    /** Index (in {@link #contents}) of the most-recently-touched stack — each stack owns one grid
-     *  cell and piles up visually, and the renderer slides only that stack's TOP item in. */
     private int lastSlideCell = -1;
 
     public CraftingStoneBlockEntity(BlockPos pos, BlockState state) {
@@ -107,7 +107,6 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
         return lastSlideCell;
     }
 
-    /** Ticker — drains the slide-in timer so the freshly placed item settles. Both sides. */
     public static void tick(net.minecraft.world.level.Level level, BlockPos pos, BlockState state,
                             CraftingStoneBlockEntity be) {
         if (be.insertAnimTicks > 0) {
@@ -121,14 +120,10 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
         return n;
     }
 
-    /** Adds ONE of {@code held} to the pile (merging into an existing same-item stack). Returns
-     *  true if it fit. Server-side only. */
     public boolean insertOne(ItemStack held, Direction from) {
         if (held.isEmpty() || totalCount() >= MAX_ITEMS) return false;
         insertAnimTicks = SLIDE_TICKS;
         insertDir = from == null ? Direction.NORTH : from;
-        // One grid cell per distinct stack: merging grows the existing pile in place; a new kind
-        // takes the next free cell. The slide animates the touched stack's top item.
         for (int i = 0; i < contents.size(); i++) {
             ItemStack s = contents.get(i);
             if (ItemStack.isSameItemSameComponents(s, held)) {
@@ -146,7 +141,6 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
         return true;
     }
 
-    /** Removes ONE item from the most-recently-touched stack and returns it. Server-side only. */
     public ItemStack removeOne() {
         if (contents.isEmpty()) return ItemStack.EMPTY;
         ItemStack last = contents.get(contents.size() - 1);
@@ -158,9 +152,6 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
         return out;
     }
 
-    /** Consumes the whole pile and returns the recipe result (EMPTY if no valid recipe). Hafting
-     *  recipes (flagged {@code transfer_quality}) stamp the result with the best TOOL_QUALITY among
-     *  the consumed ingredients — so a knapped head's craftsmanship rides onto the finished tool. */
     public ItemStack craft() {
         if (cachedResult.isEmpty()) return ItemStack.EMPTY;
         ItemStack out = cachedResult.copy();
@@ -180,7 +171,6 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
         return out;
     }
 
-    /** Highest {@code TOOL_QUALITY} carried by any item in {@code pile}, or null if none carry one. */
     private static com.bannerbound.core.api.quality.QualityTier bestQualityIn(List<ItemStack> pile) {
         com.bannerbound.core.api.quality.QualityTier best = null;
         for (ItemStack s : pile) {
@@ -191,10 +181,6 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
         return best;
     }
 
-    /** The recipe the current pile makes: among all exact matches, the one whose result is the
-     *  player's browsed/locked ghost choice wins (two recipes can share the same contents). Used by
-     *  BOTH the preview ({@link #recomputeResult}) and {@link #craft}, so what's shown — including
-     *  its {@code transfer_quality} behaviour — is always what's crafted. Null when nothing matches. */
     private CraftingStoneRecipe resolveRecipe() {
         List<CraftingStoneRecipe> recipes = CraftingStoneRecipeManager.findMatching(contents);
         if (recipes == null || recipes.isEmpty()) return null;
@@ -223,15 +209,12 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
             return;
         }
         cachedResult = recipe.result().copy();
-        // The pile incidentally matches a DIFFERENT recipe than the locked one (2 sticks = fire
-        // sticks while building a bone axe): keep the locked ghost showing — the renderer floats
-        // the incidental craftable result ABOVE it instead of hijacking the player's choice.
+        // Pile incidentally completes a recipe other than the locked choice: keep the locked ghost showing.
         if (ghostLocked && ghostChoice != null && !cachedResult.is(ghostChoice)) {
             recomputeGhost();
         }
     }
 
-    /** All candidates the pile could still become whose output the owning civ has researched. */
     private List<CraftingStoneRecipe> researchedCandidates() {
         List<CraftingStoneRecipe> out = new ArrayList<>();
         for (CraftingStoneRecipe candidate : CraftingStoneRecipeManager.candidates(contents)) {
@@ -243,9 +226,6 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
         return out;
     }
 
-    /** Re-selects a candidate for the ghost preview: keeps the player's sticky choice if it's
-     *  still reachable from the pile, else falls back to the first candidate — unless the choice
-     *  is LOCKED, in which case the preview just hides rather than jumping to another recipe. */
     private void recomputeGhost() {
         List<CraftingStoneRecipe> researched = researchedCandidates();
         ghostCandidateCount = researched.size();
@@ -254,15 +234,13 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
             ghostLocked = false;
             return;
         }
-        // Junk pile: keep the choice + lock — removing the offending item restores the preview.
+        // Junk pile: keep choice + lock so removing the offending item restores the preview.
         if (researched.isEmpty()) return;
         int idx = indexOfChoice(researched);
         if (idx < 0 && ghostLocked) return;
         applyGhost(researched.get(Math.max(0, idx)));
     }
 
-    /** Cycles the ghost preview to the previous/next researched candidate (browse-arrow click).
-     *  Cycling is an explicit choice, so it locks the selection. */
     @Override
     public void cycleGhost(int dir) {
         if (ghostResult.isEmpty()) return;
@@ -287,15 +265,13 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
         return -1;
     }
 
-    /** Stores {@code candidate}'s missing ingredients + result for the renderer's ghost preview. */
     private void applyGhost(CraftingStoneRecipe candidate) {
         ghostChoice = candidate.result().getItem();
         Map<Item, Integer> placed = new HashMap<>();
         for (ItemStack s : contents) {
             if (!s.isEmpty()) placed.merge(s.getItem(), s.getCount(), Integer::sum);
         }
-        // Walk the JSON ingredient order (not the merged map) so ghost cells don't shuffle
-        // between recomputes; the map only supplies merged counts for duplicate entries.
+        // Walk JSON ingredient order (not the merged map) so ghost cells don't shuffle between recomputes.
         Map<Item, Integer> required = candidate.requiredCounts();
         List<ItemStack> missing = new ArrayList<>();
         for (CraftingStoneRecipe.Ing ing : candidate.ingredients()) {

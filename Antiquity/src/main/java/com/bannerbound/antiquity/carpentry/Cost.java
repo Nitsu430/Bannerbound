@@ -11,26 +11,23 @@ import net.minecraft.tags.TagKey;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * One per-unit input requirement for a queued carpenter's-table craft — the runtime cost model that
+ * One per-unit input requirement for a queued carpenter's-table craft: the runtime cost model that
  * unifies the two recipe schemas. A {@link CarpentryOutput} family/variant offer contributes a
  * single {@link Kind#FAMILY} cost ("any log of this wood family"); a {@link CarpentryAssembly} tool
  * recipe contributes its {@link Kind#TAG}/{@link Kind#ITEM} costs ("any plank", "a stick"). Since
  * logs, planks and sticks are disjoint pools, the deposited pile is reserved/consumed per cost with
- * no cross-pool contention.
- *
- * @param kind    which matcher flavour
- * @param ref     FAMILY → a {@link WoodFamily#key()} ("minecraft:oak"); TAG → an item-tag id
- *                ("minecraft:planks"); ITEM → an item id ("minecraft:stick")
- * @param perUnit how many matching items one crafted unit costs
+ * no cross-pool contention. "ref" is a matcher reference keyed by kind: FAMILY -> a
+ * {@link WoodFamily#key()} ("minecraft:oak"), TAG -> an item-tag id ("minecraft:planks"), ITEM -> an
+ * item id ("minecraft:stick"); "perUnit" is how many matching items one crafted unit costs.
+ * {@link Category} buckets a cost (or a deposited pile stack, via the static categoryOf) into the
+ * LOG/PLANK/STICK pools for the tabletop's per-type readout. Persists to NBT as K/Ref/Per.
  */
 @ApiStatus.Internal
 public record Cost(Kind kind, String ref, int perUnit) {
     public enum Kind { FAMILY, TAG, ITEM }
 
-    /** Budget categories for the tabletop's per-type readout. */
     public enum Category { LOG, PLANK, STICK, OTHER }
 
-    /** True if {@code stack} satisfies this cost (one item of the matched kind). */
     public boolean matches(ItemStack stack) {
         if (stack.isEmpty()) return false;
         return switch (kind) {
@@ -49,12 +46,10 @@ public record Cost(Kind kind, String ref, int perUnit) {
         };
     }
 
-    /** Which budget pool this cost draws from, for the per-type tabletop readout. */
     public Category category() {
         return categoryOf(kind, ref);
     }
 
-    /** Classifies a deposited pile stack into a budget pool (mirrors {@link #category()}). */
     public static Category categoryOf(ItemStack stack) {
         if (WoodFamily.isBudgetLog(stack)) return Category.LOG;
         if (stack.is(ItemTags.PLANKS)) return Category.PLANK;

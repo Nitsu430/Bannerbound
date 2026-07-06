@@ -25,7 +25,18 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.neoforged.neoforge.network.PacketDistributor;
 
-/** Server-authoritative driver for the pottery wheel minigame. */
+/**
+ * Server-authoritative driver for the pottery-wheel spin minigame on the pottery slab -- same
+ * session shape as {@link Masonry}/{@link MortarGrind}: one in-flight session per player keyed on
+ * player UUID (SESSIONS, server thread only), with {@link MinigameGuard} enforcing reach and a
+ * minimum elapsed time per spin on COMPLETE. The session pins the matched recipe by ID at start
+ * and re-resolves it on completion, so a datapack reload mid-spin yields nothing rather than the
+ * wrong item. While spinning, the slab displays the recipe's in-progress shaping stack (clay-block
+ * fallback) so bystanders see the pot forming; it is cleared on every exit path. Non-skill: no
+ * quality roll, the clay pile is consumed only on success (a cancel leaves it untouched), and the
+ * result pops above the slab. The slab pos is work-locked for the session's duration and released
+ * on completion, cancel, disconnect, or slab break.
+ */
 @ApiStatus.Internal
 public final class Pottery {
     private Pottery() {}

@@ -35,7 +35,6 @@ public final class ClientBlockAppealState {
         APPEAL = Map.copyOf(map);
     }
 
-    /** Resolved appeal of {@code block} for the local settlement; {@code 0} when undefined. */
     public static float appealOf(Block block) {
         return APPEAL.getOrDefault(block, 0f);
     }

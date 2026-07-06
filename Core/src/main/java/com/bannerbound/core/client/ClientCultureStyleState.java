@@ -10,12 +10,12 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Client-side mirror of the available culture styles, synced from the server on join / reload.
- * Read by {@link SettleScreen}'s style-picker page.
+ * Read by {@link SettleScreen}'s style-picker page. Each {@link Entry} is a selectable style: its
+ * id (sent back in the settle request) and its display-name lang key.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientCultureStyleState {
-    /** One selectable style: its id (sent back in the settle request) and its name lang key. */
     public record Entry(String id, String nameKey) {}
 
     private static volatile List<Entry> STYLES = List.of();

@@ -13,18 +13,17 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: open the knapping screen for the receiving player, carrying every loaded
+ * Server -> client: open the knapping screen for the receiving player, carrying every loaded
  * {@link com.bannerbound.antiquity.recipe.KnappingShape} so the client is self-contained (no separate
- * shape sync). The client plays the shape grid + timing minigame and replies with
+ * shape sync). Each {@link ShapeView} is one knappable head silhouette as the client sees it: which
+ * head it yields, which grid cells must stay stone ({@code keepMask}), and its standard/fine quality
+ * percentages. The client plays the shape grid + timing minigame and replies with
  * {@link KnappingActionPayload}; the server holds the authoritative session (consumes the rock,
  * rolls the quality, gives the head).
- *
- * @param shapes the knappable head silhouettes the player may shape this session
  */
 @ApiStatus.Internal
 public record OpenKnappingPayload(List<ShapeView> shapes) implements CustomPacketPayload {
 
-    /** One knappable shape as seen by the client: which head, which cells stay stone, how many reps. */
     public record ShapeView(ResourceLocation head, int keepMask, int percentage_standard, int percentage_fine) {
         public static final StreamCodec<ByteBuf, ShapeView> STREAM_CODEC = StreamCodec.composite(
             ResourceLocation.STREAM_CODEC, ShapeView::head,

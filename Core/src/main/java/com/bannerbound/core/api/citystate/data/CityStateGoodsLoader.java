@@ -19,9 +19,12 @@ import net.minecraft.util.GsonHelper;
 import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
- * Loads the city-state <b>goods catalog</b> from {@code data/<ns>/citystate_goods/*.json} — what a
- * city-state can PRODUCE, gated three ways (biome × its own adopted tech × specialized resource
- * chunks) and weighted by the village's real job-site POIs. Entries from all files merge. Schema:
+ * Loads the city-state <b>goods catalog</b> from {@code data/<ns>/citystate_goods/*.json} - what a
+ * city-state can PRODUCE, gated three ways (biome x its own adopted tech x specialized resource
+ * chunks) and weighted by the village's real job-site POIs. Entries from all files merge into one
+ * list of {@link GoodDef}s; a GoodDef with an empty {@code requiresChunks} has no chunk gate,
+ * otherwise ALL listed chunks must be present in the city-state's scanned territory. GENERATION
+ * bumps on every datapack reload so cached per-city-state resolutions know to recompute. Schema:
  * <pre>{@code
  * { "entries": [
  *   { "item": "bannerboundantiquity:cow_hide",
@@ -29,21 +32,18 @@ import net.minecraft.util.profiling.ProfilerFiller;
  *     "biomes": ["plains", "meadow"],                 // substring match on the biome path; empty/absent = all
  *     "requires_tech": "bannerboundantiquity:tanning",// active only once the city-state adopts it
  *     "requires_chunk": "CATTLE",                     // ChunkResource name(s); string or array = ALL required
- *     "poi": "minecraft:butcher" }                    // each counted job-site POI boosts weight ×1.5 (cap ×3)
+ *     "poi": "minecraft:butcher" }                    // each counted job-site POI boosts weight x1.5 (cap x3)
  * ]}
  * }</pre>
- * Food goods need no flag — anything with a {@code FoodValueLoader} value counts as food. Design:
+ * Food goods need no flag - anything with a {@code FoodValueLoader} value counts as food. Design:
  * repo-root {@code CITY_STATES_PLAN.md} Phase 3.
  */
 public class CityStateGoodsLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "citystate_goods";
     private static final Gson GSON = new Gson();
     private static volatile List<GoodDef> GOODS = List.of();
-    /** Bumped every datapack reload so cached per-city-state resolutions know to recompute. */
     private static volatile int GENERATION = 0;
 
-    /** One producible good. {@code requiresChunks} empty = no chunk gate; otherwise ALL must be
-     *  present in the city-state's scanned territory. */
     public record GoodDef(String item, double weight, List<String> biomes, String requiresTech,
                           List<ChunkResource> requiresChunks, String poi) {}
 

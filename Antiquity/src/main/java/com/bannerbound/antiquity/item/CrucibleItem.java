@@ -15,12 +15,20 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 
 /**
- * The crucible item — a {@link BlockItem} (places the crucible block) that also <b>pours</b> when you
- * hold right-click on a stone anvil: the anvil starts the use, and each tick {@link #onUseTick} drains
- * a little molten metal into the mold the player is looking at, so you watch it fill gradually.
+ * The crucible item - a {@link BlockItem} (places the crucible block) that also POURS when you
+ * hold right-click on a stone anvil: the anvil starts the use, and each {@link #onUseTick} drains
+ * POUR_RATE (8 mB/tick, so a ~200mB mold fills in ~1.5s) into the mold the player is looking at,
+ * so you watch it fill gradually; the pour stops itself the moment the crucible empties, the aim
+ * leaves an anvil with a mold, or the mold stops accepting. Carrying a MOLTEN crucible is
+ * hazardous - it is a ~1000 C clay pot (METALWORKING_PLAN.md): held in a bare hand it ignites the
+ * carrier and deals a contact burn once a second (BURN_INTERVAL/BURN_DAMAGE), but with
+ * {@code TongsItem} in the OTHER hand the heat wears the tongs' durability instead; only an
+ * actually-held crucible burns (stowed ones don't) and creative players are exempt. Client-side,
+ * a held molten crucible radiates faint smoke wisps so you can tell it's still liquid; the pour
+ * itself spawns a server-broadcast metal-tinted stream (dust + lava drips + flame) into the mold
+ * so it reads as hot liquid metal.
  */
 public class CrucibleItem extends BlockItem {
-    /** Millibuckets transferred per tick while pouring (≈ a 200mB mould in ~1.5s). */
     private static final int POUR_RATE = 8;
 
     public CrucibleItem(Block block, Properties properties) {
@@ -29,7 +37,7 @@ public class CrucibleItem extends BlockItem {
 
     @Override
     public int getUseDuration(ItemStack stack, LivingEntity entity) {
-        return 72000; // effectively "until released"
+        return 72000;
     }
 
     @Override
@@ -37,9 +45,7 @@ public class CrucibleItem extends BlockItem {
         return UseAnim.NONE;
     }
 
-    /** How often (ticks) a bare-handed carry burns / a gripped carry wears the tongs — once a second. */
     private static final int BURN_INTERVAL = 20;
-    /** Contact damage per interval when carrying a molten crucible bare-handed. */
     private static final float BURN_DAMAGE = 3.0F;
 
     @Override
@@ -48,7 +54,6 @@ public class CrucibleItem extends BlockItem {
         CrucibleContents c = stack.get(BannerboundAntiquity.CRUCIBLE_CONTENTS.get());
         boolean molten = c != null && c.molten() && c.totalMb() > 0;
 
-        // Client: a held, molten crucible radiates a faint wisp of heat so you can tell it's still liquid.
         if (level.isClientSide) {
             if (!selected || !molten || level.random.nextInt(5) != 0) return;
             double x = entity.getX() + (level.random.nextDouble() - 0.5) * 0.3;
@@ -58,9 +63,6 @@ public class CrucibleItem extends BlockItem {
             return;
         }
 
-        // Server: a molten crucible is a ~1000°C clay pot. Carry one in a bare hand and it sets you
-        // alight and burns you each second; with tongs in the OTHER hand the heat wears the tongs
-        // instead (METALWORKING_PLAN.md). Only an actually-held crucible burns — one stowed away doesn't.
         if (!molten || !(entity instanceof net.minecraft.world.entity.player.Player player)) return;
         boolean inMain = player.getMainHandItem() == stack;
         boolean inOff = player.getOffhandItem() == stack;
@@ -69,13 +71,11 @@ public class CrucibleItem extends BlockItem {
 
         ItemStack other = inMain ? player.getOffhandItem() : player.getMainHandItem();
         if (other.getItem() instanceof com.bannerbound.antiquity.item.TongsItem) {
-            // Gripped safely — the tongs take the heat instead of the carrier.
             net.minecraft.world.entity.EquipmentSlot otherSlot =
                 inMain ? net.minecraft.world.entity.EquipmentSlot.OFFHAND
                        : net.minecraft.world.entity.EquipmentSlot.MAINHAND;
             other.hurtAndBreak(1, player, otherSlot);
         } else if (!player.isCreative()) {
-            // Bare-handed: catch fire and take a contact burn.
             player.igniteForSeconds(3.0F);
             player.hurt(level.damageSources().hotFloor(), BURN_DAMAGE);
             if (level instanceof net.minecraft.server.level.ServerLevel sl) {
@@ -119,8 +119,6 @@ public class CrucibleItem extends BlockItem {
         }
     }
 
-    /** A glowing molten stream splashing into the mold — metal-tinted sparks + lava drips, broadcast
-     *  to everyone nearby (server-spawned) so the pour reads as hot liquid metal. */
     private static void spawnPourStream(Level level, net.minecraft.core.BlockPos moldPos, int tint) {
         if (!(level instanceof net.minecraft.server.level.ServerLevel sl)) return;
         double x = moldPos.getX() + 0.5, y = moldPos.getY() + 0.95, z = moldPos.getZ() + 0.5;

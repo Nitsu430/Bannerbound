@@ -15,8 +15,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client snapshot of every active {@link com.bannerbound.core.api.settlement.StatusEffect}
- * on the player's settlement. Replaces the client mirror wholesale — sent on add and on remove
+ * Server -> client snapshot of every active {@link com.bannerbound.core.api.settlement.StatusEffect}
+ * on the player's settlement. Replaces the client mirror wholesale - sent on add and on remove
  * (not every tick). Between syncs the client decrements remaining ticks locally so the progress
  * bars animate smoothly without flooding the network.
  */

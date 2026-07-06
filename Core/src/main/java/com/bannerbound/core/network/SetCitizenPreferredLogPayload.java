@@ -10,7 +10,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: set a forester citizen's preferred log species (block registry id) from the Job tab. */
+/** C->S: set a forester citizen's preferred log species (block registry id) from the Job tab. */
 @ApiStatus.Internal
 public record SetCitizenPreferredLogPayload(int entityId, String logId) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<SetCitizenPreferredLogPayload> TYPE =

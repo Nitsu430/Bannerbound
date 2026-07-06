@@ -22,11 +22,13 @@ import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import org.joml.Matrix4f;
 
 /**
- * Renders the hide on a tanning rack as a flat decal <b>stretched across the slanted frame</b> — raw
- * hide before scraping, and while drying a cross-fade from the cured hide to the finished leather
- * (driven by {@link TanningRackBlockEntity#dryProgress()}), settling on leather when dry. The block
- * entity lives on the master cell (bottom-left of the 2×2); the decal is rotated to match the
- * blockstate facing.
+ * Renders the hide on a tanning rack as a flat double-sided decal stretched across the slanted
+ * frame: the raw hide before scraping, then while drying an opaque cured-hide base with the
+ * leather decal alpha-fading IN on top (driven by {@link TanningRackBlockEntity#dryProgress()};
+ * layering opaque-under-fade avoids a see-through dip mid-cross-fade), settling on plain leather
+ * when dry. The block entity lives on the master cell (bottom-left of the 2x2 multiblock) and the
+ * decal spans past that cell, hence shouldRenderOffScreen=true; the quad is rotated to match the
+ * blockstate facing and textured with each item's particle sprite.
  */
 public class TanningRackRenderer implements BlockEntityRenderer<TanningRackBlockEntity> {
     // Slanted hide plane in the master's local space (facing = north baseline), block units.
@@ -55,7 +57,6 @@ public class TanningRackRenderer implements BlockEntityRenderer<TanningRackBlock
         switch (phase) {
             case RAW -> decal(be.getRawHide(), 1.0F, mat, buffer, packedLight);
             case DRYING -> {
-                // Opaque cured base (no transparency loss) with the leather fading IN on top.
                 float p = be.dryProgress();
                 decal(new ItemStack(BannerboundAntiquity.CURED_HIDE.get()), 1.0F, mat, buffer, packedLight);
                 decal(new ItemStack(Items.LEATHER), p, mat, buffer, packedLight);

@@ -10,9 +10,9 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: while a citizen screen is open, the client requests fresh compliance + resentment
- *  data once a second (every 20 ticks) so the screen reflects live values instead of the
- *  frozen open-time snapshot. The server replies with {@link CitizenLiveStatePayload}. */
+/** C->S: while a citizen screen is open, the client requests fresh compliance + resentment data
+ *  once a second (every 20 ticks) so the screen reflects live values instead of the frozen
+ *  open-time snapshot. The server replies with CitizenLiveStatePayload. */
 @ApiStatus.Internal
 public record RequestCitizenLiveStatePayload(int entityId) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<RequestCitizenLiveStatePayload> TYPE =

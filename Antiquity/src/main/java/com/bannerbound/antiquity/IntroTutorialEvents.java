@@ -27,10 +27,12 @@ import net.neoforged.neoforge.event.entity.player.PlayerEvent;
  * make fire, split firewood, hunt). It is a normal pinned Chronicle tutorial, so the player can
  * <b>unpin it in the Chronicle</b> at any time to dismiss it.
  *
- * <p>Auto-pin happens exactly once per player (tracked in {@link IntroTutorialData}); after that we
- * never re-pin, so an unpin sticks across logins. The tutorial's objectives complete on their own
- * through the Chronicle trigger system — this class only adds the one trigger that has no vanilla
- * source: {@code animal_hunted}, fired when a player kills an animal (the "hunt" step).
+ * <p>Auto-pin happens exactly once per player, tracked in the {@link IntroTutorialData} world
+ * SavedData (stored on the overworld; UUIDs persist as paired longs, and markPinned returns true
+ * only the first time); after that we never re-pin, so an unpin sticks across logins. The tutorial's
+ * objectives complete on their own through the Chronicle trigger system -- this class only adds the
+ * one trigger that has no vanilla source: {@code animal_hunted}, fired when a survival-mode player
+ * kills an animal (the "hunt" step).
  */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID)
 @ApiStatus.Internal
@@ -40,7 +42,6 @@ public final class IntroTutorialEvents {
     private IntroTutorialEvents() {
     }
 
-    /** Auto-pin the intro guide the first time each player enters the world. */
     @SubscribeEvent
     static void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer player) || player.getServer() == null) {
@@ -48,15 +49,13 @@ public final class IntroTutorialEvents {
         }
         IntroTutorialData data = IntroTutorialData.get(player.getServer().overworld());
         if (!data.markPinned(player.getUUID())) {
-            return; // already auto-pinned once before — respect any later unpin
+            return;
         }
-        // Ensure it is unlocked (it is unlocked-by-default, but reconcile order isn't guaranteed),
-        // then pin it. togglePinnedJournalEntry only pins when not already pinned, which it isn't.
+        // Unlock BEFORE toggling: reconcile order isn't guaranteed, and toggle only pins because it can't already be pinned here.
         CodexManager.unlock(player, ENTRY_ID, false);
         CodexManager.togglePinnedJournalEntry(player, ENTRY_ID);
     }
 
-    /** Fire the {@code animal_hunted} tutorial trigger when a player fells an animal. */
     @SubscribeEvent
     static void onAnimalKilled(LivingDeathEvent event) {
         if (!(event.getEntity() instanceof Animal)) {
@@ -69,7 +68,6 @@ public final class IntroTutorialEvents {
         CodexManager.onCustom(player, "animal_hunted", "");
     }
 
-    /** World SavedData: the set of players who have already had the intro tutorial auto-pinned. */
     public static final class IntroTutorialData extends SavedData {
         private static final String DATA_NAME = "bannerboundantiquity_intro_tutorial";
 
@@ -80,7 +78,6 @@ public final class IntroTutorialEvents {
                 .computeIfAbsent(new Factory<>(IntroTutorialData::new, IntroTutorialData::load), DATA_NAME);
         }
 
-        /** Records that this player has been auto-pinned; returns true only the first time. */
         public boolean markPinned(UUID playerId) {
             if (!pinned.add(playerId)) {
                 return false;

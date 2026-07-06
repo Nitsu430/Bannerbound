@@ -21,27 +21,22 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity for the Chopping Stump. Tracks:
- * <ul>
- *   <li>the source {@link #logType} the stump was carved from — drives the rendered stump body and
- *       its break particles, so an oak stump looks like oak, birch like birch, etc;</li>
- *   <li>the {@link #logs} stack deposited on top, which a bone axe splits into firewood;</li>
- *   <li>a slide-in animation ({@link #insertAnimTicks} + {@link #insertDir}) for a freshly
- *       deposited stack — same idea as the bloomery, but sliding in from the side the player
- *       deposited from.</li>
- * </ul>
+ * Block entity for the Chopping Stump. Tracks the source log block the stump was carved from
+ * (logType skins the rendered stump body and its break particles, so an oak stump looks like
+ * oak), the stack of logs deposited on top (one type at a time, capped at a normal stack) that
+ * a bone axe splits into firewood, and a slide-in animation for a freshly deposited stack.
+ * SLIDE_TICKS matches the bloomery's slide; insertDir is the horizontal side the depositing
+ * player stood on, so the stack slides in from where it was placed. insert() replays the slide,
+ * while setLogs() updates the pile without replaying it (used as the pile is whittled down).
+ * setChanged always re-syncs to clients (sendBlockUpdated) so the rendered pile stays current.
  */
 @ApiStatus.Internal
 public class ChoppingStumpBlockEntity extends BlockEntity {
-    /** Ticks the deposited stack's slide-in animation runs (matches the bloomery). */
     public static final int SLIDE_TICKS = 6;
 
-    /** The log this stump was carved from — its textures skin the stump + its break particles. */
     private Block logType = Blocks.OAK_LOG;
-    /** Logs waiting to be chopped. One type at a time; capped at a normal stack. */
     private ItemStack logs = ItemStack.EMPTY;
     private int insertAnimTicks = 0;
-    /** Horizontal side the deposited stack slides in from (the side the depositing player stood). */
     private Direction insertDir = Direction.NORTH;
 
     public ChoppingStumpBlockEntity(BlockPos pos, BlockState state) {
@@ -73,7 +68,6 @@ public class ChoppingStumpBlockEntity extends BlockEntity {
         return insertDir;
     }
 
-    /** Deposit/replace the held logs and play the slide-in from {@code from} (the depositor's side). */
     public void insert(ItemStack stack, Direction from) {
         this.logs = stack == null ? ItemStack.EMPTY : stack;
         this.insertAnimTicks = SLIDE_TICKS;
@@ -81,7 +75,6 @@ public class ChoppingStumpBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    /** Update the held logs WITHOUT replaying the slide (used as the pile is whittled down). */
     public void setLogs(ItemStack stack) {
         this.logs = stack == null ? ItemStack.EMPTY : stack;
         setChanged();
@@ -95,7 +88,6 @@ public class ChoppingStumpBlockEntity extends BlockEntity {
         return out;
     }
 
-    /** Ticker — just drains the slide-in timer. Runs on both sides. */
     public static void tick(Level level, BlockPos pos, BlockState state, ChoppingStumpBlockEntity be) {
         if (be.insertAnimTicks > 0) {
             be.insertAnimTicks--;

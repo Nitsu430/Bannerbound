@@ -24,7 +24,18 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
 
-/** Server-side Chronicle unlock, sync, and trigger coordinator. */
+/**
+ * Server-side coordinator for the Chronicle: unlocking entries, syncing state to clients, and
+ * routing gameplay events into unlock and tutorial-progress checks. reconcile() grants every
+ * entry whose rule starts unlocked or is state-satisfiable and re-syncs (login/reload pass
+ * notify=false to stay quiet); the onXxx and fireForXxx paths translate a live event into a
+ * CodexTriggerContext and unlock any entry whose rule may match it. Newly unlocked entries can
+ * auto-pin their tutorial to the side journal: this fires only on the first unlock (so a later
+ * manual unpin sticks) and skips a tutorial whose every step is already complete (the unlock
+ * event often satisfies the steps itself, which would otherwise pin a done checklist with nothing
+ * left to do). Pinned objectives are pre-checked against current state when built, so a step the
+ * player already met starts checked instead of showing a stale "not done" line.
+ */
 public final class CodexManager {
     public static final String JOURNAL_PIN_SOURCE = "codex_pin";
 
@@ -138,9 +149,6 @@ public final class CodexManager {
             return List.of(new JournalObjective("read", "Read in the Chronicle", "Press J", false,
                 List.of("Open the Chronicle with J.", "Unpin this entry when you are done.")));
         }
-        // Pre-check state-based objectives: if the player already satisfied a step before the
-        // tutorial was pinned (e.g. the same research that unlocks this entry also completes its
-        // "Research X" step), start it checked instead of showing a stale "Not done" line.
         Settlement settlement = SettlementData.get(player.getServer().overworld()).getByPlayer(player.getUUID());
         List<JournalObjective> objectives = new ArrayList<>();
         for (CodexTutorial.Objective objective : tutorial.objectives()) {
@@ -151,7 +159,6 @@ public final class CodexManager {
         return objectives;
     }
 
-    /** Grants default/state-based entries, then syncs. Login/reload uses notify=false. */
     public static void reconcile(ServerPlayer player, boolean notify) {
         if (player == null || player.getServer() == null) return;
         MinecraftServer server = player.getServer();
@@ -250,26 +257,19 @@ public final class CodexManager {
         data.setDirty();
         sendTo(player);
         sendToast(player, newlyUnlocked);
-        // Auto-pin: if enabled, pin the tutorial of each entry the player just unlocked (e.g. by
-        // researching a node), so its checklist shows up in the side journal automatically. Fires
-        // only on first unlock, so a later manual unpin sticks.
         if (state.autoPinTutorial()) {
             for (CodexEntry entry : newlyUnlocked) autoPinTutorialEntry(player, entry);
         }
     }
 
-    /** Pins {@code entry}'s tutorial if it has one and is not already actively pinned. */
     private static void autoPinTutorialEntry(ServerPlayer player, CodexEntry entry) {
         if (entry == null || entry.tutorial().isEmpty()) return;
         JournalPlayerData journalData = JournalPlayerData.get(player.getServer().overworld());
         List<JournalEntry> entries = journalData.entriesFor(player.getUUID());
         for (JournalEntry existing : entries) {
-            if (isPinnedChronicle(existing, entry.id()) && !existing.resolved()) return; // already pinned
+            if (isPinnedChronicle(existing, entry.id()) && !existing.resolved()) return;
         }
         JournalEntry pinned = buildPinnedJournalEntry(player, entry);
-        // Don't auto-pin a tutorial that's already fully done — the player satisfied every step
-        // (often the very unlock event) before it could be pinned, so it would only show a
-        // completed checklist with nothing left to do.
         if (pinned.objectives().stream().allMatch(JournalObjective::complete)) return;
         entries.removeIf(existing -> isPinnedChronicle(existing, entry.id()));
         entries.add(pinned);
@@ -277,7 +277,6 @@ public final class CodexManager {
         JournalManager.sendTo(player);
     }
 
-    /** Sets the player's auto-pin-tutorial preference and re-syncs the Chronicle state. */
     public static void setAutoPinTutorial(ServerPlayer player, boolean enabled) {
         if (player == null || player.getServer() == null) return;
         CodexPlayerData data = CodexPlayerData.get(player.getServer().overworld());

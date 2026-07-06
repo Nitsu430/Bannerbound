@@ -11,11 +11,13 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client roster snapshot for the Town Hall Statistics tab (gated behind the Mathematics
- * research). Broadcast once per second to members of any settlement that has unlocked statistics, so
- * the tab can show who is working, at what job, and WHY (their {@link
- * com.bannerbound.core.entity.CitizenWorkStatus}). Each entry's {@code statusOrdinal} is the ordinal
- * of that enum, or {@code -1} for a citizen who is currently unloaded ("away").
+ * Server -> client roster snapshot for the Town Hall Statistics tab (gated behind the
+ * Mathematics research). Broadcast once per second to members of any settlement that has
+ * unlocked statistics, so the tab can show who is working, at what job, and WHY (their
+ * {@link com.bannerbound.core.entity.CitizenWorkStatus}). Each Entry carries the citizen's
+ * display name, current job id ("" if none), the CitizenWorkStatus ordinal (-1 for a citizen
+ * currently unloaded / "away"), and the network entity id for assignment actions (-1 when
+ * unloaded / not actionable).
  */
 @ApiStatus.Internal
 public record WorkforceStatsPayload(
@@ -23,8 +25,6 @@ public record WorkforceStatsPayload(
     java.util.List<Entry> entries
 ) implements CustomPacketPayload {
 
-    /** One citizen: display name, current job id ("" if none), CitizenWorkStatus ordinal (-1 = away),
-     *  and the network entity id for assignment actions (-1 when unloaded / not actionable). */
     public record Entry(String name, String jobType, int statusOrdinal, int entityId) {}
 
     public static final CustomPacketPayload.Type<WorkforceStatsPayload> TYPE =

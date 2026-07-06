@@ -30,19 +30,19 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * Fletching Station — the Tier-2 refinement workbench. Items are placed on it one at a time (mixed
- * types allowed), held by the {@link FletchingStationBlockEntity}; a matched recipe shows a floating
- * spinning preview. Shift-right-click does NOT craft instantly — it opens the in-world stretch
- * minigame (see {@link Fletching}), whose performance rolls the output's craftsmanship quality.
- * <ul>
- *   <li>Right-click with an item → add ONE of it to the pile.</li>
- *   <li>Right-click empty-handed → take the last item back out.</li>
- *   <li>Shift-right-click → start the fletching minigame (when a recipe is matched).</li>
- * </ul>
+ * Fletching Station - the Tier-2 refinement workbench. Items are placed on it one at a time (mixed
+ * types allowed), held by the {@link FletchingStationBlockEntity}; a matched recipe shows a
+ * floating spinning preview. Right-click with an item adds ONE of it to the pile; right-click
+ * empty-handed takes the last item back out. Shift-right-click does NOT craft instantly - when a
+ * researched recipe is matched it opens the in-world stretch minigame (see {@link Fletching}),
+ * whose performance rolls the output's craftsmanship quality. Player use and citizen crafting are
+ * mutually excluded via WorkBlockLocks: every interaction is refused while another UUID holds the
+ * station's lock (a "station busy" toast when trying to start the minigame). Breaking the station
+ * pops its contents and aborts any minigame session at that pos.
  */
 public class FletchingStationBlock extends HorizontalDirectionalBlock implements EntityBlock {
     public static final MapCodec<FletchingStationBlock> CODEC = simpleCodec(FletchingStationBlock::new);
-    /** Hugs the Blockbench model's mass (x 3–13, z 3–14, 13px tall) so collision/selection match. */
+    // Hugs the Blockbench model's mass (x 3-13, z 3-14, 13px tall) so collision/selection match.
     public static final VoxelShape SHAPE = Block.box(3.0, 0.0, 3.0, 13.0, 13.0, 14.0);
 
     public FletchingStationBlock(BlockBehaviour.Properties properties) {
@@ -70,10 +70,7 @@ public class FletchingStationBlock extends HorizontalDirectionalBlock implements
         return SHAPE;
     }
 
-    /**
-     * The collision box isn't a full block, so vanilla classifies the cell as walkable and NPCs path
-     * onto it and snag. Mark it un-pathfindable so every pathfinder routes around it.
-     */
+    // Partial-collision block: without this override vanilla marks the cell walkable and NPCs snag on it.
     @Override
     protected boolean isPathfindable(BlockState state,
                                      net.minecraft.world.level.pathfinder.PathComputationType type) {
@@ -135,8 +132,6 @@ public class FletchingStationBlock extends HorizontalDirectionalBlock implements
         return InteractionResult.sidedSuccess(level.isClientSide);
     }
 
-    /** Opens the stretch minigame for {@code player} when the station has a valid, researched
-     *  recipe and no citizen is mid-craft on it (the mutual work-block lock). */
     private static boolean tryStart(Level level, BlockPos pos, Player player,
                                     FletchingStationBlockEntity be) {
         if (com.bannerbound.core.api.workshop.WorkBlockLocks.isLockedByOther(pos, player.getUUID())) {

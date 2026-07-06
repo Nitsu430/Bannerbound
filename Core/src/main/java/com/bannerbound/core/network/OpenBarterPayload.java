@@ -13,13 +13,16 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: opens the barbarian barter screen. Carries the camp's identity + stance, the camp's opening
- * offer ({@code youGive} = what they ask from you, {@code youGet} = what they'd hand over), and the two
- * pools the player can draw from to counter-offer ({@code yourStorage}, {@code theirGoods}). Every line
- * includes its unit value so the client can score offers locally (see {@link BarterEntry}).
+ * S->C: opens the barbarian barter screen. Carries the camp's identity + stance, the camp's opening
+ * offer (youGive = what they ask from you, youGet = what they'd hand over), and the two pools the
+ * player can draw from to counter-offer (yourStorage, theirGoods). Every line includes its unit
+ * value so the client can score offers locally (see BarterEntry).
  *
- * <p>Acceptance the client mirrors: {@code value(youGive) >= floor(value(youGet) * marginPercent/100) +
- * tributeFloor}. The server re-validates on submit.
+ * <p>Acceptance the client mirrors: value(youGive) >= floor(value(youGet) * marginPercent/100) +
+ * tributeFloor. The server re-validates on submit. relState is a CampRelationState ordinal; isDemand
+ * true means tribute (youGet empty, refusing is hostile); canDefer is false for hostile camps;
+ * tributeFloor is value expected on top of the trade balance (0 for pure trades); marginPercent is
+ * how much give-value the camp wants per unit of get-value.
  */
 @ApiStatus.Internal
 public record OpenBarterPayload(
@@ -28,11 +31,11 @@ public record OpenBarterPayload(
     int campColor,
     String typeName,
     String greetingKey,
-    int relState,          // CampRelationState ordinal
-    boolean isDemand,      // true = tribute (youGet empty, refusing is hostile); false = open trade
-    boolean canDefer,      // grace allowed ("we'll get it for you") — false for hostile camps
-    int tributeFloor,      // value the camp expects on top of any trade balance (0 for pure trades)
-    int marginPercent,     // how much give-value the camp wants per unit of get-value (relationship)
+    int relState,
+    boolean isDemand,
+    boolean canDefer,
+    int tributeFloor,
+    int marginPercent,
     List<BarterEntry> youGive,
     List<BarterEntry> youGet,
     List<BarterEntry> yourStorage,

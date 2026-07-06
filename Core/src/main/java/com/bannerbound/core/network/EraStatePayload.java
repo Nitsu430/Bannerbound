@@ -10,14 +10,17 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/**
+ * S->C: the viewer's era standing - their own {@code playerEra}, the shared {@code worldEra}, and
+ * the current {@code worldYear} (BC values are negative, e.g. Antiquity near -100000). worldYear
+ * uses plain (non-zig-zag) VAR_INT, so negative years always cost 5 bytes - correct, just not
+ * compact.
+ */
 @ApiStatus.Internal
 public record EraStatePayload(int playerEra, int worldEra, int worldYear) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<EraStatePayload> TYPE =
         new CustomPacketPayload.Type<>(ResourceLocation.fromNamespaceAndPath(BannerboundCore.MODID, "era_state"));
 
-    // VAR_INT for worldYear handles the BC range fine (Antiquity is around -100000, well within
-    // the int range). Not unsigned — varint encodes signed ints with zig-zag in some libs but
-    // Mojang's ByteBufCodecs.VAR_INT is plain VarInt; negative values just consume 5 bytes.
     public static final StreamCodec<ByteBuf, EraStatePayload> STREAM_CODEC =
         StreamCodec.composite(
             ByteBufCodecs.VAR_INT, EraStatePayload::playerEra,

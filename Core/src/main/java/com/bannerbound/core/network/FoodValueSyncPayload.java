@@ -13,9 +13,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: the base food-value table loaded from {@code data/<ns>/food_values/*.json}.
- * Two parallel lists (item id, food value). Re-sent on datapack reload so the green "Food value"
- * tooltip line stays accurate.
+ * Server -> client: the base food-value table loaded from data/<ns>/food_values/*.json. Two parallel
+ * lists (item id, food value). Re-sent on datapack reload so the green "Food value" tooltip line
+ * stays accurate.
  */
 @ApiStatus.Internal
 public record FoodValueSyncPayload(List<String> itemIds, List<Float> values)

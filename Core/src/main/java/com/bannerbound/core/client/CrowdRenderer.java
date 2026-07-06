@@ -29,23 +29,26 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
 /**
- * Renders the {@code /bannerbound simulate} decorative crowd ({@link ClientSimulationState}) as
- * real animated {@link HumanoidModel}s wearing the actual citizen skins — visually indistinguishable
- * from the real citizens, just non-interactive and entirely client-simulated. Purely decorative; the
- * server has no idea these exist (the whole thesis of the stress test).
+ * Renders the /bannerbound simulate decorative crowd (ClientSimulationState / ClientCrowd) as real
+ * animated HumanoidModels wearing the actual citizen skins -- visually indistinguishable from real
+ * citizens, just non-interactive and entirely client-simulated. Purely decorative; the server has no
+ * idea these exist (the whole thesis of the stress test). CLIENT-dist EventBusSubscriber: ticks the
+ * crowd each client tick, resets on logout, and draws during RenderLevelStage AFTER_TRANSLUCENT_BLOCKS.
  *
- * <p>v2 replaced the v1 flat billboards (which rendered as black blobs up close — wrong skin UVs).
- * Movers now read as people at every distance the {@link ClientSimulationState#MAX_MOVERS} cap
- * reaches; a genuinely-cheap far tier (texture-res LOD / billboard) is a deferred optimization.
+ * v2 replaced v1 flat billboards (black blobs up close from wrong skin UVs); movers now read as people
+ * at every distance the ClientSimulationState.MAX_MOVERS cap reaches. A cheap far tier (LOD/billboard)
+ * is a deferred optimization. Agents are position/facing/gait interpolated between ticks for smooth
+ * 60fps motion, culled behind the camera and past CULL_DISTANCE, and capped at renderCap() per frame.
  *
- * <p>No backing entities means we can't call {@code setupAnim(null,…)} (it NPEs) — the walk cycle is
- * written onto the {@link net.minecraft.client.model.geom.ModelPart}s directly with the vanilla math.
+ * Two rendering constraints: (1) with no backing entity we can't call setupAnim(null,...) (it NPEs),
+ * so poseAgent writes the walk cycle onto the ModelParts directly with vanilla math -- one continuous
+ * pose that blends a distance-driven walk with a standing idle gesture by amount (0 = standing,
+ * 1 = walking) so start/stop eases with no pose pop. (2) STEP_PER_BLOCK gives one full leg cycle (two
+ * steps) per ~1.6 blocks walked, distance-driven so feet always match ground speed.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
 public final class CrowdRenderer {
-    /** Leg-swing frequency in radians per block walked: one full cycle (two steps) per ~1.6 blocks.
-     *  Distance-driven so the feet always match ground speed. */
     private static final double STEP_PER_BLOCK = (Math.PI * 2.0) / 1.6;
 
     private static HumanoidModel<LivingEntity> wideModel;
@@ -59,7 +62,6 @@ public final class CrowdRenderer {
         ClientSimulationState.reset();
     }
 
-    /** Advance the stateful crowd one tick (movement/steering lives in {@link ClientCrowd}). */
     @SubscribeEvent
     public static void onClientTick(ClientTickEvent.Post event) {
         ClientCrowd.tick();
@@ -89,7 +91,6 @@ public final class CrowdRenderer {
         double tSeconds = (mc.level.getGameTime() + partial) / 20.0;
         Era era = ClientSimulationState.era();
 
-        // Camera forward (cheap behind-the-camera cull).
         double fy = Math.toRadians(yaw);
         double fp = Math.toRadians(pitch);
         double fx = -Math.sin(fy) * Math.cos(fp);
@@ -100,7 +101,6 @@ public final class CrowdRenderer {
 
         int near = 0, mid = 0, far = 0, culled = 0, rendered = 0;
         for (ClientCrowd.Agent a : ClientCrowd.agents()) {
-            // Interpolate position, facing and gait between ticks for smooth 60fps motion.
             double rx = a.prevX + (a.x - a.prevX) * partial;
             double ry = a.prevY + (a.y - a.prevY) * partial;
             double rz = a.prevZ + (a.z - a.prevZ) * partial;
@@ -147,18 +147,13 @@ public final class CrowdRenderer {
         ClientSimulationState.lastCulled = culled;
     }
 
-    /** Wrap a (possibly huge) double phase into [0, 2π) BEFORE casting to float. Computing the
-     *  modulo in double avoids the float-precision freeze when gameTime is large. */
     private static float wrap(double phase) {
+        // Modulo in double before the float cast: casting a huge gameTime phase to float first freezes the gait.
         double w = phase % (Math.PI * 2.0);
         if (w < 0) w += Math.PI * 2.0;
         return (float) w;
     }
 
-    /** One continuous pose that BLENDS a calm distance-driven walk with a standing/idle gesture by
-     *  {@code amount} (0 = standing, 1 = walking) — so starting/stopping eases with no pose pop.
-     *  Legs swing scale with amount; arms lerp from an idle rest+gesture to the walk swing; the head
-     *  carries its lead toward the heading plus an idle glance that fades as the agent gets moving. */
     private static void poseAgent(HumanoidModel<LivingEntity> model, double gaitBlocks, float amount,
                                   float headYawDeg, double tSeconds, double idlePhase) {
         model.young = false;

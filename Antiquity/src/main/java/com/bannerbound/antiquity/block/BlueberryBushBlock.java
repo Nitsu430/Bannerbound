@@ -28,13 +28,13 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * Blueberry bush — a near-clone of vanilla's sweet-berry bush, but yields {@link BannerboundAntiquity#BLUEBERRIES}
- * (the grog input / snack). Four growth stages (AGE 0–3): grows a stage when bright enough, picked when
- * ripe (age ≥ 2) to drop berries and reset to age 1, replanted from a blueberry, bonemeal-able.
- *
- * <p>Unlike sweet berries it is NOT prickly (no {@code entityInside} damage) — these are friendly bushes.
- * The planting item is a {@code ItemNameBlockItem} (the {@code blueberries} food doubles as the seed,
- * exactly like vanilla sweet berries).
+ * Blueberry bush -- a near-clone of vanilla's sweet-berry bush that yields BLUEBERRIES (the grog
+ * input / snack). Four growth stages (AGE 0-3): a random tick grows one stage (1-in-5 roll, raw
+ * brightness above the bush must be >= 9, matching vanilla), bonemeal always nudges one stage on,
+ * and using a bush at age >= 2 drops 1-2 berries plus a bonus berry when fully ripe, then resets
+ * it to age 1. Unlike sweet berries it is NOT prickly (no entityInside damage) -- these are
+ * friendly bushes. The planting item is an ItemNameBlockItem: the blueberries food doubles as the
+ * seed, exactly like vanilla sweet berries.
  */
 public class BlueberryBushBlock extends BushBlock implements BonemealableBlock {
     public static final MapCodec<BlueberryBushBlock> CODEC = simpleCodec(BlueberryBushBlock::new);
@@ -97,7 +97,6 @@ public class BlueberryBushBlock extends BushBlock implements BonemealableBlock {
         return InteractionResult.sidedSuccess(level.isClientSide);
     }
 
-    // ── Bonemeal: nudges the bush one growth stage on. ──────────────────────────────────────────
     @Override
     public boolean isValidBonemealTarget(LevelReader level, BlockPos pos, BlockState state) {
         return state.getValue(AGE) < MAX_AGE;

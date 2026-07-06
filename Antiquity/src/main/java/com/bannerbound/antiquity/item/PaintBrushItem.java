@@ -27,17 +27,17 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Paint brush — the trim tool. It carries a selected trim shape (the {@link
+ * Paint brush - the trim tool. It carries a selected trim shape (the {@link
  * BannerboundAntiquity#TRIM_BRUSH_SHAPE} component): index {@code 0} = "None" (remove), {@code 1..9} =
- * the nine {@link TrimShape}s.
+ * the nine {@link TrimShape}s; a fresh brush defaults to the first shape, not "None".
  *
  * <ul>
  *   <li><b>Sneak + right-click</b> (block or air) cycles the selected shape, incl. "None"; shown on
  *       the action bar.</li>
- *   <li><b>Right-click a block face</b> stamps the selected shape onto that face as the upper
- *       decoration layer (above any plaster) — coloured by the dye held in the <b>off-hand</b> (white
- *       = unpainted greyscale). On "None" it strips the trim from that face (plaster, if any, stays).
- *       The dye is a palette selector, not consumed.</li>
+ *   <li><b>Right-click a full solid block face</b> stamps the selected shape onto that face as the
+ *       upper decoration layer (above any plaster) - coloured by the dye held in the <b>off-hand</b>
+ *       (white = unpainted greyscale). On "None" it strips the trim from that face (plaster, if any,
+ *       stays). The dye is a palette selector, not consumed.</li>
  * </ul>
  * The trim is per-face decoration data (see {@link FaceDecorations}), so the adjacent cell stays free.
  */
@@ -49,7 +49,7 @@ public class PaintBrushItem extends Item {
     }
 
     private static int selection(ItemStack stack) {
-        return stack.getOrDefault(BannerboundAntiquity.TRIM_BRUSH_SHAPE.get(), 1); // default = first shape
+        return stack.getOrDefault(BannerboundAntiquity.TRIM_BRUSH_SHAPE.get(), 1);
     }
 
     private static Component selectionName(int sel) {
@@ -72,7 +72,7 @@ public class PaintBrushItem extends Item {
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
-        if (player.isSecondaryUseActive()) { // sneak-click in air cycles the shape
+        if (player.isSecondaryUseActive()) {
             return new InteractionResultHolder<>(cycle(level, player, stack), stack);
         }
         return InteractionResultHolder.pass(stack);
@@ -85,14 +85,14 @@ public class PaintBrushItem extends Item {
         ItemStack stack = context.getItemInHand();
 
         if (player != null && player.isSecondaryUseActive()) {
-            return cycle(level, player, stack); // sneak on a block also cycles (don't paint)
+            return cycle(level, player, stack);
         }
 
         BlockPos pos = context.getClickedPos();
         Direction face = context.getClickedFace();
         BlockState clicked = level.getBlockState(pos);
         if (!clicked.isFaceSturdy(level, pos, face)) {
-            return InteractionResult.PASS; // only full, solid faces take trim
+            return InteractionResult.PASS;
         }
         int sel = selection(stack);
 
@@ -121,7 +121,7 @@ public class PaintBrushItem extends Item {
         if (player != null && player.getOffhandItem().getItem() instanceof DyeItem dye) {
             return dye.getDyeColor();
         }
-        return DyeColor.WHITE; // unpainted greyscale base
+        return DyeColor.WHITE;
     }
 
     @Override

@@ -19,19 +19,23 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * A settlement's applied wall blueprint — the frozen output of {@link WallLayoutEngine}.
- * Pieces reference designs by id only (block states live in the designs), so the plan's NBT is
- * compact and survives design-library edits (an edited design re-applies via the adapt flow,
- * never silently mutates a frozen plan... the resolver passed to {@link #buildBlueprint} decides
- * which design snapshot the plan expands against).
+ * A settlement's applied wall blueprint: the frozen output of {@link WallLayoutEngine}. Pieces
+ * reference designs by id only (block states live in the designs), so the plan's NBT is compact
+ * and survives design-library edits - an edited design re-applies via the adapt flow and never
+ * silently mutates a frozen plan; the resolver passed to {@link #buildBlueprint} decides which
+ * design snapshot the plan expands against.
  *
- * <p>{@code obsolete} carries demolition targets from a superseded plan (adapt flow, Phase 4) —
- * positions whose blocks must be removed and refunded. Empty until adapt ships.
+ * <p>{@code obsolete} carries demolition targets from a superseded plan (adapt flow, Phase 4):
+ * positions ({@code BlockPos.asLong()} packed) whose blocks must be removed and refunded. Empty
+ * until adapt ships.
+ *
+ * <p>Expansion is order-dependent and deterministic: pieces emit corners -> gates -> segments so
+ * overlapping cells resolve by first-write-wins ({@code putIfAbsent}). The resulting
+ * pos -> expected-state map is what the task board, ghost renderer and completeness scan read.
  */
 public final class WallPlan {
 
     private final List<WallPiece> pieces;
-    /** Demolition set from the previously-applied plan ({@code BlockPos.asLong()} packed). */
     private final LongSet obsolete;
 
     public WallPlan(List<WallPiece> pieces) {
@@ -46,11 +50,6 @@ public final class WallPlan {
     public List<WallPiece> pieces() { return pieces; }
     public LongSet obsolete() { return obsolete; }
 
-    /**
-     * Expands every piece into the pos → expected-state map the task board, ghost renderer and
-     * completeness scan all read. Emission order is corners → gates → segments so overlapping
-     * cells resolve by the plan's precedence rule (first write wins via putIfAbsent).
-     */
     public Long2ObjectMap<BlockState> buildBlueprint(Function<String, WallDesign> designs) {
         Long2ObjectMap<BlockState> blueprint = new Long2ObjectOpenHashMap<>();
         forEachInPrecedenceOrder(designs, (piece, design) ->
@@ -59,7 +58,6 @@ public final class WallPlan {
         return blueprint;
     }
 
-    /** Total items needed to build the full blueprint, grouped by item (foundation included). */
     public Map<Item, Integer> requiredItems(Function<String, WallDesign> designs) {
         Long2ObjectMap<BlockState> blueprint = buildBlueprint(designs);
         Map<Item, Integer> required = new LinkedHashMap<>();
@@ -75,7 +73,6 @@ public final class WallPlan {
         void visit(WallPiece piece, WallDesign design);
     }
 
-    /** Visits pieces corner-first (the blueprint precedence order), skipping unresolvable ids. */
     public void forEachInPrecedenceOrder(Function<String, WallDesign> designs, PieceVisitor visitor) {
         visitKind(WallDesign.Kind.CORNER, designs, visitor);
         visitKind(WallDesign.Kind.GATE, designs, visitor);
@@ -91,8 +88,6 @@ public final class WallPlan {
             }
         }
     }
-
-    // ─── NBT ────────────────────────────────────────────────────────────────────────────────
 
     public CompoundTag save() {
         CompoundTag tag = new CompoundTag();

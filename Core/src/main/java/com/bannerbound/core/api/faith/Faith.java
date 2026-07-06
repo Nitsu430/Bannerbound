@@ -11,11 +11,19 @@ import net.minecraft.nbt.NbtUtils;
 import net.minecraft.nbt.Tag;
 
 /**
- * One player-founded faith (FAITH_PLAN.md Part 2) — the cross-faction unit: multiple
+ * One player-founded faith (FAITH_PLAN.md Part 2) - the cross-faction unit: multiple
  * settlements (and therefore multiple factions) can be members of the same faith.
- * Lives in {@link FaithData}, persisted with the overworld. The pantheon
- * (deities/constellations) arrives with the astrology milestone; M1 carries identity +
- * membership only.
+ * Lives in {@link FaithData}, persisted with the overworld.
+ * <p>
+ * Faith-tree progress (Part 2.5) is PER-FAITH and shared: every member settlement's
+ * devotion rate pools into the active node ({@code researchProgress} maps node id ->
+ * accumulated devotion points; the queue promotes ids in order as the active slot frees
+ * up), completed nodes apply to ALL members, and adopting an established faith inherits
+ * its climbed tree. The pantheon (Part 3) is the list of drawn-god
+ * {@link Constellation}s - the Antiquity cap lives in FaithManager, and star
+ * exclusivity is PER-FAITH ({@code starUsed}). The research and pantheon accessors
+ * return the LIVE mutable collections; FaithManager mutates them directly
+ * (forceUnresearch pattern) and is the only sanctioned mutator of the pantheon.
  */
 public final class Faith {
     private final UUID id;
@@ -23,16 +31,12 @@ public final class Faith {
     private final FaithPath path;
     private final UUID founderSettlement;
     private final Set<UUID> memberSettlements = new HashSet<>();
-    // ── Faith tree (FAITH_PLAN Part 2.5): progress is PER-FAITH, shared — every member
-    // settlement's devotion rate pools into the active node, and completed nodes apply to
-    // ALL members. Adopting an established faith inherits its climbed tree.
     private final Set<String> completedResearches = new HashSet<>();
     private String activeResearch = null;
     private final java.util.Map<String, Double> researchProgress = new java.util.HashMap<>();
     private final java.util.List<String> researchQueue = new java.util.ArrayList<>();
     private final java.util.Map<String, Integer> insightCounters = new java.util.HashMap<>();
     private final Set<String> firedInsights = new HashSet<>();
-    // The pantheon (FAITH_PLAN Part 3): drawn gods. Antiquity cap lives in FaithManager.
     private final java.util.List<Constellation> constellations = new java.util.ArrayList<>();
 
     public Faith(UUID id, String name, FaithPath path, UUID founderSettlement) {
@@ -74,7 +78,6 @@ public final class Faith {
         memberSettlements.remove(settlementId);
     }
 
-    /** Live mutable set — FaithManager mutates it directly (forceUnresearch pattern). */
     public Set<String> completedResearches() {
         return completedResearches;
     }
@@ -87,12 +90,10 @@ public final class Faith {
         this.activeResearch = id;
     }
 
-    /** Live mutable map of node id → accumulated devotion points. */
     public java.util.Map<String, Double> researchProgress() {
         return researchProgress;
     }
 
-    /** Live mutable queue of node ids, promoted in order as the active slot frees up. */
     public java.util.List<String> researchQueue() {
         return researchQueue;
     }
@@ -103,13 +104,10 @@ public final class Faith {
     public void markInsightFired(String key) { firedInsights.add(key); }
     public Set<String> firedInsights() { return Collections.unmodifiableSet(firedInsights); }
 
-    /** Live mutable pantheon list — mutate through FaithManager only. */
     public java.util.List<Constellation> constellations() {
         return constellations;
     }
 
-    /** Star exclusivity is PER-FAITH (FAITH_PLAN): true if any of this faith's
-     *  constellations already claims {@code starId}. */
     public boolean starUsed(int starId) {
         for (Constellation c : constellations) {
             if (c.usesStar(starId)) return true;

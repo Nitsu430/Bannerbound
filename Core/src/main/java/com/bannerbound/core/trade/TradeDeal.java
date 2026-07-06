@@ -11,32 +11,35 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 
 /**
- * One settlement-to-settlement trade deal (TRADE plan / CITY_STATES_PLAN.md P4 adapted to
- * player↔player first). Pure barter: {@code proposerGives} ⇄ {@code recipientGives}, item lines as
- * {@link BarterEntry}. ONE active deal per settlement pair — proposing is blocked while another deal
- * with that partner is open, which keeps the inbox, badges, and escrow trivially unambiguous.
+ * One settlement-to-settlement trade deal (player-to-player barter first, per CITY_STATES_PLAN.md
+ * P4). Pure barter: proposerGives against recipientGives, item lines as {@link BarterEntry}. ONE
+ * active deal per settlement pair - proposing is blocked while another deal with that partner is
+ * open, which keeps the inbox, badges, and escrow trivially unambiguous.
  *
- * <p>Delivery is the "clock" model (no caravan entity yet — that's the physical-courier phase): on
+ * <p>Delivery is the "clock" model (no caravan entity yet; that's the physical-courier phase): on
  * accept each side's goods are withdrawn from its show-for-trading stockpiles when those chunks are
  * loaded (escrow), both shipments then travel on a distance timer, and arrivals deposit into the
- * receiver's trading stockpiles (retrying until loaded). Legs are independent after departure — a
- * defaulted escrow before departure refunds the other side; nothing is ever lost in transit.
+ * receiver's trading stockpiles (retrying until loaded). Legs are independent after departure - a
+ * defaulted escrow before departure refunds the other side; nothing is lost in transit. On each
+ * Leg, null courierId/journeyId with arriveAt 0 mean the abstract clock carries it; a set journeyId
+ * means a walking stocker does and arrival is event-driven. PARTIAL = one leg delivered, one failed
+ * (courier killed - its cargo is loot on the ground).
  *
  * <p>Mutable, persisted inside {@link TradeData}; save/load mirrors the {@code CityState} pattern.
+ * Both the State and Leg.LegState enums persist by ordinal, so only ever APPEND constants.
  */
 public final class TradeDeal {
-    /** Deal lifecycle. Appended-only — ordinals are persisted. */
+    // Appended-only: ordinals are persisted (save format).
     public enum State {
-        PROPOSED,    // awaiting the recipient (or, after a counter, the proposer)
-        COUNTERED,   // terms flipped back to the other side (awaitingParty tracks whose turn)
-        ACCEPTED,    // agreed — legs escrowing (withdrawing when chunks load)
-        IN_TRANSIT,  // both legs escrowed and travelling on the clock
-        DELIVERED,   // both legs deposited
-        FAILED,      // a side defaulted on escrow (goods gone/never loaded) — other side refunded
+        PROPOSED,
+        COUNTERED,
+        ACCEPTED,
+        IN_TRANSIT,
+        DELIVERED,
+        FAILED,
         REJECTED,
         CANCELLED,
         EXPIRED,
-        /** One leg delivered, the other failed (courier killed — its cargo is loot on the ground). */
         PARTIAL;
 
         public static State fromOrdinalOrDefault(int ord) {
@@ -44,26 +47,22 @@ public final class TradeDeal {
             return (ord >= 0 && ord < v.length) ? v[ord] : EXPIRED;
         }
 
-        /** Still negotiable or executing — blocks a second deal with the same partner. */
         public boolean active() {
             return this == PROPOSED || this == COUNTERED || this == ACCEPTED || this == IN_TRANSIT;
         }
     }
 
-    /** One direction's shipment under the clock-delivery model. */
     public static final class Leg {
+        // Appended-only: ordinals are persisted (save format).
         public enum LegState { PENDING, ESCROWED, IN_TRANSIT, ARRIVED_PENDING, DELIVERED, REFUNDING, REFUNDED, FAILED }
 
         public LegState state = LegState.PENDING;
-        /** Items still to move: the giver's full list at escrow, drained by deposits (arrival can be
-         *  partial when the receiver's storage is full/unloaded — retried until empty). */
         public final List<BarterEntry> manifest = new ArrayList<>();
-        public long arriveAt; // game tick a CLOCK shipment lands (0 while a walking courier carries it)
+        public long arriveAt;
 
-        // ─── Walking courier (TradeCourierManager) — null/0 = the abstract clock carries this leg ──
-        public UUID courierId;        // the adopted stocker citizen
-        public UUID journeyId;        // its TraderSimManager session
-        public long courierSearchUntil; // keep looking for a courier until this tick, then clock it
+        public UUID courierId;
+        public UUID journeyId;
+        public long courierSearchUntil;
 
         CompoundTag save() {
             CompoundTag tag = new CompoundTag();
@@ -91,29 +90,25 @@ public final class TradeDeal {
     }
 
     public final UUID id;
-    public UUID proposer;   // settlement that opened the deal
-    public UUID recipient;  // settlement it was sent to
+    public UUID proposer;
+    public UUID recipient;
     public final List<BarterEntry> proposerGives = new ArrayList<>();
     public final List<BarterEntry> recipientGives = new ArrayList<>();
     public State state = State.PROPOSED;
-    /** Whose turn it is to respond (flips on counter). */
     public UUID awaitingParty;
-    /** True while the awaiting party hasn't opened the latest terms — drives the Diplomacy badge. */
     public boolean unreadForAwaiting = true;
     public long proposedAt;
     public long expiresAt;
     public long resolvedAt;
-    /** Escrow must complete by this tick or the deal FAILS and the escrowed side is refunded. */
     public long escrowDeadline;
-    public final Leg proposerLeg = new Leg();   // proposer → recipient shipment
-    public final Leg recipientLeg = new Leg();  // recipient → proposer shipment
+    public final Leg proposerLeg = new Leg();
+    public final Leg recipientLeg = new Leg();
     public String failReasonKey = "";
 
     public TradeDeal(UUID id) {
         this.id = id;
     }
 
-    /** The other party of {@code settlementId} (null if not a participant). */
     public UUID other(UUID settlementId) {
         if (proposer.equals(settlementId)) return recipient;
         if (recipient.equals(settlementId)) return proposer;
@@ -124,12 +119,10 @@ public final class TradeDeal {
         return proposer.equals(settlementId) || recipient.equals(settlementId);
     }
 
-    /** What {@code settlementId} puts on the table in this deal. */
     public List<BarterEntry> givesOf(UUID settlementId) {
         return proposer.equals(settlementId) ? proposerGives : recipientGives;
     }
 
-    /** The shipment {@code settlementId} SENDS (its outbound leg). */
     public Leg legOf(UUID settlementId) {
         return proposer.equals(settlementId) ? proposerLeg : recipientLeg;
     }
@@ -181,7 +174,6 @@ public final class TradeDeal {
         into.manifest.addAll(from.manifest);
     }
 
-    /** Item lines persist as (item id, count); the display-only unit value is recomputed on sync. */
     static ListTag saveEntries(List<BarterEntry> entries) {
         ListTag list = new ListTag();
         for (BarterEntry e : entries) {

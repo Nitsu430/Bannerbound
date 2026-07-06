@@ -22,24 +22,15 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 
 /**
- * Loads culture styles from {@code data/<ns>/culture_styles/*.json}, keyed by file stem.
- *
- * <pre>{@code
- * {
- *   "id": "desert",
- *   "name": "bannerbound.culture_style.desert",
- *   "overrides":      { "minecraft:sandstone": 0.6, "minecraft:oak_log": -0.5 },
- *   "food_overrides": { "minecraft:cactus": 0.8, "minecraft:apple": 0.2 }
- * }
- * }</pre>
- *
- * <p>{@code overrides} are per-block appeal values that replace the base table
- * (see {@link com.bannerbound.core.api.settlement.AppealResolver}); unknown block ids are warned
- * and skipped. {@code food_overrides} are per-item food values that replace the base table from
- * {@link FoodValueLoader} (see {@code FoodValueLoader.effective}) — same semantics for items.
- * Both blocks are optional; omit either to leave the corresponding base table untouched. The
- * {@code "id"} defaults to the file stem and {@code "name"} to
- * {@code bannerbound.culture_style.<id>} when omitted.
+ * Loads culture styles from data/<ns>/culture_styles/*.json, keyed by file stem, and serves them
+ * via get/all/ids. Each file carries: "id" (defaults to the file stem), "name" (a LITERAL display
+ * string rendered with Component.literal on the settle screen, NOT a lang key; defaults to the id
+ * so a missing name stays readable rather than a dead translation key), "overrides" (per-block
+ * appeal values that replace the base AppealResolver table), and "food_overrides" (per-item food
+ * values that replace the base FoodValueLoader table -> effective). Both maps are optional; omit
+ * either to leave the base table untouched. Unknown block/item ids are warned and skipped, and
+ * food override values are clamped at 0 (no negative food, matching FoodValueLoader). ids() is
+ * sorted to feed the founding picker and the default fallback.
  */
 public class CultureStyleLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "culture_styles";
@@ -59,9 +50,6 @@ public class CultureStyleLoader extends SimpleJsonResourceReloadListener {
             try {
                 JsonObject obj = entry.getValue().getAsJsonObject();
                 String id = GsonHelper.getAsString(obj, "id", key.getPath());
-                // "name" is now a literal display string (rendered via Component.literal on the
-                // settle screen), NOT a lang key. Fall back to the id when absent so a missing
-                // name shows something readable rather than a dead translation key.
                 String nameKey = GsonHelper.getAsString(obj, "name", id);
 
                 Map<Block, Float> overrides = new HashMap<>();
@@ -88,7 +76,6 @@ public class CultureStyleLoader extends SimpleJsonResourceReloadListener {
                                 o.getKey(), key);
                             continue;
                         }
-                        // Clamp at 0 — no negative food values (matches the base FoodValueLoader rule).
                         float v = Math.max(0f, o.getValue().getAsFloat());
                         foodOverrides.put(BuiltInRegistries.ITEM.get(rl), v);
                     }
@@ -111,7 +98,6 @@ public class CultureStyleLoader extends SimpleJsonResourceReloadListener {
         return STYLES;
     }
 
-    /** All style ids, sorted — used to populate the founding picker and the default fallback. */
     public static List<String> ids() {
         List<String> ids = new ArrayList<>(STYLES.keySet());
         Collections.sort(ids);

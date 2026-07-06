@@ -17,25 +17,22 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity for the Tanning Rack — holds ONE hide at a time and walks the scrape → cure → dry
- * pipeline (one rack = one hide in progress, like the pottery slab). Phases:
- * <ul>
- *   <li>{@link Phase#EMPTY} — nothing on the rack.</li>
- *   <li>{@link Phase#RAW} — a quality-tagged raw hide is laid out; right-clicking with a knife opens
- *       the scrape minigame, which consumes it for {@code scraped_hide × quality}.</li>
- *   <li>{@link Phase#DRYING} — a cured hide is drying; a server timer counts down.</li>
- *   <li>{@link Phase#DRY} — drying finished; right-click empty-handed to take the leather.</li>
- * </ul>
+ * Block entity for the Tanning Rack: ONE hide in progress at a time (like the pottery slab), walked
+ * through EMPTY -> RAW -> DRYING -> DRY. RAW keeps the quality-tagged raw hide itself in {@code held}
+ * so its quality survives; right-clicking it with a knife opens the scrape minigame, which consumes
+ * it for scraped_hide x quality. DRYING starts when a cured hide is placed and counts down DRY_TICKS
+ * (1200 = ~60s); DRY yields leather on an empty-handed right-click. Phase transitions are driven by
+ * TanningRackBlock and the Tannery job; dryProgress() (0..1) drives the cured->leather render
+ * cross-fade. setChanged() doubles as the client sync point (sendBlockUpdated + full-state update
+ * tag); an unknown saved phase falls back to EMPTY on load.
  */
 @ApiStatus.Internal
 public class TanningRackBlockEntity extends BlockEntity {
-    /** Ticks a cured hide takes to dry into leather (~60s). */
     public static final int DRY_TICKS = 1200;
 
     public enum Phase { EMPTY, RAW, DRYING, DRY }
 
     private Phase phase = Phase.EMPTY;
-    /** The laid-out hide: the raw hide (RAW) so we keep its quality; empty otherwise. */
     private ItemStack held = ItemStack.EMPTY;
     private int dryTicks = 0;
 
@@ -47,7 +44,6 @@ public class TanningRackBlockEntity extends BlockEntity {
         return phase;
     }
 
-    /** The item currently shown on the rack (raw hide / cured hide / finished leather), for the renderer. */
     public ItemStack getDisplayStack() {
         return switch (phase) {
             case RAW -> held;
@@ -61,9 +57,6 @@ public class TanningRackBlockEntity extends BlockEntity {
         return held;
     }
 
-    // ─── Phase transitions (called from TanningRackBlock / Tannery) ───────────────────────────────
-
-    /** Lay a raw hide on an empty rack. */
     public boolean placeRaw(ItemStack rawHide) {
         if (phase != Phase.EMPTY) return false;
         held = rawHide.copyWithCount(1);
@@ -72,7 +65,6 @@ public class TanningRackBlockEntity extends BlockEntity {
         return true;
     }
 
-    /** Lay a cured hide on an empty rack and start the drying timer. */
     public boolean placeCured() {
         if (phase != Phase.EMPTY) return false;
         phase = Phase.DRYING;
@@ -82,7 +74,6 @@ public class TanningRackBlockEntity extends BlockEntity {
         return true;
     }
 
-    /** Take whatever the rack currently holds back into hand, resetting to empty. */
     public ItemStack retrieve() {
         ItemStack out = switch (phase) {
             case RAW -> held;
@@ -94,7 +85,6 @@ public class TanningRackBlockEntity extends BlockEntity {
         return out;
     }
 
-    /** Consume the raw hide after a finished scrape; the caller emits the scraped hides. */
     public void clear() {
         phase = Phase.EMPTY;
         held = ItemStack.EMPTY;
@@ -110,19 +100,15 @@ public class TanningRackBlockEntity extends BlockEntity {
         return phase == Phase.DRY;
     }
 
-    /** Drying progress 0..1 (0 = just placed, 1 = dry) — drives the cured→leather render cross-fade. */
     public float dryProgress() {
         if (phase == Phase.DRY) return 1.0F;
         if (phase != Phase.DRYING) return 0.0F;
         return 1.0F - dryTicks / (float) DRY_TICKS;
     }
 
-    // ─── Ticking (drying timer + ambient particles) ───────────────────────────────────────────────
-
     public static void tick(Level level, BlockPos pos, BlockState state, TanningRackBlockEntity be) {
         if (be.phase != Phase.DRYING) return;
-        // Both sides count down so the client fade stays smooth without per-tick network sync; the
-        // server is authoritative for the DRYING → DRY transition (and re-syncs at the end).
+        // Both sides count down (smooth client fade, no per-tick sync); the server alone commits DRYING -> DRY and re-syncs.
         if (be.dryTicks > 0) be.dryTicks--;
         if (level.isClientSide) {
             if (level.random.nextInt(5) == 0) {
@@ -137,8 +123,6 @@ public class TanningRackBlockEntity extends BlockEntity {
             be.setChanged();
         }
     }
-
-    // ─── NBT + client sync ───────────────────────────────────────────────────────────────────────
 
     @Override
     public void setChanged() {

@@ -22,8 +22,12 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Client-side mirror of the server's ore disguise table. Tracks which ore IDs are currently
- * "disguised" for the local player (i.e. their settlement lacks the reveal flag) and caches
- * the disguise BakedModel so the chunk mesher's per-block lookup stays fast.
+ * "disguised" for the local player (their settlement lacks the reveal flag, per
+ * {@link ClientResearchState#hasFlag}) and caches the disguise BakedModel so the chunk mesher's
+ * per-block lookup stays fast. {@code recomputeActiveDisguises()} rebuilds the active set whenever
+ * the disguise list or research flags change; {@code invalidateNearbySections()} then re-bakes
+ * every section in render distance via {@code setSectionDirty} (deliberately NOT
+ * {@code LevelRenderer.allChanged()}, which tears down GPU resources) to refresh ore visuals.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -46,11 +50,6 @@ public final class ClientOreState {
         invalidateNearbySections();
     }
 
-    /**
-     * Recompute the set of ores that are currently disguised for the local player, based on
-     * the player's settlement's active research flags. Called whenever the disguise list or
-     * the player's research state changes.
-     */
     public static void recomputeActiveDisguises() {
         Set<String> active = new HashSet<>();
         for (Map.Entry<String, OreDisguise> e : DISGUISES.entrySet()) {
@@ -94,11 +93,6 @@ public final class ClientOreState {
         MODEL_CACHE.clear();
     }
 
-    /**
-     * Marks every section within render distance dirty so the chunk mesher re-bakes them next
-     * frame — used after disguise list or research state changes to refresh ore visuals
-     * without the heavyweight {@code LevelRenderer.allChanged()} (which drops GPU resources).
-     */
     public static void invalidateNearbySections() {
         try {
             Minecraft mc = Minecraft.getInstance();

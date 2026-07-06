@@ -2,7 +2,13 @@ package com.bannerbound.core.crisis;
 
 import java.util.List;
 
-/** Data-pack definition for a scripted crisis. */
+/**
+ * Data-pack definition of one scripted crisis: presentation (title/headline/body/background art
+ * layers/sound/chronicle entry), a Trigger describing when it fires, its CrisisChoice branches, and
+ * the compliance/resentment CompletionEffects applied on resolution. Loaded by CrisisDefinitionLoader
+ * and driven by CrisisManager. The nested records' compact constructors null-coerce and clamp every
+ * field so malformed JSON can never produce nulls or out-of-range art values.
+ */
 public record CrisisDefinition(
     String id,
     String category,

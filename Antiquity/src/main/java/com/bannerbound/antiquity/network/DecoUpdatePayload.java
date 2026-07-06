@@ -10,7 +10,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** Server → client: one face's decoration changed (apply or clear). Sent to players tracking the
+/** Server -> client: one face's decoration changed (apply or clear). Sent to players tracking the
  *  chunk. A cleared face is carried as an entry whose {@code deco.isEmpty()}. */
 @ApiStatus.Internal
 public record DecoUpdatePayload(FaceDecoEntry entry) implements CustomPacketPayload {

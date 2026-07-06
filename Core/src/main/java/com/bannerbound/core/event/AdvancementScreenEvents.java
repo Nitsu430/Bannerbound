@@ -14,7 +14,7 @@ import net.neoforged.neoforge.client.event.ScreenEvent;
 /**
  * Replaces vanilla Minecraft advancements with the Chronicle. Whenever something tries to open the
  * vanilla {@link AdvancementsScreen} (the 'L' key, the pause-menu button, etc.) we redirect to the
- * Chronicle instead — the mod's own progression/onboarding codex. Vanilla advancements are not part
+ * Chronicle instead - the mod's own progression/onboarding codex. Vanilla advancements are not part
  * of the Bannerbound experience.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)

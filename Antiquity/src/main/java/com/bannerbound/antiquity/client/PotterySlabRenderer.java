@@ -21,7 +21,15 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-/** Renders the pottery slab's clay pile, selectable output, and spinning work-in-progress clay. */
+/**
+ * BER for the pottery slab: draws the loose ingredient pile (3x3 cells, stacked layers with a
+ * slide-in animation from the insert direction), ghost-preview ingredients/result through
+ * {@link GhostItemRenderer} plus {@link GhostArrowRenderer} browse arrows when 2+ recipes match,
+ * the floating finished result, and the spinning work-in-progress clay. The WIP spin angle comes
+ * from {@link PotterySpinState} while the local player has this block's wheel screen open (so the
+ * clay tracks the mouse and stops bobbing), otherwise a steady game-time fallback. Per-item yaw
+ * jitter is a deterministic hash of cell/layer so piles do not reshuffle every frame.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class PotterySlabRenderer implements BlockEntityRenderer<PotterySlabBlockEntity> {

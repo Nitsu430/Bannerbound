@@ -2,7 +2,11 @@ package com.bannerbound.core.crisis;
 
 import java.util.List;
 
-/** One data-authored checklist row attached to a crisis choice. */
+/**
+ * One data-authored checklist row attached to a crisis choice; interpreted by
+ * CrisisManager.evaluateObjective, where which fields matter depends on {@code type}
+ * (e.g. source/targetRate for rate gates, researchId for research, jobType for worker counts).
+ */
 public record CrisisObjectiveDefinition(
     String id,
     String type,

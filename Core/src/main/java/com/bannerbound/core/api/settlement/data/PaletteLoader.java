@@ -23,22 +23,18 @@ import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.level.block.Block;
 
 /**
- * Loads culture <b>palettes</b> from {@code data/<ns>/palettes/*.json} and doubles as the palette
- * registry. Each file is one palette:
- *
- * <pre>{@code
- * { "id": "brown_haven", "name": "Brown Haven",
- *   "blocks": { "minecraft:dirt": 0.15, "minecraft:coarse_dirt": 0.10, "minecraft:oak_log": 0.20 } }
- * }</pre>
- *
- * <p>Block ids resolve to {@link Block} instances at load time; bonuses are clamped to
- * {@code [-1, 1]}; the {@code blocks} map preserves authoring order (so the UI icon row is stable).
- * Mirror of {@link BlockAppealLoader} / {@link CultureStyleLoader}. A palette is <i>available</i> to
- * a settlement when a completed research lists its unlock flag — see {@link #availableFor}.
+ * Loads culture palettes from data/<ns>/palettes/*.json and doubles as the palette registry
+ * (get/all/availableFor). Each file is one palette: "id" (defaults to the file stem), "name"
+ * (defaults to the id), and "blocks" (block id -> bonus). Block ids resolve to Block instances at
+ * load time (unknown ids warned and skipped), bonuses are clamped to [-1, 1], and the blocks map
+ * is a LinkedHashMap preserving authoring order so the UI icon row stays stable. Mirror of
+ * BlockAppealLoader / CultureStyleLoader. A palette is available to a settlement when a completed
+ * science/culture research lists its unlock flag UNLOCK_FLAG_PREFIX + id ("unlock.palette.<id>",
+ * set via a node's "unlocks": {"palette": ["id"]}); availableFor walks BY_ID in order and returns
+ * the unlocked ids for the UI "Available" list.
  */
 public class PaletteLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "palettes";
-    /** Flag prefix a culture/research node sets via {@code "unlocks": {"palette": ["id"]}}. */
     public static final String UNLOCK_FLAG_PREFIX = "unlock.palette.";
     private static final Gson GSON = new Gson();
     private static volatile Map<String, Palette> BY_ID = Collections.emptyMap();
@@ -55,7 +51,6 @@ public class PaletteLoader extends SimpleJsonResourceReloadListener {
             ResourceLocation key = entry.getKey();
             try {
                 JsonObject obj = entry.getValue().getAsJsonObject();
-                // Default the id to the file stem so a missing "id" still works.
                 String stem = key.getPath();
                 int slash = stem.lastIndexOf('/');
                 if (slash >= 0) stem = stem.substring(slash + 1);
@@ -90,8 +85,6 @@ public class PaletteLoader extends SimpleJsonResourceReloadListener {
         return BY_ID;
     }
 
-    /** Ordered list of palette ids currently available to {@code settlement} — i.e. those a
-     *  completed science/culture research has unlocked. Drives the "Available" list in the UI. */
     public static List<String> availableFor(Settlement settlement) {
         List<String> out = new ArrayList<>();
         if (settlement == null) return out;

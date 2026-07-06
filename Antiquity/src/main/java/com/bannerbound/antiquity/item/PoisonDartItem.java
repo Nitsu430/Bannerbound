@@ -13,13 +13,12 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 
 /**
- * A coated blowdart for any {@link PoisonType}. Thrown by hand it's deliberately weak and short-range
- * (a desperation option); the blowgun fires the same dart far faster and straighter. One generic class
- * serves every poison — register a new dart with its {@code PoisonType} and it works with the blowgun.
+ * A coated blowdart for any {@link PoisonType}. Thrown by hand it's deliberately weak and
+ * short-range (a desperation option): slow speed, wild inaccuracy, and a cooldown are all tuned so
+ * the blowgun (2-3x this speed, tight aim) stays the real delivery. One generic class serves every
+ * poison - register a new dart with its {@code PoisonType} and it works with the blowgun.
  */
 public class PoisonDartItem extends Item implements PoisonDart {
-    // Hand-throwing is a feeble last resort: very short range (drops fast), wildly inaccurate, slow.
-    // The blowgun (2–3× this speed, tight aim) is the real delivery.
     private static final float DART_SPEED = 0.9F;
     private static final float DART_INACCURACY = 13.0F;
     private static final int COOLDOWN_TICKS = 24;

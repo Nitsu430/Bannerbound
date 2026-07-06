@@ -8,8 +8,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: the player clicked the town hall Faith button while the Choose-Faith window is
- * open — send back a fresh {@link OpenChooseFaithScreenPayload} snapshot.
+ * C->S: the player clicked the town hall Faith button while the Choose-Faith window is open --
+ * send back a fresh OpenChooseFaithScreenPayload snapshot.
  */
 public record RequestFaithScreenPayload() implements CustomPacketPayload {
 

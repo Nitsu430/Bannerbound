@@ -29,73 +29,64 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * The "catch" left behind when a thrown spear kills a fish (see {@code HuntingEvents}): a
- * free-floating object that renders the spear angled in the water with the fish impaled on its tip
- * (see {@code SpearedFishEntityRenderer}), bobs at the surface, and — on walk-over pickup — grants
- * the {@link #payload}: the spear plus everything the fish would have dropped, in one go.
+ * The "catch" left behind when a thrown spear kills a fish (spawned by {@code HuntingEvents}): a
+ * standalone entity that renders the spear angled in the water with the fish impaled on its tip
+ * ({@code SpearedFishEntityRenderer}), bobs at the surface, and on walk-over pickup grants the
+ * server-only {@link #payload} - a copy of the spear plus everything the fish would have dropped -
+ * in one go. Unlike a spear stuck in a LIVING mob (which must be a render layer on the body), a
+ * dedicated entity is correct here because the fish is dead and follows nothing. The pierce
+ * yaw/pitch are synced so the renderer angles the catch the way the spear actually struck.
  *
- * <p>It is a standalone entity that follows nothing (the fish is dead), so — unlike a spear stuck in
- * a LIVING mob, which must be a render layer on the body — a dedicated entity is correct here. The
- * float behaviour mirrors {@code FisherBobber}: snap to the water surface on first contact, then a
- * gentle sin-bob; out of water it falls under gravity and rests like a dropped item.
+ * <p>Float physics mirror {@code FisherBobber}: buoyant rise while submerged, then settle
+ * {@code SURFACE_SINK} (0.12) below the water block's top so {@code blockPosition()} stays inside
+ * the water block - resting exactly at the surface would flip the in-water test each tick and
+ * re-fire the splash sound. Out of water it falls under gravity and rests like a dropped item.
+ * Catches self-discard after {@code Config.SPEAR_CATCH_LIFETIME_TICKS}.
+ *
+ * <p>Tethering/reeling: the thrower (a player, or a spear-fisher citizen NPC reusing this entity)
+ * is synced BOTH as a UUID (server reel + NBT) and as a live entity id, because the client can only
+ * resolve players by UUID - the entity id is what lets the client find a citizen owner so
+ * {@code RopeRenderer} can draw the rope back to its hand. Reeling is synced and homed on BOTH
+ * sides so the pull-in is visible (the client would otherwise keep floating the catch); only the
+ * server grants it on arrival. A player owner receives the whole payload to inventory; a citizen
+ * owner deposits only the fish drops into its job drop-off and credits the settlement's "fishing"
+ * food production, so the Starvation crisis's spear-fishing path and the Town Hall food stats see
+ * spear-caught fish as income (mirrors the rod FisherWorkGoal).
  */
 public class SpearedFishEntity extends Entity {
-    /** Gravity per tick while airborne / out of water (matches FisherBobber's mild arc). */
     private static final float GRAVITY = 0.04F;
-    /** Pickup grace after spawning so a fresh catch isn't grabbed before it surfaces. */
     private static final int DEFAULT_PICKUP_DELAY = 40;
-    /** Rest this far below the water's block-top. Keeps blockPosition() inside the water block so the
-     *  bob never dips into the air block above — which would flip the in-water test each tick and
-     *  re-fire the surface splash sound. */
     private static final double SURFACE_SINK = 0.12;
 
-    /** The spear item — synced so the renderer draws the right spear model. */
     private static final EntityDataAccessor<ItemStack> DATA_SPEAR =
         SynchedEntityData.defineId(SpearedFishEntity.class, EntityDataSerializers.ITEM_STACK);
-    /** Registry id of the speared fish's EntityType (e.g. "minecraft:cod") — picks the model/texture. */
     private static final EntityDataAccessor<String> DATA_FISH_TYPE =
         SynchedEntityData.defineId(SpearedFishEntity.class, EntityDataSerializers.STRING);
-    /** Tropical-fish packed variant (0 for non-tropical). Reserved for full variant rendering. */
     private static final EntityDataAccessor<Integer> DATA_FISH_VARIANT =
         SynchedEntityData.defineId(SpearedFishEntity.class, EntityDataSerializers.INT);
-    /** Whether a plant rope still connects this catch to its thrower — synced so the renderer draws
-     *  the green rope back to that player's hand (see {@code RopeRenderer}). */
     private static final EntityDataAccessor<Boolean> DATA_TETHERED =
         SynchedEntityData.defineId(SpearedFishEntity.class, EntityDataSerializers.BOOLEAN);
-    /** The thrower (rope holder) — synced so the client can resolve their hand for the rope. */
     private static final EntityDataAccessor<Optional<UUID>> DATA_OWNER =
         SynchedEntityData.defineId(SpearedFishEntity.class, EntityDataSerializers.OPTIONAL_UUID);
-    /** The thrower's network entity id — synced so the CLIENT can resolve the owner (player OR a citizen
-     *  NPC) via {@code level.getEntity(int)} to draw the rope back to its hand. {@code -1} = none. UUID
-     *  alone isn't enough: the client can only look up players by UUID, not citizens. */
     private static final EntityDataAccessor<Integer> DATA_OWNER_ENTITY_ID =
         SynchedEntityData.defineId(SpearedFishEntity.class, EntityDataSerializers.INT);
-    /** Being reeled in — SYNCED so the client homes the catch too (otherwise the client keeps
-     *  floating it and the pull-in never shows). */
     private static final EntityDataAccessor<Boolean> DATA_REELING =
         SynchedEntityData.defineId(SpearedFishEntity.class, EntityDataSerializers.BOOLEAN);
-    /** Flight heading/pitch the spear had when it pierced the fish — synced so the renderer angles the
-     *  whole speared-fish the way it actually struck, not a fixed planted pose. */
     private static final EntityDataAccessor<Float> DATA_PIERCE_YAW =
         SynchedEntityData.defineId(SpearedFishEntity.class, EntityDataSerializers.FLOAT);
     private static final EntityDataAccessor<Float> DATA_PIERCE_PITCH =
         SynchedEntityData.defineId(SpearedFishEntity.class, EntityDataSerializers.FLOAT);
 
-    /** Speed (blocks/tick) the catch flies back to the owner while being reeled in. */
     private static final double REEL_SPEED = 1.2;
 
-    /** Server-only: the exact items handed over on pickup (spear copy + the fish's drops). */
     private final List<ItemStack> payload = new ArrayList<>();
     private int pickupDelay;
-    /** Once we've snapped to the water surface, don't keep re-snapping every tick. */
     private boolean snappedToSurface;
 
     public SpearedFishEntity(EntityType<? extends SpearedFishEntity> type, Level level) {
         super(type, level);
     }
 
-    /** Build a catch at {@code (x,y,z)} carrying the spear, the fish's registry id/variant, and the
-     *  fish's drops. The payload granted on pickup = the spear + every (non-empty) drop. */
     public SpearedFishEntity(Level level, double x, double y, double z, ItemStack spear,
                              String fishType, int fishVariant, List<ItemStack> drops) {
         this(BannerboundAntiquity.SPEARED_FISH.get(), level);
@@ -110,7 +101,6 @@ public class SpearedFishEntity extends Entity {
             }
         }
         this.pickupDelay = DEFAULT_PICKUP_DELAY;
-        // Heading is set from the pierce direction via setPierce(); default 0 until then.
     }
 
     @Override
@@ -126,7 +116,6 @@ public class SpearedFishEntity extends Entity {
         builder.define(DATA_PIERCE_PITCH, 0.0F);
     }
 
-    /** Orient the catch the way the spear was travelling when it pierced the fish. */
     public void setPierce(float yaw, float pitch) {
         this.entityData.set(DATA_PIERCE_YAW, yaw);
         this.entityData.set(DATA_PIERCE_PITCH, pitch);
@@ -145,41 +134,30 @@ public class SpearedFishEntity extends Entity {
         return this.entityData.get(DATA_REELING);
     }
 
-    /** Mark this catch as rope-tethered to {@code owner} (the thrower) — draws the rope + reelable.
-     *  Stores both the UUID (server reel + NBT) and the live entity id (client rope resolution, which
-     *  needs an id to find a citizen NPC owner the client can't look up by UUID). */
     public void setTether(Entity owner) {
         this.entityData.set(DATA_TETHERED, true);
         this.entityData.set(DATA_OWNER, Optional.ofNullable(owner == null ? null : owner.getUUID()));
         this.entityData.set(DATA_OWNER_ENTITY_ID, owner == null ? -1 : owner.getId());
     }
 
-    /** True if a rope still connects this catch to its thrower. */
     public boolean isTethered() {
         return this.entityData.get(DATA_TETHERED);
     }
 
-    /** The rope holder's UUID, if tethered. */
     public Optional<UUID> getOwnerUUID() {
         return this.entityData.get(DATA_OWNER);
     }
 
-    /** True if {@code player} is the thrower this catch is tethered to. */
     public boolean isTetheredTo(Player player) {
         return isTethered() && getOwnerUUID().map(id -> id.equals(player.getUUID())).orElse(false);
     }
 
-    /** Begin reeling this catch back to its thrower (synced so the client shows the pull-in). */
     public void startReeling() {
         this.entityData.set(DATA_REELING, true);
     }
 
-    /** Resolve the tether owner as any entity — a player (the original feature) OR a citizen NPC (the
-     *  spear-fisher reusing this catch). Server-side uses the full entity lookup so a {@code CitizenEntity}
-     *  owner resolves; client-side only players are needed (for the rope render) so a player lookup is fine. */
     private Entity getOwnerEntity() {
-        // Prefer the synced entity id — it resolves on BOTH sides (incl. a citizen NPC on the client,
-        // which can't be found by UUID). Fall back to the UUID for older catches / post-reload.
+        // Entity id first (resolves citizen owners on the client; UUID cannot) - UUID is only a reload fallback.
         int eid = this.entityData.get(DATA_OWNER_ENTITY_ID);
         if (eid != -1) {
             Entity e = this.level().getEntity(eid);
@@ -191,22 +169,18 @@ public class SpearedFishEntity extends Entity {
         return this.level().getPlayerByUUID(id.get());
     }
 
-    /** The tether owner (player or citizen) resolved for rendering the rope, or null. */
     public Entity getTetherOwner() {
         return getOwnerEntity();
     }
 
-    /** The spear item — for the renderer (and the first payload entry). */
     public ItemStack getSpearItem() {
         return this.entityData.get(DATA_SPEAR);
     }
 
-    /** Registry id of the impaled fish's EntityType (e.g. "minecraft:salmon"). */
     public String getFishType() {
         return this.entityData.get(DATA_FISH_TYPE);
     }
 
-    /** Tropical-fish packed variant (0 if not a tropical fish). */
     public int getFishVariant() {
         return this.entityData.get(DATA_FISH_VARIANT);
     }
@@ -214,7 +188,7 @@ public class SpearedFishEntity extends Entity {
     @Override
     public void tick() {
         super.tick();
-        // Capture last-tick position for smooth client interpolation (we move below).
+        // Capture last-tick position BEFORE moving so the client interpolates smoothly.
         this.xo = this.getX();
         this.yo = this.getY();
         this.zo = this.getZ();
@@ -223,7 +197,7 @@ public class SpearedFishEntity extends Entity {
         }
 
         if (isReeling() && reelTowardOwner()) {
-            return; // being pulled in (both sides home so the client shows it) — skip float/bob
+            return;
         }
 
         Vec3 velocity = this.getDeltaMovement();
@@ -232,23 +206,20 @@ public class SpearedFishEntity extends Entity {
         if (inWater) {
             boolean submerged = this.level().getFluidState(pos.above()).is(FluidTags.WATER);
             if (submerged) {
-                // Buoyant: a speared fish floats — rise toward the surface, dampening drift.
                 this.snappedToSurface = false;
                 this.setDeltaMovement(velocity.x * 0.85, 0.08, velocity.z * 0.85);
             } else {
-                // Top water block reached → settle just UNDER the waterline (SURFACE_SINK) so the
-                // bob stays inside the water block and never re-triggers the splash sound.
+                // Rest UNDER the waterline (SURFACE_SINK) or the bob re-triggers the splash sound.
                 double surfaceY = Math.floor(this.getY()) + 1.0;
                 double restY = surfaceY - SURFACE_SINK;
                 if (!this.snappedToSurface) {
-                    this.snappedToSurface = true; // surfaced once → splash, then stay quiet
+                    this.snappedToSurface = true;
                     if (!this.level().isClientSide) {
                         this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
                             SoundEvents.FISHING_BOBBER_SPLASH, SoundSource.NEUTRAL, 0.3F,
                             1.0F + (this.random.nextFloat() - this.random.nextFloat()) * 0.4F);
                     }
                 }
-                // Spring toward the rest line + a gentle sin-bob; dampen horizontal drift.
                 double spring = (restY - this.getY()) * 0.2;
                 double bob = Math.sin(this.tickCount * 0.1) * 0.008;
                 this.setDeltaMovement(velocity.x * 0.6, spring + bob, velocity.z * 0.6);
@@ -257,12 +228,11 @@ public class SpearedFishEntity extends Entity {
                 }
             }
         } else {
-            this.snappedToSurface = false; // out of water (e.g. on land) → fall and rest like an item
+            this.snappedToSurface = false;
             this.setDeltaMovement(velocity.x * 0.98, velocity.y - GRAVITY, velocity.z * 0.98);
         }
         this.move(MoverType.SELF, this.getDeltaMovement());
         if (this.onGround()) {
-            // Rest like a dropped item on land — kill horizontal slide.
             Vec3 grounded = this.getDeltaMovement();
             this.setDeltaMovement(grounded.x * 0.6, grounded.y, grounded.z * 0.6);
         }
@@ -272,21 +242,16 @@ public class SpearedFishEntity extends Entity {
                 tryPickup();
             }
             if (this.tickCount >= Config.SPEAR_CATCH_LIFETIME_TICKS.get()) {
-                this.discard(); // don't litter forever
+                this.discard();
             }
         }
     }
 
-    /**
-     * Home toward the thrower. Runs on BOTH sides — the client moves the catch so the pull-in is
-     * visible (it would otherwise keep floating it); only the server grants the catch + ends the
-     * reel on arrival. Returns false (so the caller falls back to float physics) if there's no owner.
-     */
     private boolean reelTowardOwner() {
         Entity owner = getOwnerEntity();
         if (owner == null || !owner.isAlive()) {
             if (!this.level().isClientSide) {
-                this.entityData.set(DATA_REELING, false); // lost the owner → resume floating
+                this.entityData.set(DATA_REELING, false);
             }
             return false;
         }
@@ -294,8 +259,6 @@ public class SpearedFishEntity extends Entity {
         if (!this.level().isClientSide) {
             this.pickupDelay = 0;
             if (toOwner.length() < 1.2) {
-                // Player throw → straight to inventory (original feature). Spear-fisher NPC → deposit
-                // the fish into its job drop-off. Any other owner type: just stop reeling and float.
                 if (owner instanceof Player player) {
                     grantTo(player);
                 } else if (owner instanceof com.bannerbound.core.entity.CitizenEntity citizen) {
@@ -313,7 +276,6 @@ public class SpearedFishEntity extends Entity {
         return true;
     }
 
-    /** The usual floating-bobber surface fizz — a few bubbles (and the odd splash) at the waterline. */
     private void spawnSurfaceBubbles(ServerLevel level, double surfaceY) {
         if (this.tickCount % 5 != 0) {
             return;
@@ -326,7 +288,6 @@ public class SpearedFishEntity extends Entity {
         }
     }
 
-    /** Walk-over pickup: a nearby living player collects the whole catch (server-authoritative). */
     private void tryPickup() {
         for (Player player : this.level().getEntitiesOfClass(Player.class,
                 this.getBoundingBox().inflate(0.6, 0.4, 0.6))) {
@@ -341,7 +302,7 @@ public class SpearedFishEntity extends Entity {
         for (ItemStack stack : this.payload) {
             ItemStack give = stack.copy();
             if (!player.getInventory().add(give)) {
-                player.drop(give, false); // inventory full → drop at the player so nothing's lost
+                player.drop(give, false);
             }
         }
         this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
@@ -350,16 +311,10 @@ public class SpearedFishEntity extends Entity {
         this.discard();
     }
 
-    /**
-     * Reel-in arrival for a spear-fisher NPC: deposit the fish drops into the citizen's job drop-off.
-     * Skips {@code payload[0]} — that's the spear, which for an NPC is a reusable equipped tool that
-     * never left {@code getJobTool()} (the thrown spear was only a copy). Depositing it would duplicate
-     * a spear every catch, so only the fish drops are stored; overflow spills at the catch.
-     */
     private void grantToDepot(com.bannerbound.core.entity.CitizenEntity citizen) {
         net.minecraft.world.Container depot = com.bannerbound.core.entity.DropOffContainers.resolveJobDepot(citizen);
         int fishCount = 0;
-        for (int i = 1; i < this.payload.size(); i++) {   // i=0 is the spear (the reusable tool) — skip it
+        for (int i = 1; i < this.payload.size(); i++) {   // i=0 is the spear: depositing it would dupe the NPC's reusable tool each catch
             ItemStack give = this.payload.get(i).copy();
             if (give.isEmpty()) continue;
             fishCount += give.getCount();
@@ -367,9 +322,6 @@ public class SpearedFishEntity extends Entity {
                 : com.bannerbound.core.entity.DropOffContainers.insert(depot, give);
             if (!leftover.isEmpty()) this.spawnAtLocation(leftover);
         }
-        // Credit the "fishing" food-production source (mirrors the rod FisherWorkGoal) so the Starvation
-        // crisis's spear-fishing path and the Town Hall food stats see spear-caught fish as income —
-        // without this, food_sustained's "is fishing actively producing?" check never trips for spears.
         com.bannerbound.core.api.settlement.Settlement settlement = citizen.getSettlement();
         if (settlement != null && fishCount > 0) {
             settlement.addFoodProduced("fishing", fishCount);
@@ -425,6 +377,6 @@ public class SpearedFishEntity extends Entity {
 
     @Override
     public boolean isAttackable() {
-        return false; // it's a pickup, not a punching bag
+        return false;
     }
 }

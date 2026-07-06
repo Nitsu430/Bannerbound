@@ -37,22 +37,21 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * Carpenter's Table — a 2-block multiblock: a MASTER cell (holds the block entity, renders the full
- * 32px-wide model that extends one block toward {@code FACING}) plus a SECONDARY cell at
- * {@code master + FACING} (renders nothing, just occupies + forwards interactions). Formed by placing
- * two logs and right-clicking with a saw (see {@code AntiquityEvents.onFormWoodworkingTable}); the item
- * places both halves bed-style. Interactions on either half resolve to the master's block entity.
- * <ul>
- *   <li>Right-click with logs → place one on the budget pile (sneak = the whole stack).</li>
- *   <li>Right-click with the saw → start the saw minigame (needs a queued list).</li>
- *   <li>Right-click empty-handed → take the last (uncommitted) log back; sneak = undo last queue entry.</li>
- * </ul>
+ * Carpenter's Table - a 2-block multiblock: the MAIN (master) cell holds the block entity and renders
+ * the full 32px-wide model extending one block toward FACING (away from the placer); the secondary
+ * cell at master + FACING renders nothing and just occupies space, resolving every interaction back
+ * to the master via masterPos. Formed by placing two logs and right-clicking with a saw (see
+ * AntiquityEvents.onFormWoodworkingTable); the item places both halves bed-style, and breaking either
+ * half tears down the other and - from the master side, exactly once - drops the log budget plus the
+ * two structure logs and aborts any saw session. Interactions: right-click with logs adds one to the
+ * budget pile (sneak = the whole stack); the bone saw starts the saw minigame (Carpentry.startSawing,
+ * needs a queued build list); empty-hand takes the last uncommitted log back (sneak = undo the last
+ * queue entry). Everything is gated by WorkBlockLocks so players cannot disturb an NPC carpenter
+ * mid-craft. The shape is the tabletop slab (y 12-15px), rotation-invariant so both cells share it.
  */
 public class WoodworkingTableBlock extends HorizontalDirectionalBlock implements EntityBlock {
     public static final MapCodec<WoodworkingTableBlock> CODEC = simpleCodec(WoodworkingTableBlock::new);
-    /** True for the master cell (model + block entity); false for the secondary (north) cell. */
     public static final BooleanProperty MAIN = BooleanProperty.create("main");
-    /** The tabletop slab (y 12–15px), shared by both cells — rotation-invariant, so no per-facing shape. */
     public static final VoxelShape SHAPE = Block.box(0.0, 12.0, 0.0, 16.0, 15.0, 16.0);
 
     public WoodworkingTableBlock(BlockBehaviour.Properties properties) {
@@ -72,7 +71,7 @@ public class WoodworkingTableBlock extends HorizontalDirectionalBlock implements
 
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
-        Direction facing = context.getHorizontalDirection(); // the table extends away from the player
+        Direction facing = context.getHorizontalDirection();
         BlockPos secondary = context.getClickedPos().relative(facing);
         if (!context.getLevel().getBlockState(secondary).canBeReplaced(context)) return null;
         return defaultBlockState().setValue(FACING, facing).setValue(MAIN, true);
@@ -92,10 +91,7 @@ public class WoodworkingTableBlock extends HorizontalDirectionalBlock implements
         return SHAPE;
     }
 
-    /**
-     * The collision box isn't a full block, so vanilla classifies the cell as walkable and NPCs path
-     * onto it and snag. Mark it un-pathfindable so every pathfinder routes around it.
-     */
+    // Partial collision box: without this override vanilla marks the cell walkable and NPCs snag on it.
     @Override
     protected boolean isPathfindable(BlockState state,
                                      net.minecraft.world.level.pathfinder.PathComputationType type) {
@@ -115,7 +111,6 @@ public class WoodworkingTableBlock extends HorizontalDirectionalBlock implements
             WoodworkingTableBlockEntity.tick(lvl, pos, st, (WoodworkingTableBlockEntity) be);
     }
 
-    /** The master cell of this multiblock (the cell that holds the block entity). */
     private static BlockPos masterPos(BlockPos pos, BlockState state) {
         return state.getValue(MAIN) ? pos : pos.relative(state.getValue(FACING).getOpposite());
     }
@@ -214,7 +209,6 @@ public class WoodworkingTableBlock extends HorizontalDirectionalBlock implements
         if (!oldState.is(newState.getBlock())) {
             Direction facing = oldState.getValue(FACING);
             boolean main = oldState.getValue(MAIN);
-            // Drops + session cleanup happen once, from the master side.
             if (main) {
                 if (level.getBlockEntity(pos) instanceof WoodworkingTableBlockEntity be) {
                     be.dropLogs(level);
@@ -222,8 +216,7 @@ public class WoodworkingTableBlock extends HorizontalDirectionalBlock implements
                 Block.popResource(level, pos, new ItemStack(Items.OAK_LOG, 2)); // the two structure logs
                 Carpentry.abortSessionAt(pos);
             }
-            // Tear down the other half. The bounce terminates: by the time this fires, this cell is
-            // already air, so the other cell's onRemove sees air here and stops.
+            // Removal bounce terminates: this cell is already air, so the other half's onRemove sees air and stops.
             BlockPos other = main ? pos.relative(facing) : pos.relative(facing.getOpposite());
             if (level.getBlockState(other).is(this)) {
                 level.removeBlock(other, false);

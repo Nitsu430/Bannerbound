@@ -42,20 +42,50 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.event.level.BlockEvent;
 
 /**
- * Merged vanilla-interaction gate event handlers (placeholder — full doc pass to follow).
+ * Server-side gate for vanilla "use the world" interactions that a from-scratch Bannerbound
+ * settlement should not get for free. Every handler blocks a GESTURE, never an item: items stay
+ * craftable and holdable, only the act of applying them is cancelled until the owning settlement
+ * has researched the granting flag. Cancelled interactions push a red action-bar "locked" message;
+ * creative players bypass. Unsettled players (no settlement) are gated the same as settled-but-
+ * unresearched ones; settlement lookups fail-open only when there is no server context.
+ *
+ * <p>Research gates (flag -> gesture blocked until granted):
+ * <ul>
+ *   <li>allow_animal_breeding: feeding an ADULT, not-already-in-love animal its breeding food (runs
+ *       at HIGH priority). Babies eating to grow and animals already in love are left alone, as are
+ *       other animal interactions (healing wolves, taming horses).</li>
+ *   <li>allow_fertilizing: applying a fertilizer to a block. Membership is by the
+ *       bannerbound:fertilizer item tag (Core ships minecraft:bone_meal; Antiquity merges its dung)
+ *       so the gate is self-contained and any addon fertilizer is covered. Player-side mirror of the
+ *       flag FarmerWorkGoal checks.</li>
+ *   <li>allow_planting: planting a sapling, tilling grass/dirt with a hoe, or sowing a known seed
+ *       onto farmland. isSeedItem is a small vanilla-seed literal set (v1; extend for modded crops).</li>
+ *   <li>allow_paving: shovel-flattening grass into a path.</li>
+ * </ul>
+ *
+ * <p>Vanilla-content stripping (active only when VanillaContentState.isEnabled() is false; when
+ * vanilla content is on, all of the following is skipped):
+ * <ul>
+ *   <li>Lightning: cancels the strike ONLY for the four entities whose vanilla thunderHit converts
+ *       them (Pig -> zombified piglin, Villager -> witch, MushroomCow variant toggle, Creeper ->
+ *       charged); everything else takes normal lightning damage/fire so storms still feel real.</li>
+ *   <li>Nether/End sealing: PortalSpawnEvent is a source-agnostic backstop (cancels any forming
+ *       nether portal, no message); the RightClickBlock path cancels lighting obsidian and seating an
+ *       ender eye, with a locked message. Creative/op bypass so the dimensions stay test-reachable.</li>
+ *   <li>Hostile spawns: onFinalizeSpawn cancels only WORLD-DRIVEN sources (natural, chunk-gen,
+ *       structure, spawner, patrol, reinforcement, jockey) and leaves deliberate ones (spawn egg,
+ *       /summon, conversion, breeding) alone; it is the broad counterpart to
+ *       ResourceChunkPopulator.onFinalizeSpawn, which handles managed farm animals. onEntityJoin
+ *       catches hostiles saved into a chunk before the flag took effect (loadedFromDisk true):
+ *       disk-loaded mobs carry no spawn reason, so a /summoned-then-saved hostile is also cleared on
+ *       the next reload -- the accepted trade for closing that leak. isHostile = Enemy marker OR
+ *       MONSTER category.</li>
+ * </ul>
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
 public final class VanillaGates {
 
-    /*
-     * Gates animal breeding behind the {@code bannerbound.allow_animal_breeding} flag.
-     * Even if the player has wheat (a starting item), they can't use it to push an adult animal
-     * into love mode unless their settlement has researched a node that grants the flag.
-     *
-     * The check fires when the player right-clicks an adult, non-loving animal with its breeding food.
-     * Other animal interactions (healing wolves, taming horses, etc.) aren't blocked.
-     */
     public static final String FLAG = "bannerbound.allow_animal_breeding";
 
     private VanillaGates() {
@@ -76,8 +106,6 @@ public final class VanillaGates {
         if (stack.isEmpty() || !animal.isFood(stack)) {
             return;
         }
-        // Only intervene when the food would actually trigger breeding: adult animal, not
-        // already in love. (Babies eat to grow faster; loving animals are already committed.)
         if (animal.getAge() != 0 || animal.isInLove()) {
             return;
         }
@@ -105,18 +133,7 @@ public final class VanillaGates {
         }
     }
 
-    /*
-     * Gates a player's own use of bone meal behind the {@code bannerbound.allow_fertilizing} flag
-     * (granted by the Fertilization research). Bone meal stays craftable and holdable — only the
-     * gesture of applying it to a block is blocked until researched, exactly as {@link VanillaGates}
-     * gates tilling/sowing and {@link VanillaGates} gates path-making. This is the player-side mirror
-     * of the same flag {@code FarmerWorkGoal} checks before letting a farmer fertilize crops.
-     * Unsettled players (no settlement) are gated too — same rule as paving and planting.
-     */
     private static final String FERTILIZING_FLAG = "bannerbound.allow_fertilizing";
-    /** Fertilizer items whose APPLICATION is gated by the Fertilization research. Core ships this tag with
-     *  {@code minecraft:bone_meal}; Antiquity merges in its {@code dung} (the bone-meal-style fertilizer) —
-     *  recognised by tag so the gate stays self-contained and any addon's fertilizer is covered. */
     private static final TagKey<Item> FERTILIZER = TagKey.create(Registries.ITEM,
         ResourceLocation.fromNamespaceAndPath(BannerboundCore.MODID, "fertilizer"));
 
@@ -133,24 +150,12 @@ public final class VanillaGates {
 
     private static boolean settlementAllows(ServerPlayer player) {
         MinecraftServer server = player.getServer();
-        if (server == null) return true; // fail-open if no server context
+        if (server == null) return true;
         SettlementData data = SettlementData.get(server.overworld());
         Settlement s = data.getByPlayer(player.getUUID());
         return s != null && ResearchManager.hasFlag(s, FERTILIZING_FLAG);
     }
 
-    /*
-     * Blocks three vanilla "use the land" interactions until the player's settlement has researched
-     * Agricultural Revolution (flag {@code bannerbound.allow_planting}):
-     * <ul>
-     *   <li>Right-clicking a sapling onto soil to plant it.</li>
-     *   <li>Right-clicking a hoe on grass/dirt to till it into farmland.</li>
-     *   <li>Right-clicking a known seed/crop item onto farmland to sow it.</li>
-     * </ul>
-     * Items themselves stay unlocked (the recipe is craftable) — only the placement gesture is gated.
-     * Mirrors {@link VanillaGates}'s pattern: cancel the event, push a red action-bar message to the
-     * player. Unsettled players (no settlement) are also gated — same rule as paving.
-     */
     private static final String PLANTING_FLAG = "bannerbound.allow_planting";
 
     @SubscribeEvent
@@ -178,8 +183,6 @@ public final class VanillaGates {
         sendLockedMessage(player);
     }
 
-    /** Vanilla seed-style items. Small literal set is fine for v1 — modded crops can be added
-     *  later if they're called out. Excluding wheat/bread/etc. that aren't placed on farmland. */
     private static boolean isSeedItem(Item item) {
         return item == Items.WHEAT_SEEDS
             || item == Items.BEETROOT_SEEDS
@@ -193,7 +196,7 @@ public final class VanillaGates {
 
     private static boolean plantingSettlementAllows(ServerPlayer player) {
         MinecraftServer server = player.getServer();
-        if (server == null) return true; // fail-open if no server context
+        if (server == null) return true;
         SettlementData data = SettlementData.get(server.overworld());
         Settlement s = data.getByPlayer(player.getUUID());
         return s != null && ResearchManager.hasFlag(s, PLANTING_FLAG);
@@ -205,11 +208,6 @@ public final class VanillaGates {
             true);
     }
 
-    /*
-     * Blocks the vanilla shovel-flatten-to-path interaction until the player's settlement has
-     * researched Paving (flag {@code bannerbound.allow_paving}). Pre-research, right-clicking grass
-     * with a shovel does nothing — even if shovels are otherwise unlocked.
-     */
     @SubscribeEvent
     public static void onToolModify(BlockEvent.BlockToolModificationEvent event) {
         if (event.getItemAbility() != ItemAbilities.SHOVEL_FLATTEN) {
@@ -228,29 +226,15 @@ public final class VanillaGates {
         if (settlement != null && ResearchManager.hasFlag(settlement, "bannerbound.allow_paving")) {
             return;
         }
-        // No settlement or no paving flag — cancel the modification.
         event.setCanceled(true);
         player.displayClientMessage(
             Component.translatable("bannerbound.paving.locked").withStyle(ChatFormatting.RED),
             true);
     }
 
-    /*
-     * Suppresses vanilla lightning-strike transformations when vanilla content is stripped
-     * ({@link VanillaContentState#isEnabled()} is false). In a from-scratch settlement a thunderstorm
-     * shouldn't quietly turn a farmer's pig into a zombified piglin or a villager into a witch — those
-     * are vanilla-mob plumbing the settlement doesn't speak.
-     *
-     * <p>This is deliberately narrow: it cancels the strike <i>only</i> for the four entities whose
-     * vanilla {@code thunderHit} converts them — {@link Pig} → zombified piglin, {@link Villager} →
-     * witch, {@link MushroomCow} variant toggle, {@link Creeper} → charged. Every other entity (players,
-     * cows, item frames, structures) is left to take normal lightning damage and fire, so the storm
-     * still feels real; it just won't mutate our livestock and townsfolk into hostiles. Parallels
-     * {@link VanillaGates}, which strips the spawning side of the same vanilla layer.
-     */
     @SubscribeEvent
     public static void onStruckByLightning(EntityStruckByLightningEvent event) {
-        if (VanillaContentState.isEnabled()) return; // vanilla untouched
+        if (VanillaContentState.isEnabled()) return;
         if (transforms(event.getEntity())) event.setCanceled(true);
     }
 
@@ -259,19 +243,6 @@ public final class VanillaGates {
             || e instanceof Creeper;
     }
 
-    /*
-     * Seals the Nether and the End when vanilla content is stripped
-     * ({@link VanillaContentState#isEnabled()} is false): nether-portal frames can't be lit and end
-     * portals can't be completed in survival. Creative/op players bypass (so the dimensions stay
-     * reachable for testing).
-     *
-     * <ul>
-     *   <li>{@link BlockEvent.PortalSpawnEvent} — a source-agnostic backstop that cancels any nether
-     *       portal forming (fire spread, etc.), with no nice message.</li>
-     *   <li>{@link PlayerInteractEvent.RightClickBlock} — the player-facing path: cancels lighting
-     *       obsidian and seating an ender eye into an empty frame, with a "locked" actionbar.</li>
-     * </ul>
-     */
     @SubscribeEvent
     public static void onPortalSpawn(BlockEvent.PortalSpawnEvent event) {
         if (VanillaContentState.isEnabled()) return;
@@ -293,7 +264,7 @@ public final class VanillaGates {
             && !bs.getValue(BlockStateProperties.EYE);
         if (!igniting && !seatingEye) return;
 
-        if (bypass(player)) return; // creative or op may still force a portal for testing
+        if (bypass(player)) return;
         event.setCanceled(true);
         player.displayClientMessage(
             Component.translatable("bannerbound.vanilla.portal_locked").withStyle(ChatFormatting.RED),
@@ -304,36 +275,14 @@ public final class VanillaGates {
         return player.hasPermissions(2) || player.getAbilities().instabuild;
     }
 
-    /*
-     * Cancels hostile-mob spawning when vanilla content is stripped
-     * ({@link VanillaContentState#isEnabled()} is false). A from-scratch settlement faces its own
-     * threats (barbarians, raiders) — not vanilla zombies welling up out of the dark.
-     *
-     * <p>Only <i>world-driven</i> spawn sources are cancelled (natural, chunk-gen, structure, spawner,
-     * patrol, reinforcement, jockey). Deliberate sources — spawn eggs, {@code /summon}, conversions,
-     * breeding, etc. — are left alone so admins/creative can still place a hostile to test. Passive
-     * animals (and Antiquity's AI-converted wolves/ocelots, which stay {@code CREATURE}) are never
-     * touched. This is the broad counterpart to {@code ResourceChunkPopulator.onFinalizeSpawn}, which
-     * suppresses only managed farm animals — the two coexist, each cancelling its own targets.
-     *
-     * <p>{@link #onFinalizeSpawn} only catches <i>fresh</i> spawns — it never fires for a hostile that
-     * was written into a saved chunk before the flag took effect (a world played as vanilla first, or
-     * mobs that spawned in a border chunk and persisted). Those re-enter the world through
-     * {@link #onEntityJoin} with {@link EntityJoinLevelEvent#loadedFromDisk()} true and would otherwise
-     * slip through, so we discard them there too. Disk-loaded mobs carry no spawn reason, so the
-     * deliberate-placement carve-out can't apply — anything {@code /summon}ed and then saved will be
-     * cleared on the next reload, which is the acceptable trade for closing the leak.
-     */
     @SubscribeEvent
     public static void onFinalizeSpawn(FinalizeSpawnEvent event) {
-        if (VanillaContentState.isEnabled()) return; // vanilla untouched
-        if (!isHostile(event.getEntity())) return;   // leave passive animals alone
+        if (VanillaContentState.isEnabled()) return;
+        if (!isHostile(event.getEntity())) return;
         switch (event.getSpawnType()) {
             case NATURAL, CHUNK_GENERATION, STRUCTURE, SPAWNER, PATROL, REINFORCEMENT, JOCKEY ->
                 event.setSpawnCancelled(true);
             default -> {
-                // SPAWN_EGG, COMMAND, MOB_SUMMONED, BUCKET, DISPENSER, BREEDING, CONVERSION, EVENT,
-                // TRIAL_SPAWNER, SPAWNER_EGG, etc. — deliberate placements, left to player/admin.
             }
         }
     }
@@ -341,14 +290,14 @@ public final class VanillaGates {
     @SubscribeEvent
     public static void onEntityJoin(EntityJoinLevelEvent event) {
         if (event.getLevel().isClientSide()) return;
-        if (VanillaContentState.isEnabled()) return;     // vanilla untouched
-        if (!event.loadedFromDisk()) return;             // fresh spawns handled by onFinalizeSpawn
-        if (!isHostile(event.getEntity())) return;       // leave passive animals alone
-        event.setCanceled(true);                         // persisted hostile — never let it rejoin
+        if (VanillaContentState.isEnabled()) return;
+        if (!event.loadedFromDisk()) return;
+        if (!isHostile(event.getEntity())) return;
+        event.setCanceled(true);
     }
 
     private static boolean isHostile(Entity e) {
-        if (e instanceof Enemy) return true; // marker on zombies, skeletons, creepers, illagers, ...
+        if (e instanceof Enemy) return true;
         return e instanceof Mob mob && mob.getType().getCategory() == MobCategory.MONSTER;
     }
 }

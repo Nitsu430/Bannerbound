@@ -8,15 +8,16 @@ import net.minecraft.resources.ResourceLocation;
 
 /**
  * Antiquity's citizen thoughts, registered through Core's extensible {@link ThoughtType} API rather
- * than being baked into Core's {@code ThoughtKind} enum — grog is an Antiquity system, so its mood
- * lives here. Call {@link #bootstrap()} once during setup to ensure the static fields initialise (and
- * thus register) before any citizen drinks.
+ * than being baked into Core's {@code ThoughtKind} enum - grog and stew are Antiquity systems, so
+ * their mood lives here. Call {@link #bootstrap()} once during setup to ensure the static fields
+ * initialise (and thus register) before any citizen drinks or eats. ENJOYED_GROG is the brief warm
+ * glow after drinking at a fermentation trough (GROG_PLAN.md Phase 4) - the social-lubricant payoff
+ * for keeping grog on tap: +6 for 4-6 in-game minutes. ENJOYED_STEW is the hearty-meal payoff for
+ * keeping a cooking pot on the fire: +10 for ~5-8 in-game minutes.
  */
 public final class AntiquityThoughts {
     private AntiquityThoughts() {}
 
-    /** A brief warm glow after a citizen drinks at a fermentation trough (GROG_PLAN.md Phase 4):
-     *  the social-lubricant payoff for keeping grog on tap. +6 for 4–6 in-game minutes. */
     public static final ThoughtType ENJOYED_GROG = ThoughtTypes.register(
         ThoughtType.builder(ResourceLocation.fromNamespaceAndPath(BannerboundAntiquity.MODID, "enjoyed_grog"))
             .label("bannerboundantiquity.thought.enjoyed_grog")
@@ -25,8 +26,6 @@ public final class AntiquityThoughts {
             .category(com.bannerbound.core.social.HappinessCategory.FOOD)
             .build());
 
-    /** A hearty, satisfying meal — a citizen ate a warm stew from a cooking pot. The big food-pillar
-     *  payoff for keeping a pot on the fire: +10 for ~5–8 in-game minutes. */
     public static final ThoughtType ENJOYED_STEW = ThoughtTypes.register(
         ThoughtType.builder(ResourceLocation.fromNamespaceAndPath(BannerboundAntiquity.MODID, "enjoyed_stew"))
             .label("bannerboundantiquity.thought.enjoyed_stew")
@@ -35,6 +34,5 @@ public final class AntiquityThoughts {
             .category(com.bannerbound.core.social.HappinessCategory.FOOD)
             .build());
 
-    /** Forces this class to initialise (and register its thoughts). No-op body. */
     public static void bootstrap() {}
 }

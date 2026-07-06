@@ -27,45 +27,43 @@ import net.minecraft.world.level.Level;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Container menu for the Stockpile terminal. The storage side is <b>virtual</b> — a summed, sorted
- * list of everything across the stockpile's enclosed containers, synced to the client via
- * {@link StockpileContentsPayload} (totals can exceed a stack, which real {@link Slot}s can't hold).
- * Only the player's own inventory uses real slots. Shift-clicking a player item deposits it into the
- * stockpile (native {@link #quickMoveStack}); clicking a virtual cell withdraws via a payload that
- * calls {@link #withdraw}.
+ * Container menu for the Stockpile terminal. The storage side is VIRTUAL: a summed, sorted list of
+ * everything across the stockpile's enclosed containers, synced to the client via
+ * StockpileContentsPayload because totals can exceed a stack (real Slots can't hold that). Only the
+ * player's own inventory uses real slots; the virtual list is rendered/clicked by the screen and
+ * withdrawals/deposits round-trip through payloads that call withdraw/deposit on the server.
+ *
+ * All server-side fields are recomputed on demand; all client-side fields (contents, status,
+ * slot counts, toggles) are snapshots pushed by setSnapshot via broadcastChanges. serverPlayer is
+ * non-null only on the server. setWorkerAccess invalidates the settlement storage cache immediately
+ * (rather than waiting out the worker pool-cache TTL) and marks data dirty so autonomous workers
+ * and persistence both see a toggle flip at once. Every access path is gated by
+ * DiplomacyManager.canAccessStockpile. Layout note: PLAYER_INV_Y is pushed down to leave a toggle
+ * row between the storage grid and the player inventory.
  */
 @ApiStatus.Internal
 public class StockpileMenu extends AbstractContainerMenu {
     public static final int PLAYER_INV_X = 8;
-    // Pushed down to leave a toggle row between the storage grid and the player inventory.
     public static final int PLAYER_INV_Y = 166;
 
     private final int menuId;
     private final BlockPos pos;
     private final Level level;
     @Nullable
-    private final ServerPlayer serverPlayer; // server only — null on the client
-    /** Client: the latest synced summed list. Server: recomputed on demand. */
+    private final ServerPlayer serverPlayer;
     private List<StockEntry> contents = List.of();
-    /** Client: synced enclosure status ordinal + container count, for the header. */
     private int statusOrdinal;
     private int containerCount;
-    /** Client: synced occupied / total slot counts across the enclosed containers, for the
-     *  "N slots free" capacity readout. */
     private int usedSlots;
     private int totalSlots;
-    /** Client: synced worker-access toggles (default open) driving the terminal's two buttons. */
     private boolean allowDeposit = true;
     private boolean allowTake = true;
-    /** Client: synced show-for-trading flag (default closed) — the trade toggle button state. */
     private boolean showTrade = false;
 
-    /** Client factory — reads the block pos from the open-screen buffer. */
     public StockpileMenu(int id, Inventory inv, RegistryFriendlyByteBuf buf) {
         this(id, inv, buf.readBlockPos(), null);
     }
 
-    /** Server constructor (via the block's {@code SimpleMenuProvider}). */
     public StockpileMenu(int id, Inventory inv, BlockPos pos, @Nullable ServerPlayer player) {
         super(BannerboundCore.STOCKPILE_MENU.get(), id);
         this.menuId = id;
@@ -99,7 +97,6 @@ public class StockpileMenu extends AbstractContainerMenu {
     public boolean allowTake() { return allowTake; }
     public boolean showTrade() { return showTrade; }
 
-    /** Client: apply a synced snapshot from the server. */
     public void setSnapshot(int status, int count, int used, int total,
                             boolean allowDeposit, boolean allowTake, boolean showTrade,
                             List<StockEntry> entries) {
@@ -113,8 +110,6 @@ public class StockpileMenu extends AbstractContainerMenu {
         this.contents = entries;
     }
 
-    /** Server: flip a toggle on this stockpile's record and re-sync. {@code toggle} selects which
-     *  flag ({@code StockpileTogglePayload.TOGGLE_*}). No-op without access or a record. */
     public void setWorkerAccess(ServerPlayer player, int toggle, boolean value) {
         if (!com.bannerbound.core.api.settlement.DiplomacyManager.canAccessStockpile(player, pos)) return;
         Stockpile sp = record();
@@ -128,8 +123,6 @@ public class StockpileMenu extends AbstractContainerMenu {
                 sp.setShowForTrading(value);
             default -> { return; }
         }
-        // Push the change to autonomous workers right away (don't wait out the pool-cache TTL), and
-        // persist it.
         if (level instanceof ServerLevel sl) {
             Settlement owner = SettlementData.get(sl.getServer().overworld())
                 .getByChunk(new net.minecraft.world.level.ChunkPos(pos).toLong());
@@ -141,7 +134,6 @@ public class StockpileMenu extends AbstractContainerMenu {
         broadcastChanges();
     }
 
-    /** Server: {occupied, total} slot counts across the enclosed containers (0,0 if no aggregate). */
     private int[] slotCounts() {
         Container c = aggregate();
         if (c == null) return new int[]{0, 0};
@@ -153,13 +145,11 @@ public class StockpileMenu extends AbstractContainerMenu {
         return new int[]{used, size};
     }
 
-    /** The stockpile's aggregate inventory (server only), or null. */
     @Nullable
     private Container aggregate() {
         return level instanceof ServerLevel sl ? DropOffContainers.resolveDropOff(sl, pos) : null;
     }
 
-    /** The stockpile record for this block (server only), or null. */
     @Nullable
     private Stockpile record() {
         if (!(level instanceof ServerLevel sl)) return null;
@@ -170,7 +160,6 @@ public class StockpileMenu extends AbstractContainerMenu {
         return owner != null ? owner.getStockpile(pos) : null;
     }
 
-    /** Sums the enclosed containers into display entries (count-1 stack + total), sorted by total. */
     public List<StockEntry> computeSummed() {
         Container c = aggregate();
         if (c == null) return List.of();
@@ -198,7 +187,6 @@ public class StockpileMenu extends AbstractContainerMenu {
         return out;
     }
 
-    /** Withdraws up to a stack (or half) of {@code template} from the stockpile into the player. */
     public void withdraw(ServerPlayer player, ItemStack template, boolean half) {
         if (!com.bannerbound.core.api.settlement.DiplomacyManager.canAccessStockpile(player, pos)) return;
         Container c = aggregate();
@@ -228,7 +216,6 @@ public class StockpileMenu extends AbstractContainerMenu {
         broadcastChanges();
     }
 
-    /** Deposits the cursor (carried) stack into the stockpile — all of it, or a single item. */
     public void deposit(ServerPlayer player, boolean single) {
         if (!com.bannerbound.core.api.settlement.DiplomacyManager.canAccessStockpile(player, pos)) return;
         Container c = aggregate();
@@ -249,7 +236,6 @@ public class StockpileMenu extends AbstractContainerMenu {
 
     @Override
     public ItemStack quickMoveStack(Player player, int index) {
-        // Every slot is player inventory; shift-click deposits into the stockpile.
         Slot slot = slots.get(index);
         if (slot == null || !slot.hasItem()) return ItemStack.EMPTY;
         if (level instanceof ServerLevel) {
@@ -269,7 +255,7 @@ public class StockpileMenu extends AbstractContainerMenu {
                 }
             }
         }
-        return ItemStack.EMPTY; // stop the shift-click loop; deposit isn't slot-to-slot
+        return ItemStack.EMPTY; // must return EMPTY to stop vanilla's shift-click loop; deposit isn't slot-to-slot
     }
 
     @Override

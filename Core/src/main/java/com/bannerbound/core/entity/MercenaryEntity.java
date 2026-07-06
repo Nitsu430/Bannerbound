@@ -29,16 +29,17 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 
 /**
- * A city-state mercenary — hired muscle a city-state fields ONLY while at war (see CITY_STATES plan
- * §2). Its own entity type, subclassing {@link CitizenEntity} (reuses the citizen model/render), so
- * {@code HurtByTargetGoal.setAlertOthers()} rallies only fellow mercenaries, and citizens recognise
- * them by class.
+ * A city-state mercenary -- hired muscle a city-state fields ONLY while at war (CITY_STATES plan
+ * section 2). Its own entity type, subclassing CitizenEntity (reuses the citizen model/render), so
+ * HurtByTargetGoal.setAlertOthers() rallies only fellow mercenaries and citizens recognise them by
+ * class.
  *
- * <p><b>Defend-only:</b> like a barbarian camp member it wanders the city-state centre and fights
- * enemies who approach — but city-states never <i>send</i> raids (mercenaries don't march on the
- * player), so the wander-anchor behaviour IS the defence. The "enemy" is any player / player-citizen
- * of a settlement the city-state is actively at war with. Never persisted ({@code markSimulated});
- * respawned slowly by {@code CityStateWarManager}.
+ * <p>Defend-only: like a barbarian camp member it wanders the city-state centre (CampWanderGoal set
+ * up in markMercenary) and fights enemies who approach -- but city-states never send raids
+ * (mercenaries don't march on the player), so the wander-anchor behaviour IS the defence. An
+ * "enemy" is any player / player-citizen of a settlement the city-state is actively at war with;
+ * fellow mercenaries and barbarians are never targeted. Melee-only in Phase 2 (ranged is a later
+ * enhancement). Never persisted (markSimulated); respawned slowly by CityStateWarManager.
  */
 public class MercenaryEntity extends CitizenEntity implements CombatantCitizen {
     private BlockPos homeCenter = null;
@@ -58,7 +59,7 @@ public class MercenaryEntity extends CitizenEntity implements CombatantCitizen {
 
     @Override
     protected void registerGoals() {
-        // Bespoke combat AI (NOT super.registerGoals() — no citizen work/panic; a struck mercenary fights).
+        // Bespoke combat AI: never call super.registerGoals() -- no citizen work/panic goals here.
         this.goalSelector.addGoal(0, new FloatGoal(this));
         this.goalSelector.addGoal(0, new CitizenCombatGoal(this, 0.7));
         this.goalSelector.addGoal(8, new LookAtPlayerGoal(this, Player.class, 8.0f));
@@ -68,9 +69,6 @@ public class MercenaryEntity extends CitizenEntity implements CombatantCitizen {
             10, true, false, (Predicate<LivingEntity>) this::isCityStateEnemy));
     }
 
-    /** Configures a freshly-spawned mercenary: its melee weapon, the city-state it defends, and the
-     *  wander-anchor goal. Melee-only in Phase 2 (ranged is a later enhancement). Call once after
-     *  {@code addFreshEntity}. */
     public void markMercenary(BlockPos homeCenter, UUID cityStateId, double damage, double attackSpeed,
                               Item meleeWeapon) {
         this.homeCenter = homeCenter;
@@ -83,7 +81,6 @@ public class MercenaryEntity extends CitizenEntity implements CombatantCitizen {
             this.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(meleeItem));
             this.setDropChance(EquipmentSlot.MAINHAND, 0.0F);
         }
-        // Wander the city-state centre (defenders hold ground; they never raid out).
         this.goalSelector.addGoal(5, new CampWanderGoal(this, homeCenter, 12, 0.8));
     }
 
@@ -96,8 +93,6 @@ public class MercenaryEntity extends CitizenEntity implements CombatantCitizen {
     public boolean prefersRanged() { return false; }
     public double combatSpeed() { return combatSpeed; }
 
-    /** True if {@code e} is a player (or player-citizen) of a settlement this city-state is actively
-     *  at war with. */
     private boolean isCityStateEnemy(LivingEntity e) {
         if (e == this || e == null || !e.isAlive()) return false;
         if (cityStateId == null || !(level() instanceof ServerLevel sl)) return false;
@@ -115,7 +110,6 @@ public class MercenaryEntity extends CitizenEntity implements CombatantCitizen {
         return false;
     }
 
-    /** No info panel on right-click (mercenaries have no happiness/parley GUI). */
     @Override
     public net.minecraft.world.InteractionResult mobInteract(net.minecraft.world.entity.player.Player player,
                                                              net.minecraft.world.InteractionHand hand) {

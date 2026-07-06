@@ -19,19 +19,16 @@ import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.network.chat.Component;
 
 /**
- * Brigadier argument that parses a Bannerbound {@link Era} by name ({@code ancient},
- * {@code classical}, …) plus the alias {@code none} (= the last era = "no cap").
- *
- * <p>Backs the value of {@code /gamerule forceMaxAge <era>} (see
- * {@link com.bannerbound.core.chat.ForceMaxAgeGameRule}) so the rule reads as friendly era presets
- * with tab-completion instead of a raw ordinal. Registered as a singleton command argument type
- * ({@link com.bannerbound.core.BannerboundCore#COMMAND_ARGUMENT_TYPES}) so the {@code /gamerule}
- * command tree — and its suggestions — sync correctly to clients.
+ * Brigadier argument that parses a Bannerbound Era by name ("ancient", "classical", ...) plus
+ * the alias "none" (= the last era = "no cap"). Backs the value of /gamerule forceMaxAge <era>
+ * (see ForceMaxAgeGameRule) so the rule reads as friendly era presets with tab-completion instead
+ * of a raw ordinal. Must be registered as a singleton command argument type
+ * (BannerboundCore.COMMAND_ARGUMENT_TYPES) so the /gamerule command tree and its suggestions sync
+ * correctly to clients.
  */
 public final class EraGameRuleArgument implements ArgumentType<Era> {
     private static final Collection<String> EXAMPLES = List.of("ancient", "classical", "none");
 
-    /** {@code none} = clear the cap (resolves to the last era); used for both parse and suggest. */
     public static final String NONE = "none";
 
     private static final DynamicCommandExceptionType ERROR_UNKNOWN_ERA =
@@ -42,7 +39,6 @@ public final class EraGameRuleArgument implements ArgumentType<Era> {
         return new EraGameRuleArgument();
     }
 
-    /** Resolves a token to an {@link Era}: {@code none} → the last era (no cap), else by name; null if unknown. */
     public static Era resolve(String token) {
         if (token.equalsIgnoreCase(NONE)) {
             Era[] vals = Era.values();

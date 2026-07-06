@@ -22,21 +22,23 @@ import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 /**
  * Staggered background re-validation of workshops so status drift becomes visible without anyone
- * opening a menu — the war case: an enemy smashes your fletchery's chest and the floating label
- * flips to "Invalid — needs repair" within the cycle, not whenever you next click it.
+ * opening a menu -- the war case: an enemy smashes your fletchery's chest and the floating label
+ * flips to "Invalid -- needs repair" within the cycle, not whenever you next click it.
  *
- * <p>Lag-safe by design: at most ONE workshop validates every {@link #TICKS_PER_VALIDATION} ticks
- * (round-robin over all settlements), workshops in unloaded chunks are skipped for free, and the
- * (summaries-only) broadcast goes out ONLY when a validation actually changed something. With N
- * loaded workshops a full sweep takes N×{@value #TICKS_PER_VALIDATION} ticks — 100 workshops ≈
- * 10 s, matching the houses' own 10 s validation cadence.
+ * <p>Lag-safe by design: at most ONE workshop validates every TICKS_PER_VALIDATION ticks
+ * (round-robin over a QUEUE of every settlement's workshops, rebuilt when drained), workshops in
+ * unloaded chunks are skipped for free (the loaded-chunk guard means background validation never
+ * forces chunk loads), and the summaries-only broadcast goes out ONLY when a validation actually
+ * changed something -- status, capacity, OR appeal tier (decorating or trashing a workshop must
+ * reach the floating labels within the sweep, not only when a selection box happens to change).
+ * With N loaded workshops a full sweep takes N x TICKS_PER_VALIDATION ticks -- 100 workshops ~= 10 s,
+ * matching the houses' own 10 s validation cadence.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
 public final class WorkshopRevalidator {
     private static final int TICKS_PER_VALIDATION = 2;
 
-    /** Pending (settlementId, workshopId) pairs for the current sweep; rebuilt when drained. */
     private static final ArrayDeque<UUID[]> QUEUE = new ArrayDeque<>();
     private static int tickCounter;
 
@@ -61,14 +63,12 @@ public final class WorkshopRevalidator {
         if (settlement == null) return;
         Workshop workshop = settlement.getWorkshop(next[1]);
         if (workshop == null) return;
-        if (!anyChunkLoaded(sl, workshop)) return; // unloaded → free skip, swept next cycle
+        if (!anyChunkLoaded(sl, workshop)) return; // unloaded chunk: free skip, never force-load
 
         Workshop.Status oldStatus = workshop.status();
         int oldCapacity = workshop.capacity();
         var oldAppeal = workshop.cachedAppealBeauty();
         Workshops.validate(sl, workshop);
-        // Appeal tier counts as a change too — decorating (or trashing) a workshop must reach the
-        // floating labels within the sweep, not only when a selection box happens to change.
         if (workshop.status() != oldStatus || workshop.capacity() != oldCapacity
                 || workshop.cachedAppealBeauty() != oldAppeal) {
             SettlementData.get(sl).setDirty();
@@ -76,8 +76,6 @@ public final class WorkshopRevalidator {
         }
     }
 
-    /** True when any of the workshop's selection boxes sits in a loaded chunk (cheap guard so
-     *  background validation never forces chunk loads). */
     private static boolean anyChunkLoaded(ServerLevel sl, Workshop workshop) {
         for (BlockSelection sel : BlockSelectionRegistry.get(sl).findByWorkshop(workshop.id())) {
             ChunkPos cp = new ChunkPos(sel.a());

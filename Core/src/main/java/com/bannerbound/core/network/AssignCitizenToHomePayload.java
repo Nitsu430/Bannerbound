@@ -12,17 +12,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: move a citizen into or out of the home with id {@code homeId}.
- *
- * <p>When {@code assign} is true the citizen is added as a resident — and, because one citizen
- * lives in exactly one home at a time, any prior residency is dropped first by the server. When
- * {@code assign} is false the citizen is removed from this home (no-op if they weren't a resident
- * here).
- *
- * <p>{@code fromHousePanel} selects which screen the server refreshes afterwards: false (the
- * resident picker) re-sends {@link HomeCitizenListPayload}; true (the House status panel's own
- * inline unassign) re-sends {@link OpenHouseStatusPayload}. Either way the originating screen
- * refreshes in place — no separate "I changed the assignment" payload is needed.
+ * C->S: move a citizen into (assign=true) or out of (assign=false) home homeId. On assign the
+ * server drops any prior residency first, since a citizen lives in exactly one home at a time;
+ * unassign is a no-op if they were not a resident here. fromHousePanel picks which screen the
+ * server refreshes in place afterwards: false re-sends HomeCitizenListPayload (the resident
+ * picker), true re-sends OpenHouseStatusPayload (the House status panel's inline unassign).
  */
 @ApiStatus.Internal
 public record AssignCitizenToHomePayload(UUID homeId, UUID citizenId, boolean assign, boolean fromHousePanel)

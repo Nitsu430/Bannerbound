@@ -16,10 +16,13 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Roster screen opened from the Town Hall menu's "Citizens" button. Shows each citizen by name
- * with a health and stamina bar plus a per-row "Recall" button that teleports them next to the
- * town hall. Header shows summed totals (count, total stamina, total health) so the player can
- * eyeball the settlement's overall workforce status at a glance.
+ * Roster screen opened from the Town Hall menu's "Citizens" button. Shows each citizen by name with
+ * a health/stamina readout plus a per-row "Recall" button that teleports them next to the town hall;
+ * the header sums count, stamina, and health so the player can eyeball workforce status at a glance
+ * (citizens whose entities aren't loaded report 0 live stats, so the summary leans low as a nudge to
+ * look in-world). The roster is windowed to MAX_ROWS: scrollRow is an instance field so the scroll
+ * offset survives the rebuildWidgets() relayout each scroll triggers. Closing returns to the parent
+ * screen (the Town Hall) when set, else to the world.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -30,13 +33,9 @@ public class SettlementCitizensScreen extends PolishedScreen {
     private static final int MAX_ROWS = 7;
     private static final int SCROLLBAR_WIDTH = 4;
 
-    /** Index of the first visible roster row — the scroll offset, in rows. Survives the
-     *  rebuildWidgets() relayout that a scroll triggers (it's the instance, not a fresh screen). */
     private int scrollRow = 0;
 
     private final List<SettlementCitizensListPayload.Entry> entries;
-    /** Screen to return to on close (the Town Hall when opened from its Citizens button /
-     *  Suggestions tab); {@code null} closes to the world as before. */
     @org.jetbrains.annotations.Nullable
     private final net.minecraft.client.gui.screens.Screen parent;
 
@@ -51,7 +50,6 @@ public class SettlementCitizensScreen extends PolishedScreen {
         this.parent = parent;
     }
 
-    /** The back-target, so a server-pushed roster refresh (new instance) can carry it over. */
     @org.jetbrains.annotations.Nullable
     public net.minecraft.client.gui.screens.Screen parentScreen() {
         return parent;
@@ -59,7 +57,6 @@ public class SettlementCitizensScreen extends PolishedScreen {
 
     @Override
     public void onClose() {
-        // QoL: Cancel/Esc (and the close-on-Recall) return TO the town hall, not the world.
         if (this.minecraft != null && parent != null) {
             this.minecraft.setScreen(parent);
         } else {
@@ -72,7 +69,6 @@ public class SettlementCitizensScreen extends PolishedScreen {
         final int panelX = (this.width - PANEL_WIDTH) / 2;
         final int panelY = (this.height - PANEL_HEIGHT) / 2;
         final int btnWidth = PANEL_WIDTH - 24;
-        // Clamp the scroll window so it can't run past either end of the roster.
         final int maxScroll = Math.max(0, entries.size() - MAX_ROWS);
         if (scrollRow < 0) scrollRow = 0;
         if (scrollRow > maxScroll) scrollRow = maxScroll;
@@ -85,9 +81,6 @@ public class SettlementCitizensScreen extends PolishedScreen {
             graphics.drawCenteredString(this.font, this.getTitle(),
                 panelX + PANEL_WIDTH / 2, panelY + 12, GuiPalette.TITLE);
 
-            // Summary line: count + summed stamina / health across the whole roster. Citizens
-            // whose entities aren't loaded report 0 for live stats so the summary leans low —
-            // not a hard rule, just a visible nudge for the player to look in-world.
             int count = entries.size();
             int totalStamina = 0, totalStaminaMax = 0;
             float totalHealth = 0, totalHealthMax = 0;
@@ -105,8 +98,6 @@ public class SettlementCitizensScreen extends PolishedScreen {
                 .withStyle(ChatFormatting.GRAY);
             graphics.drawString(this.font, summary, panelX + 14, panelY + 36, 0xFFCCCCCC, false);
 
-            // Per-row content (text + job icon only — the Recall button is a real widget below).
-            // Windowed by the scroll offset: only MAX_ROWS rows starting at firstRow are drawn.
             int rowsTop = panelY + 52;
             for (int row = 0; row < MAX_ROWS && firstRow + row < entries.size(); row++) {
                 int idx = firstRow + row;
@@ -115,20 +106,17 @@ public class SettlementCitizensScreen extends PolishedScreen {
                 graphics.fill(panelX + 12, y, panelX + PANEL_WIDTH - 12, y + ROW_HEIGHT - 4, 0xFF181818);
                 graphics.renderOutline(panelX + 12, y, PANEL_WIDTH - 24, ROW_HEIGHT - 4, 0xFF303030);
 
-                // Job icon (the settlement's current tool-age tool for this job); none = unemployed
-                // or an unloaded citizen. Text shifts right to clear the 16px icon when present. The
-                // tool may be undiscovered, so bypass the unknown-item "?" swap — it's a UI glyph.
                 int textX = panelX + 18;
                 if (e.jobIconItemId() != 0) {
                     net.minecraft.world.item.Item icon =
                         net.minecraft.core.registries.BuiltInRegistries.ITEM.byId(e.jobIconItemId());
+                    // Job icon may be an undiscovered item; bypass the unknown-item "?" swap since it is a UI glyph.
                     UnknownItemHelper.setBypassUnknownSwap(true);
                     graphics.renderItem(new net.minecraft.world.item.ItemStack(icon), panelX + 16, y + 3);
                     UnknownItemHelper.setBypassUnknownSwap(false);
                     textX = panelX + 38;
                 }
 
-                // Line 1: name + job role, so the player can tell who does what at a glance.
                 MutableComponent line1 = Component.literal(e.name()).withStyle(ChatFormatting.WHITE)
                     .append(Component.literal("  "))
                     .append(jobLabel(e.jobTypeId()));
@@ -138,7 +126,6 @@ public class SettlementCitizensScreen extends PolishedScreen {
                 graphics.drawString(this.font, stats, textX, y + 13, 0xFFAAAAAA, false);
             }
 
-            // Scrollbar — only when the roster overflows the visible window.
             if (maxScroll > 0) {
                 int trackX = panelX + PANEL_WIDTH - 10;
                 int trackY = rowsTop;
@@ -150,8 +137,6 @@ public class SettlementCitizensScreen extends PolishedScreen {
             }
         });
 
-        // Recall buttons — one per VISIBLE row, right-aligned. Windowed by the scroll offset; a
-        // scroll triggers rebuildWidgets() which re-lays these out for the new window.
         int rowsTop = panelY + 52;
         for (int row = 0; row < MAX_ROWS && firstRow + row < entries.size(); row++) {
             SettlementCitizensListPayload.Entry e = entries.get(firstRow + row);
@@ -174,9 +159,6 @@ public class SettlementCitizensScreen extends PolishedScreen {
             .build());
     }
 
-    /** Readable, gold-tinted role name for a row. Honours the per-civ custom language when enabled
-     *  (falling back to the {@code bannerbound.job.<typeId>} key), and shows "Unemployed" for an
-     *  empty type id (unemployed citizen or one whose entity isn't loaded). */
     private MutableComponent jobLabel(String jobTypeId) {
         if (jobTypeId == null || jobTypeId.isEmpty()) {
             return Component.translatable("bannerbound.job.unemployed").withStyle(ChatFormatting.DARK_GRAY);
@@ -195,7 +177,7 @@ public class SettlementCitizensScreen extends PolishedScreen {
             scrollRow -= (int) Math.signum(scrollY);
             int maxScroll = Math.max(0, entries.size() - MAX_ROWS);
             scrollRow = Math.max(0, Math.min(scrollRow, maxScroll));
-            if (scrollRow != before) this.rebuildWidgets();   // relayout the windowed rows + buttons
+            if (scrollRow != before) this.rebuildWidgets();
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);

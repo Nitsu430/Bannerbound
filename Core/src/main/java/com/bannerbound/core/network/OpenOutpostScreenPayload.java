@@ -15,27 +15,20 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client. Opens (or refreshes) the Outpost Banner screen — the outpost's own management
- * panel. The BANNER owns the deposit marker (no Foreman's Rod involved): the player assigns a
- * specific miner here, the server creates/binds the chunk's miner marker to them, and the screen
- * names exactly who holds the post. Re-sent after every assign/unassign so the screen live-updates.
+ * S->C: opens (or refreshes) the Outpost Banner screen, the outpost's own management panel. The
+ * BANNER owns the deposit marker (no Foreman's Rod involved): the player assigns a specific miner
+ * here, the server creates/binds the chunk's miner marker to them, and the screen names exactly who
+ * holds the post. Re-sent after every assign/unassign so the screen live-updates.
  *
- * @param bannerPos      the banner block (round-tripped by {@link AssignOutpostWorkerPayload})
- * @param resourceName   lower-case {@code ChunkResource} name ({@code ""} = no deposit) — client
- *                       renders {@code bannerbound.resource.<name>}
- * @param storageSet     a drop-off container exists inside the outpost chunk
- * @param roofedBeds     roofed bed HEADs in the chunk (lodging; one bed houses the one worker)
- * @param veinReady      ore faces mineable RIGHT NOW (0 = vein worked out, waiting for the next
- *                       refresh wave; -1 = unknown/no deposit → row hidden)
- * @param markerOpen     a legacy rod-made marker open to ALL miners exists (pre-banner-UI worlds);
- *                       assigning a specific miner replaces it
- * @param assignedName   display name of the bound miner ({@code ""} = nobody assigned)
- * @param candidateIds   UUID strings of assignable miners (settlement citizens with the Miner job)
- * @param candidateNames parallel display names
- * @param outpostCount   the settlement's current outpost count
- * @param outpostMax     the outpost cap
- * @param established    true = an existing outpost (full management UI); false = a valid but
- *                       not-yet-claimed site (the "Establish outpost here" confirm UI)
+ * <p>bannerPos is the banner block (round-tripped by AssignOutpostWorkerPayload). resourceName is a
+ * lower-case ChunkResource name ("" = no deposit), rendered as bannerbound.resource.name. storageSet
+ * = a drop-off container exists in the chunk; roofedBeds = roofed bed HEADs (lodging). veinReady = ore
+ * faces mineable right now (0 = worked out, waiting for the next refresh wave; -1 = unknown/no
+ * deposit, row hidden). markerOpen = a legacy rod-made marker open to ALL miners exists
+ * (pre-banner-UI worlds); assigning a specific miner replaces it. assignedName = the bound miner
+ * ("" = nobody); candidateIds / candidateNames are parallel assignable-miner lists. outpostCount /
+ * outpostMax are the settlement's current count and cap. established true = existing outpost (full
+ * management UI); false = a valid but not-yet-claimed site (the confirm UI).
  */
 @ApiStatus.Internal
 public record OpenOutpostScreenPayload(BlockPos bannerPos, String resourceName, boolean storageSet,
@@ -54,9 +47,9 @@ public record OpenOutpostScreenPayload(BlockPos bannerPos, String resourceName, 
             ByteBufCodecs.STRING_UTF8.encode(buf, p.resourceName());
             ByteBufCodecs.BOOL.encode(buf, p.storageSet());
             ByteBufCodecs.VAR_INT.encode(buf, p.roofedBeds());
-            ByteBufCodecs.VAR_INT.encode(buf, p.veinReady() + 1); // VAR_INT is unsigned-friendly; shift -1..n to 0..n+1
+            ByteBufCodecs.VAR_INT.encode(buf, p.veinReady() + 1); // +1 so VAR_INT can carry -1; decode subtracts 1
             ByteBufCodecs.VAR_INT.encode(buf, p.veinTotal());
-            ByteBufCodecs.VAR_INT.encode(buf, p.richness() + 1); // -1..2 shifted to 0..3
+            ByteBufCodecs.VAR_INT.encode(buf, p.richness() + 1); // +1 so VAR_INT can carry -1; decode subtracts 1
             ByteBufCodecs.BOOL.encode(buf, p.markerOpen());
             ByteBufCodecs.STRING_UTF8.encode(buf, p.assignedName());
             ByteBufCodecs.VAR_INT.encode(buf, p.candidateIds().size());

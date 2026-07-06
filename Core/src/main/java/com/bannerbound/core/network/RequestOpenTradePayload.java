@@ -11,9 +11,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: the player clicked Trade on a Diplomacy-tab row — build and send back the
- * {@link OpenTradeScreenPayload} snapshot for settlement {@code targetId} (also marks an
- * awaiting deal as read, clearing the badge).
+ * Client -> server: the player clicked Trade on a Diplomacy-tab row -- build and send back the
+ * OpenTradeScreenPayload snapshot for settlement targetId (also marks an awaiting deal as read,
+ * clearing the badge).
  */
 @ApiStatus.Internal
 public record RequestOpenTradePayload(String targetId) implements CustomPacketPayload {

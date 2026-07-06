@@ -12,14 +12,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: open the mason's-bench chisel-strike minigame for the receiving player. The
+ * Server -> client: open the mason's-bench chisel-strike minigame for the receiving player. The
  * server holds the authoritative session (player + bench pos); the client plays the timed-strike
  * minigame and replies with {@link MasonryActionPayload}. The stone + chisel are drawn in-world by
- * the bench's renderer, so the only thing this payload carries is the pos and how many strikes the
- * queued batch takes.
- *
- * @param pos            the mason's bench the session belongs to
- * @param strikesNeeded  chisel strikes to complete the batch (scaled to batch size, capped)
+ * the bench's renderer, so the payload carries only the bench {@code pos} and {@code strikesNeeded},
+ * the chisel strikes to complete the queued batch (scaled to batch size, capped).
  */
 @ApiStatus.Internal
 public record OpenMasonChiselPayload(BlockPos pos, int strikesNeeded) implements CustomPacketPayload {

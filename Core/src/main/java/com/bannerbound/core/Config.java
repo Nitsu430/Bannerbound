@@ -14,8 +14,18 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.event.config.ModConfigEvent;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
-// An example config class. This is not required, but it's a good idea to have one to keep your config organized.
-// Demonstrates how to use Neo's config APIs
+/**
+ * Common (server-authoritative) config spec, registered as ModConfig.Type.COMMON in the
+ * BannerboundCore constructor. Per-option documentation deliberately lives in the .comment()
+ * string literals, because those ship into the generated TOML for pack authors - do not move it
+ * here. The researchSpeedMultiplier / immigrationMinSecondsBetween / birthRateMultiplier /
+ * foodPerCitizenPerDay block is the pacing group: the original tuning played far too fast in
+ * playtests, so the defaults are the deliberately slowed values. Gotcha: changing a default in
+ * this class does NOT update an already-generated TOML on disk - delete or hand-edit the saved
+ * file (or tune live) for a new default to take effect. Read month lengths via
+ * calendarMonthDays(), never CALENDAR_MONTH_DAYS raw: the accessor guarantees exactly 12 entries
+ * clamped to 1-31 (missing entries default to 7).
+ */
 @ApiStatus.Internal
 public class Config {
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
@@ -73,7 +83,6 @@ public class Config {
                 + "otherwise silently disables all grief protection during playtests.")
             .define("opsBypassClaimProtection", false);
 
-    // ─── Pacing (the default game was tuned far too fast in playtests) ──────────────────────
     public static final ModConfigSpec.DoubleValue RESEARCH_SPEED_MULTIPLIER = BUILDER
             .comment("Global multiplier on how fast BOTH the science and culture research trees "
                 + "progress. 1.0 = original speed; 0.4 (default) = 2.5x slower. Lower = slower. "
@@ -165,7 +174,6 @@ public class Config {
                 + "Culling an animal removes its share (the trade: settlement income vs. a meat harvest).")
             .defineInRange("herderFoodPerSizePerSecond", 0.05, 0.0, 1.0);
 
-    // a list of strings that are treated as resource locations for items
     public static final ModConfigSpec.ConfigValue<List<? extends String>> ITEM_STRINGS = BUILDER
             .comment("A list of items to log on common setup.")
             .defineListAllowEmpty("items", List.of("minecraft:iron_ingot"), () -> "", Config::validateItemName);
@@ -187,7 +195,6 @@ public class Config {
         return obj instanceof Integer days && days >= 1 && days <= 31;
     }
 
-    /** Sanitized month lengths: always 12 entries, each clamped 1-31 (missing entries = 7). */
     public static int[] calendarMonthDays() {
         List<? extends Integer> raw = CALENDAR_MONTH_DAYS.get();
         int[] out = new int[12];

@@ -17,25 +17,33 @@ import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Per-settlement engine for the Culture research tree. Mirror of {@link ResearchManager} â€”
- * same shape, separate state (the culture fields on {@link Settlement}) and a separate
- * datapack ({@link CultureTreeLoader}).
+ * Per-settlement engine for the Culture research tree: the mirror of {@link ResearchManager} -
+ * same shape, separate state (the culture fields on {@link Settlement}) and a separate datapack
+ * ({@link CultureTreeLoader}). Handles start/enqueue (tryEnqueue is a toggle: clicking the active
+ * node pauses it with progress preserved, clicking a queued node removes it; enqueueing appends
+ * unmet prerequisites first via DFS post-order), per-tick accrual, auto-unlocks, age regression,
+ * insight progress banking, and state sync.
  *
- * <p><b>Mutual exclusion</b>: only one research slot is active across the two trees at any
- * time. {@link #tryStart} refuses to begin a culture research while either the science slot
- * (activeResearch) or the culture slot is occupied; {@link ResearchManager#tryStart} runs
- * the same check on the science side. The simple rule keeps tuning simple â€” players can't
- * stack a science and a culture research in parallel to double the per-second drain.
+ * <p>Mutual exclusion: only ONE research slot is active across both trees at any time, so players
+ * cannot stack a science and a culture research to double the per-second drain. tryStart pauses an
+ * active science research (progress preserved - switching trees is one click, not a manual
+ * unqueue), and promoteFromQueue re-checks the science slot because a science research may have
+ * started between queue-add and promotion. ResearchManager runs the same check on its side.
  *
- * <p>Research rate: culture research accumulates at the settlement's effective
- * {@link Settlement#effectiveCulturePerSecond} per real-time second, same shape as
- * science. Culture-the-resource is NOT depleted (it's a rate, not a stockpile); the
- * cultureStored field continues to feed immigration independently.
+ * <p>Rate model: the active node accrues {@link Settlement#effectiveCulturePerSecond}/20 per tick
+ * (x config multiplier); culture is a RATE, not a stockpile - cultureStored still feeds
+ * immigration independently. Dormant settlements (all members offline, refreshed at the top of
+ * the tick in ResearchEvents) accrue nothing. Era-capped nodes (forceMaxAge) pause with progress
+ * preserved. Prerequisites are cross-tree: a culture node may require a science node.
  *
- * <p>v1 keeps the surface minimal: tryStart, tryEnqueue, initializeAutoUnlocks, tickAll,
- * broadcast/send state. Polish features ({@code unlocksItems}, regress-on-age-change, etc.)
- * already work via {@link ResearchManager}'s code path for the science tree; the culture
- * tree can grow into those features as content lands.
+ * <p>Completion runs the SAME unlock-effect pipeline as science (rate deltas, advance_age,
+ * unlock_faith_founding, ...), so culture unlocks.features are honoured. Culture unlocks.items
+ * ride the SCIENCE state payload's known-item union, so completion and age regression must also
+ * rebroadcast ResearchManager state or clients keep items masked until relog. Capacity is shared
+ * 1:1 with science (same active/cap counter on both GUI tabs) - change getCapacity alone to
+ * diverge. Age regression un-completes nodes above the new age and purges them from the active
+ * slot + queue, but applied scalar bonuses from unlocks.features are NOT reversed - same known
+ * limitation as the science twin.
  */
 public final class CultureManager {
     private static int tickCounter = 0;
@@ -66,9 +74,6 @@ public final class CultureManager {
         return false;
     }
 
-    /** Capacity gating is currently shared 1:1 with science (so the GUI shows the same
-     *  active/cap counter on both tabs). If we ever want a distinct culture cap, return a
-     *  different formula here without touching callers. */
     public static int getCapacity(Era era) {
         return 1 + era.ordinal();
     }
@@ -82,11 +87,6 @@ public final class CultureManager {
         return out;
     }
 
-    /** Age-regression twin of {@link ResearchManager#regressResearchAfterAgeChange}: culture
-     *  nodes whose {@code min_age} is above the settlement's (new, lower) age uncomplete, and
-     *  age-locked entries drop from the active slot + queue. Item/flag unlocks shrink with them
-     *  (both trees are first-class in ItemKnowledge/hasFlag). Applied scalar bonuses from
-     *  {@code unlocks.features} are NOT reversed — same known limitation as the science twin. */
     public static void regressResearchAfterAgeChange(MinecraftServer server, Settlement s) {
         int currentAge = s.age().ordinal();
         boolean changed = false;
@@ -121,14 +121,11 @@ public final class CultureManager {
         }
         if (changed) {
             broadcastStateToSettlement(server, s);
-            // Culture unlocks.items ride the science payload's known-item union — refresh it.
+            // Culture unlocks.items ride the SCIENCE payload's known-item union - must refresh it too.
             ResearchManager.broadcastStateToSettlement(server, s);
         }
     }
 
-    /** Marks every {@code auto_unlock} culture node complete for {@code settlement} on first
-     *  load + after datapack reload. Mirrors {@link ResearchManager#initializeAutoUnlocks}.
-     *  No unlock-effect side effects beyond marking complete (no items, no era jump). */
     public static void initializeAutoUnlocks(MinecraftServer server, Settlement settlement) {
         boolean changed = false;
         for (ResearchDefinition def : CultureTreeLoader.getAll().values()) {
@@ -140,8 +137,6 @@ public final class CultureManager {
         if (changed && server != null) broadcastStateToSettlement(server, settlement);
     }
 
-    /** Sweep every settlement and apply culture auto-unlocks. Twin of
-     *  {@link ResearchManager#applyAllAutoUnlocks}; safe to call on datapack reload. */
     public static void applyAllAutoUnlocks(MinecraftServer server) {
         if (server == null) return;
         SettlementData data = SettlementData.get(server.overworld());
@@ -161,22 +156,16 @@ public final class CultureManager {
         if (def == null) return ResearchManager.StartResult.UNKNOWN_RESEARCH;
         if (s.hasCompletedCultureResearch(researchId)) return ResearchManager.StartResult.ALREADY_COMPLETE;
         for (String prereq : def.prerequisites()) {
-            // Cross-tree: a culture node may require a science node (e.g. Roads â† PAVING).
             if (!s.hasCompletedResearchEitherTree(prereq)) return ResearchManager.StartResult.PREREQ_MISSING;
         }
         if (def.minAge().ordinal() > s.age().ordinal()) return ResearchManager.StartResult.AGE_LOCKED;
         if (ResearchManager.isEraCapped(def)) return ResearchManager.StartResult.AGE_LOCKED;
-        // Cross-tree transfer: if science is currently researching something, pause it
-        // (progress preserved). Switching trees is a one-click action â€” the design is "one
-        // research at a time across both," not "you have to manually unqueue first."
         if (s.activeResearch() != null) {
             s.setActiveResearch(null);
             ResearchManager.broadcastStateToSettlement(server, s);
         }
         s.cultureResearchQueue().remove(researchId);
         s.setActiveCultureResearch(researchId);
-        // Step 7 polish: clear any non-chief suggestion markers on this node â€” the chief
-        // has honoured the suggestion, so the badge has served its purpose.
         s.clearCultureSuggestions(researchId);
         com.bannerbound.core.api.settlement.SettlementManager.broadcastSuggestionState(server, s);
         data.setDirty();
@@ -194,7 +183,6 @@ public final class CultureManager {
         if (def == null) return ResearchManager.EnqueueResult.UNKNOWN_RESEARCH;
         if (s.hasCompletedCultureResearch(researchId)) return ResearchManager.EnqueueResult.ALREADY_COMPLETE;
 
-        // Toggle: clicking active drops it (progress preserved); clicking queued removes it.
         if (researchId.equals(s.activeCultureResearch())) {
             s.setActiveCultureResearch(null);
             promoteFromQueue(s);
@@ -211,7 +199,6 @@ public final class CultureManager {
         if (def.minAge().ordinal() > s.age().ordinal()) return ResearchManager.EnqueueResult.AGE_LOCKED;
         if (ResearchManager.isEraCapped(def)) return ResearchManager.EnqueueResult.AGE_LOCKED;
 
-        // Append the target after any unmet prerequisites (DFS post-order).
         java.util.List<String> chain = new java.util.ArrayList<>();
         java.util.Set<String> visited = new java.util.HashSet<>();
         if (!buildPrereqChain(researchId, s, chain, visited)) {
@@ -249,8 +236,7 @@ public final class CultureManager {
     }
 
     private static void promoteFromQueue(Settlement s) {
-        // Mutual exclusion check at promote time too â€” if a science research started
-        // between queue-add and now, hold off.
+        // Mutual exclusion: a science research may have started since queue-add - hold off.
         if (s.activeResearch() != null) return;
         int i = 0;
         while (i < s.cultureResearchQueue().size()) {
@@ -278,8 +264,6 @@ public final class CultureManager {
         }
     }
 
-    /** Per-tick accumulation: drains effectiveCulturePerSecond / 20 into the active culture
-     *  research's progress. Twin of {@link ResearchManager#tickAll} for science. */
     public static void tickAll(MinecraftServer server) {
         if (server == null) return;
         ServerLevel overworld = server.overworld();
@@ -290,8 +274,6 @@ public final class CultureManager {
         boolean anyChange = false;
 
         for (Settlement s : data.all()) {
-            // Frozen "in amber" while every member is offline — no culture accrues, nothing
-            // completes. Dormancy is refreshed at the top of the tick (ResearchEvents).
             if (s.isDormant()) continue;
             boolean completedBanked = false;
             for (java.util.Map.Entry<String, Double> progress
@@ -313,7 +295,6 @@ public final class CultureManager {
                 anyChange = true;
                 continue;
             }
-            // forceMaxAge lowered under an in-progress culture node â€” pause it (progress preserved).
             if (ResearchManager.isEraCapped(def)) {
                 s.setActiveCultureResearch(null);
                 promoteFromQueue(s);
@@ -335,8 +316,6 @@ public final class CultureManager {
         if (anyChange) data.setDirty();
     }
 
-    /** Debug twin of {@link ResearchManager#forceUnresearch} for the culture tree:
-     *  un-completes the node, clears its progress, halts it if active. */
     public static boolean forceUnresearch(MinecraftServer server, Settlement settlement,
                                           ResearchDefinition def) {
         boolean removed = settlement.completedCultureResearches().remove(def.id());
@@ -356,16 +335,12 @@ public final class CultureManager {
         s.setActiveCultureResearch(null);
         BannerboundCore.LOGGER.info("Settlement {} completed culture research {}",
             s.name(), def.id());
-        // Culture nodes run the SAME unlock-effect pipeline as science (rate deltas,
-        // advance_age, unlock_faith_founding, ...). Before this call, culture
-        // `unlocks.features` were silently ignored.
         ResearchManager.applyUnlockEffects(server, s, def);
         promoteFromQueue(s);
         com.bannerbound.core.crisis.CrisisManager.onResearchCompleted(server, s, def.id());
         com.bannerbound.core.codex.CodexManager.onResearchCompleted(server, s, def.id(), true);
         broadcastStateToSettlement(server, s);
-        // Culture unlocks.items ride the SCIENCE state payload's known-item union — refresh it
-        // so newly known items un-mask on clients without a relog.
+        // Culture unlocks.items ride the SCIENCE payload's known-item union - must refresh it too.
         ResearchManager.broadcastStateToSettlement(server, s);
     }
 

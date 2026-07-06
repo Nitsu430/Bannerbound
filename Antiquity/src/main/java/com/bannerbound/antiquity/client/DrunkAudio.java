@@ -15,24 +15,26 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.fml.ModList;
 
 /**
- * Grog drunkenness audio (GROG_PLAN.md Phase 3.5): everything the player hears warps with intoxication.
- * <ul>
- *   <li><b>Pitch wobble</b> — a woozy sway on every sound (no EFX; {@link #pitchFactor()}).</li>
- *   <li><b>Muffle</b> — an OpenAL low-pass filter on each source (the direct path; works on any device
- *       with {@code ALC_EXT_EFX}).</li>
- *   <li><b>Reverb + slapback</b> — auxiliary effect slots (room reverb + an echo when really drunk).
- *       These need the OpenAL context to expose aux sends; if it doesn't, they no-op and the muffle
- *       still applies.</li>
- * </ul>
- * Applied from {@code DrunkSoundMixin} as each sound channel is configured. Fully defensive: any EFX
- * failure (or no EFX at all) just falls back to the pitch wobble. Stands down entirely if Sound Physics
- * Remastered is installed (it owns the OpenAL effect chain). NOTE: does <i>not</i> touch Simple Voice
- * Chat — SVC has its own audio pipeline; slurring voice needs a separate SVC-plugin integration.
+ * Grog drunkenness audio (GROG_PLAN.md Phase 3.5): everything the player hears warps with
+ * intoxication, reaching full strength at level FULL_LEVEL. Three layers: (1) pitch wobble -
+ * {@link #pitchFactor()} returns a slow sine wobble around a slightly lowered pitch, deeper with
+ * intoxication; needs no EFX and is sampled once per sound (MC sounds are mostly short, so they
+ * warble). (2) Muffle - an OpenAL low-pass filter on each source's direct path, available on any
+ * device with ALC_EXT_EFX, scaled by max(drunk, hangover) so a hangover dulls the world even when
+ * sober (hangover() is a strong constant muffle until HANGOVER_UNTIL). (3) Reverb + slapback echo
+ * (echo only past half drunk) via auxiliary effect slots - the swimmy DRUNK feel, never applied
+ * for hangover; if the context exposes no aux sends these silently no-op while the muffle still
+ * applies. applyEfx is called from DrunkSoundMixin as each sound channel is configured, on the
+ * render thread where the AL context is current. Shared EFX objects are created lazily on first
+ * use; init retries until an AL context exists, then latches - false forever if EFX is absent or
+ * Sound Physics Remastered is installed (it owns the OpenAL effect chain; we stand down to pitch
+ * wobble only). Fully defensive: any EFX/driver failure just leaves the pitch wobble carrying the
+ * effect. Does NOT touch Simple Voice Chat - SVC has its own audio pipeline; slurring voice would
+ * need a separate SVC-plugin integration.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class DrunkAudio {
-    /** Level at which the audio warp is at full strength. */
     private static final float FULL_LEVEL = 6.0F;
 
     private static boolean triedInit;
@@ -43,10 +45,6 @@ public final class DrunkAudio {
 
     private DrunkAudio() {}
 
-    // ─── Pitch wobble (no EFX) ───────────────────────────────────────────────────────────────────
-
-    /** Pitch multiplier: 1.0 sober, else a slow sine wobble around a slightly lowered pitch, deeper
-     *  with intoxication. Sampled per sound (MC sounds are mostly short, so they warble). */
     public static float pitchFactor() {
         int level = level();
         if (level <= 0) {
@@ -57,28 +55,22 @@ public final class DrunkAudio {
         return 1.0F + wob * depth - depth * 0.25F;
     }
 
-    // ─── EFX (muffle + reverb + slapback) ────────────────────────────────────────────────────────
-
-    /** Attach or clear the drunk EFX on a freshly-played source, scaled by intoxication. Called from
-     *  the channel mixin on the render thread (where the AL context is current). */
     public static void applyEfx(int source) {
         if (!ensure()) {
             return;
         }
         float drunk = Math.min(1.0F, level() / FULL_LEVEL);
-        float muffle = Math.max(drunk, hangover()); // a hangover muffles the world even when sober
+        float muffle = Math.max(drunk, hangover());
         if (muffle <= 0.0F) {
             clear(source);
             return;
         }
         try {
-            // Muffle: drop the high frequencies (direct filter — always available with EFX).
             EXTEfx.alFilterf(lowpass, EXTEfx.AL_LOWPASS_GAIN, 1.0F);
             EXTEfx.alFilterf(lowpass, EXTEfx.AL_LOWPASS_GAINHF, 1.0F - 0.72F * muffle);
             AL10.alSourcei(source, EXTEfx.AL_DIRECT_FILTER, lowpass);
             AL10.alGetError();
 
-            // Reverb + slapback are the DRUNK feel (a swimmy room), not the dull hangover.
             if (reverbSlot != 0 && drunk > 0.0F) {
                 EXTEfx.alAuxiliaryEffectSlotf(reverbSlot, EXTEfx.AL_EFFECTSLOT_GAIN, Math.min(1.0F, 0.5F * drunk));
                 AL11.alSource3i(source, EXTEfx.AL_AUXILIARY_SEND_FILTER, reverbSlot, 0, EXTEfx.AL_FILTER_NULL);
@@ -89,7 +81,6 @@ public final class DrunkAudio {
                 AL10.alGetError();
             }
         } catch (Throwable ignored) {
-            // Driver hiccup — leave the source as-is (the pitch wobble still carries the effect).
         }
     }
 
@@ -103,15 +94,13 @@ public final class DrunkAudio {
         }
     }
 
-    /** Lazily create the shared EFX objects on first use (the AL context must exist + expose EFX).
-     *  Returns false (and retries next call) until ready; false forever if EFX is absent / SP owns it. */
     private static boolean ensure() {
         if (triedInit) {
             return efxReady;
         }
         long context = ALC10.alcGetCurrentContext();
         if (context == 0L) {
-            return false; // audio not up yet — try again on the next sound
+            return false; // audio not up yet: must NOT set triedInit here, so we retry on the next sound
         }
         triedInit = true;
         if (ModList.get().isLoaded("sound_physics_remastered")) {
@@ -145,7 +134,7 @@ public final class DrunkAudio {
                 echoSlot = EXTEfx.alGenAuxiliaryEffectSlots();
                 EXTEfx.alAuxiliaryEffectSloti(echoSlot, EXTEfx.AL_EFFECTSLOT_EFFECT, echoEffect);
             }
-            AL10.alGetError(); // aux sends may be unavailable on this context — the muffle still works
+            AL10.alGetError(); // not dead code: clears the AL error left when this context lacks aux sends
             efxReady = true;
             BannerboundAntiquity.LOGGER.info("Drunk audio EFX ready (muffle{}{}).",
                 reverbSlot != 0 ? " + reverb" : "", echoSlot != 0 ? " + echo" : "");
@@ -161,7 +150,6 @@ public final class DrunkAudio {
         return player == null ? 0 : player.getData(BannerboundAntiquity.INTOXICATION_LEVEL.get());
     }
 
-    /** A strong constant muffle while hungover (0 otherwise) — the morning-after dullness. */
     private static float hangover() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) {

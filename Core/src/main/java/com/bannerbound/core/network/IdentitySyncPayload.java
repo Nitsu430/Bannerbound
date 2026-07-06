@@ -13,15 +13,13 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: the server-wide settlement IDENTITY color table — for each settlement, the founding
- * {@code SettlementColor} ordinal (unique per server, so it doubles as the settlement key in
- * every payload that already carries a colorIndex) and its banner-derived identity colors as
- * an ORDERED 0xRRGGBB list, most-present dye first. The list is as long as the banner is
- * colorful (1..n) — a one-color banner syncs one color, a five-color banner five.
- *
- * <p>Every client renderer that shows "a settlement's color" resolves through
- * {@code ClientIdentityState} instead of mapping the ordinal back to the founding rgb — the
- * banner IS the color. Sent with claim syncs (login + every claims broadcast) and
+ * S->C: the server-wide settlement IDENTITY color table -- for each settlement, the founding
+ * SettlementColor ordinal (unique per server, so it doubles as the settlement key in every payload
+ * that already carries a colorIndex) and its banner-derived identity colors as an ORDERED 0xRRGGBB
+ * list, most-present dye first. The list is as long as the banner is colorful (1..n): a one-color
+ * banner syncs one color, a five-color banner five. Every client renderer that shows "a settlement's
+ * color" resolves through ClientIdentityState instead of mapping the ordinal back to the founding
+ * rgb -- the banner IS the color. Sent with claim syncs (login + every claims broadcast) and
  * re-broadcast on banner-design saves.
  */
 @ApiStatus.Internal

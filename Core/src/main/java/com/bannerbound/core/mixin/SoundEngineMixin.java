@@ -11,13 +11,12 @@ import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.client.sounds.SoundEngine;
 
 /**
- * Ducks world-sound volume by {@link SoundMuffle#factor()} so an expansion (Antiquity's poison) can
- * make the world recede — the muffled-hearing effect. {@code calculateVolume(SoundInstance)} is
- * recomputed every tick per playing sound, so the duck is continuous and tracks the live factor.
- *
- * <p>Bannerbound's own sounds (the poison ambience / cues) are exempt so they stay clear over the
- * muffle. {@code require = 0}: if the obfuscated signature ever drifts, the mixin degrades to a
- * no-op (muffle just stops working) rather than crashing the game.
+ * Ducks world-sound volume by SoundMuffle.factor() so an expansion (Antiquity's poison) can make the
+ * world recede - the muffled-hearing effect. calculateVolume(SoundInstance) is recomputed every tick
+ * per playing sound, so the duck is continuous and tracks the live factor. Bannerbound's and
+ * Antiquity's own sounds (the poison ambience / cues) are exempt so they stay clear over the muffle.
+ * require = 0 is deliberate: if the obfuscated signature ever drifts, the mixin degrades to a no-op
+ * (muffle just stops working) rather than crashing the game.
  */
 @Mixin(SoundEngine.class)
 public class SoundEngineMixin {
@@ -35,7 +34,7 @@ public class SoundEngineMixin {
         }
         String ns = sound.getLocation().getNamespace();
         if (ns.equals("bannerbound") || ns.equals("bannerboundantiquity")) {
-            return; // keep our own poison ambience / cues clear over the muffle
+            return;
         }
         cir.setReturnValue(cir.getReturnValueF() * f);
     }

@@ -40,19 +40,38 @@ import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 
-/** Merged client event handlers for the carpentry and masonry station in-world readouts. */
+/**
+ * Client event handlers for the in-world readouts of both two-cell crafting stations: the
+ * Carpenter's Table and the Mason's Bench. Each readout has three parts: a budget numeral painted
+ * flat on the master half's tabletop, yaw-snapped to front/left/right/back toward the camera
+ * (carpentry shows a per-category "L## P## S##" logs/planks/sticks breakdown omitting empty pools;
+ * masonry a single total of uncommitted stone); a row of queued outputs floating over the station's
+ * SECONDARY cell (master.relative(FACING)) so the readout spreads across both halves instead of
+ * towering above the master, each a spinning translucent 3D item chip with its TOTAL produced count;
+ * and the picker's per-craft yield count. The picker item and browse arrows themselves are drawn by
+ * each block-entity renderer at ghostPreviewY - this class only overlays glyphs and chips. The picker
+ * count sits BESIDE the preview rather than tucked into its corner because tall picks (doors, fences)
+ * can cover a corner count. Everything renders in the AFTER_TRANSLUCENT_BLOCKS level stage and must
+ * end with an explicit bufferSource().endBatch() (PenMarkerRenderer's idiom) or the count glyphs never
+ * flush. Chip drop-shadow counts are drawn MANUALLY (a dark copy offset by 1 px, then the white copy,
+ * same render type + draw order so white lands cleanly on top) rather than via the font's built-in
+ * dropShadow: at this tiny z-scale the built-in shadow's depth separation collapses and z-fights the
+ * white glyphs. The layout helpers (queueCenters / rowCenters / boxAt) are the single source of truth
+ * for where the chips sit, shared by rendering, the click routing, and the green crosshair; hover
+ * scanning (findHoveredQueue / masonryFindHoveredQueue) picks the nearest ray-hit chip but yields to
+ * any vanilla hit closer than it. Right-clicking a hovered carpentry chip cancels the vanilla use and
+ * sends CarpentryActionPayload.REMOVE_QUEUE; the picker's add/cycle clicks reuse the shared
+ * ghost-preview path (GhostRecipeClientEvents / GhostClickTargets), whose targets sit at different
+ * positions so the two never collide (and onInteract bails if the ghost handler already canceled the
+ * event). Readouts are suppressed for a station while its minigame scene owns the tabletop
+ * (CarpentrySawState / MasonChiselState) so chips do not obscure the animation. Open: only carpentry
+ * chip removal is wired in onInteract - masonry chips show the remove hover label and the server
+ * handles MasonryActionPayload.REMOVE_QUEUE, but no client code sends it yet.
+ */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
 public final class StationReadoutEvents {
 
-    // ==================== from StationReadoutEvents ====================
-
-    /*
-     * Right-click routing for the in-world QUEUE chips: aiming at a queued item and pressing use removes
-     * that entry. The picker's add/cycle reuses the shared ghost-preview path ({@code GhostRecipeClientEvents});
-     * queue chips sit at different positions, so the two never collide (and this bails if the ghost handler
-     * already consumed the click).
-     */
     private StationReadoutEvents() {}
 
     @SubscribeEvent
@@ -67,25 +86,16 @@ public final class StationReadoutEvents {
             new CarpentryActionPayload(hit.pos(), CarpentryActionPayload.REMOVE_QUEUE, hit.index()));
     }
 
-    // ==================== from StationReadoutEvents ====================
-
-    /*
-     * The Carpenter's Table's in-world readout: a flat tabletop budget numeral, floating queued outputs,
-     * and the picker's per-craft yield count. The picker item and browse arrows are drawn by the
-     * block-entity renderer at {@code ghostPreviewY}. Drawn in a level-stage pass with an explicit buffer flush
-     * ({@code PenMarkerRenderer}'s idiom) so the count glyphs actually flush. Layout helpers here are the
-     * single source of truth for where the queue chips sit, shared by the click handler + crosshair.
-     */
     private static final int FULLBRIGHT = 0x00F000F0;
-    private static final double QUEUE_Y = 1.08;    // queued outputs sit low over the secondary cell
-    private static final double SPACING = 0.34;    // gap between chips in a row
-    private static final float CHIP = 0.24F;       // chip world size
-    private static final float PICKER_CHIP = 0.34F; // matches the BER picker's render scale (count corner)
+    private static final double QUEUE_Y = 1.08;
+    private static final double SPACING = 0.34;
+    private static final float CHIP = 0.24F;
+    private static final float PICKER_CHIP = 0.34F; // must match the BER picker's render scale
     private static final float BUDGET_SCALE = 0.035F;
     private static final float HOVER_LABEL_SCALE = 0.0075F;
     private static final int LABEL_BG = 0x00000000;
-    static final double CHIP_BOX = 0.28;           // click hitbox size
-    static final double SCAN = 7.0;                // render/interact range
+    static final double CHIP_BOX = 0.28;
+    static final double SCAN = 7.0;
     private static final int MAX_CHIPS = 7;
 
     @SubscribeEvent
@@ -106,8 +116,6 @@ public final class StationReadoutEvents {
         QueueHit queueHover = findHoveredQueue(mc);
 
         for (WoodworkingTableBlockEntity be : tables) {
-            // While this table's saw minigame is open, the BER's saw scene owns the tabletop — hide the
-            // readout so the floating chips don't sit over (and obscure) the animation.
             if (CarpentrySawState.activeFor(be.getBlockPos())) {
                 continue;
             }
@@ -115,11 +123,9 @@ public final class StationReadoutEvents {
             double cx = p.getX() + 0.5;
             double cz = p.getZ() + 0.5;
 
-            // The budget is marked directly on the tabletop, leaving the floating picker clear.
             if (!be.getLogs().isEmpty()) {
                 drawTableBudget(pose, buffer, font, be, camera);
             }
-            // Queue (over the second cell) — output icons with their TOTAL produced count.
             List<Vec3> qc = queueCenters(be, camera);
             List<WoodworkingTableBlockEntity.ListEntry> queue = be.getBuildList();
             for (int i = 0; i < qc.size(); i++) {
@@ -134,7 +140,6 @@ public final class StationReadoutEvents {
                     HOVER_LABEL_SCALE, 0xFFFFE2A8, LABEL_BG);
             }
 
-            // Picker yield count — overlaid at the spinning ghost's lower-right corner (ghost is BER).
             ItemStack ghost = be.getGhostResult();
             if (!ghost.isEmpty() && ghost.getCount() > 1) {
                 drawPickerCount(pose, buffer, font, ghost.getCount(),
@@ -152,9 +157,6 @@ public final class StationReadoutEvents {
         buffer.endBatch();
     }
 
-    /** World centers of the queue chips for {@code be} (single source of truth for render + click). The
-     *  queue floats over the table's SECONDARY (otherwise-empty) cell — {@code master.relative(FACING)}
-     *  — so the readout spreads across both halves instead of towering above the master. */
     static List<Vec3> queueCenters(WoodworkingTableBlockEntity be, Camera camera) {
         BlockPos sec = be.getBlockPos().relative(be.getBlockState().getValue(WoodworkingTableBlock.FACING));
         return rowCenters(Math.min(be.getBuildList().size(), MAX_CHIPS),
@@ -172,7 +174,6 @@ public final class StationReadoutEvents {
         return out;
     }
 
-    /** Carpenter's tables within {@link #SCAN} blocks of the player (chunk-scoped, cheap). */
     static List<WoodworkingTableBlockEntity> nearbyTables(Minecraft mc) {
         List<WoodworkingTableBlockEntity> out = new ArrayList<>();
         if (mc.player == null || mc.level == null) return out;
@@ -203,11 +204,8 @@ public final class StationReadoutEvents {
         return AABB.ofSize(center, CHIP_BOX, CHIP_BOX, CHIP_BOX);
     }
 
-    /** A ray-picked queue chip: the table + the queue slot the crosshair is on. */
     public record QueueHit(BlockPos pos, int index) {}
 
-    /** The queue chip the player is aiming at (nearest, and only when it beats the vanilla block under
-     *  the crosshair), or {@code null}. Shared by the click handler and the green crosshair. */
     public static QueueHit findHoveredQueue(Minecraft mc) {
         if (mc.player == null || mc.level == null || mc.screen != null || mc.player.isSpectator()) return null;
         Camera camera = mc.gameRenderer.getMainCamera();
@@ -229,7 +227,6 @@ public final class StationReadoutEvents {
             }
         }
         if (best == null) return null;
-        // A solid block (or anything) closer than the chip wins — don't claim that click.
         HitResult vanilla = mc.hitResult;
         if (vanilla != null && vanilla.getType() != HitResult.Type.MISS
                 && vanilla.getLocation().distanceToSqr(eye) < bestDist) {
@@ -238,14 +235,10 @@ public final class StationReadoutEvents {
         return best;
     }
 
-    /** A small 3D floating block (spinning like the picker, so it never reads as a flat billboard),
-     *  drawn translucent so the readout sits lightly over the world, with a vanilla-style count. */
     private static void drawChip(PoseStack pose, MultiBufferSource buffer, Font font, ItemRenderer ir,
                                  BlockEntity be, Camera camera, ItemStack stack, int count, Vec3 worldCenter,
                                  float t) {
         Vec3 cam = camera.getPosition();
-        // The item — a real 3D item (NONE) spinning like the picker, rerouted through the ghost buffer
-        // so it comes out translucent.
         pose.pushPose();
         pose.translate(worldCenter.x - cam.x, worldCenter.y - cam.y, worldCenter.z - cam.z);
         pose.mulPose(Axis.YP.rotationDegrees(t * 3.0F));
@@ -283,11 +276,9 @@ public final class StationReadoutEvents {
         pose.popPose();
     }
 
-    /** Remaining budget painted flat onto the master half, snapped to front/left/right/back. Shows a
-     *  per-type breakdown — {@code L## P## S##} for logs / planks / sticks — omitting empty pools. */
     private static void drawTableBudget(PoseStack pose, MultiBufferSource buffer, Font font,
                                         WoodworkingTableBlockEntity be, Camera camera) {
-        int[] net = be.remainingByCategory(); // [LOG, PLANK, STICK]
+        int[] net = be.remainingByCategory(); // order: [LOG, PLANK, STICK]
         StringBuilder sb = new StringBuilder();
         String[] labels = {"L", "P", "S"};
         for (int i = 0; i < net.length; i++) {
@@ -328,32 +319,24 @@ public final class StationReadoutEvents {
         pose.popPose();
     }
 
-    /** A vanilla-style count (white over a dark drop shadow) at the lower-right corner of a chip of world
-     *  size {@code chip}, billboarded to face the player and drawn on top ({@code SEE_THROUGH}) so it
-     *  never clips into the (spinning, translucent) item. No number for stacks of 1, like the inventory.
-     *  The shadow is drawn MANUALLY (a dark copy offset by 1px, then the white copy) rather than via the
-     *  font's built-in {@code dropShadow}: at this tiny z-scale the built-in shadow's depth separation
-     *  collapses and z-fights the white glyphs. Same render type + draw order ⇒ white cleanly on top. */
     private static void drawCountAtCorner(PoseStack pose, MultiBufferSource buffer, Font font, int count,
                                           Vec3 worldCenter, Camera camera, float chip) {
         if (count <= 1) return;
         Vec3 cam = camera.getPosition();
         String s = count > 999 ? String.format("%.1fk", count / 1000.0) : Integer.toString(count);
-        float fs = chip / 16.0F; // 1 font px = chip/16 world → digits ~ inventory proportion
+        float fs = chip / 16.0F; // 1 font px = chip/16 world -> digits match inventory proportion
         int x = -font.width(s);
         int y = -font.lineHeight;
         pose.pushPose();
         pose.translate(worldCenter.x - cam.x, worldCenter.y - cam.y, worldCenter.z - cam.z);
         pose.mulPose(camera.rotation());
-        pose.translate(chip * 0.55, -chip * 0.52, -0.06); // lower-right, toward the camera
-        pose.scale(fs, -fs, fs); // font space: +Y is down → flip Y
+        pose.translate(chip * 0.55, -chip * 0.52, -0.06);
+        pose.scale(fs, -fs, fs);
         Matrix4f mat = pose.last().pose();
         font.drawInBatch(s, x, y, 0xFFFFFFFF, false, mat, buffer, Font.DisplayMode.NORMAL, 0, FULLBRIGHT);
         pose.popPose();
     }
 
-    /** The picker can be a tall block (doors/fences), so its count sits beside the preview instead of
-     *  tucked into the model's corner where geometry can cover it. */
     private static void drawPickerCount(PoseStack pose, MultiBufferSource buffer, Font font, int count,
                                         Vec3 worldCenter, Camera camera) {
         if (count <= 1) return;
@@ -372,15 +355,6 @@ public final class StationReadoutEvents {
         pose.popPose();
     }
 
-    // ==================== from StationReadoutEvents ====================
-
-    /*
-     * The Mason's Bench's in-world readout — the stone analogue of {@code StationReadoutEvents}: a
-     * flat bench-top budget numeral (total uncommitted stone), floating queued outputs with their
-     * produced count, and the picker's per-craft yield count. The picker item + browse arrows are drawn
-     * by the block-entity renderer at {@code ghostPreviewY}. Drawn in a level-stage pass with an
-     * explicit buffer flush so the count glyphs actually flush.
-     */
     @SubscribeEvent
     public static void masonryOnRenderLevelStage(RenderLevelStageEvent event) {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_TRANSLUCENT_BLOCKS) return;
@@ -400,7 +374,7 @@ public final class StationReadoutEvents {
 
         for (MasonsBenchBlockEntity be : benches) {
             if (MasonChiselState.activeFor(be.getBlockPos())) {
-                continue; // the chisel scene owns the bench top
+                continue;
             }
             BlockPos p = be.getBlockPos();
             double cx = p.getX() + 0.5;
@@ -440,14 +414,12 @@ public final class StationReadoutEvents {
         buffer.endBatch();
     }
 
-    /** World centers of the queue chips for {@code be} — over the bench's SECONDARY cell. */
     static List<Vec3> queueCenters(MasonsBenchBlockEntity be, Camera camera) {
         BlockPos sec = be.getBlockPos().relative(be.getBlockState().getValue(MasonsBenchBlock.FACING));
         return rowCenters(Math.min(be.getBuildList().size(), MAX_CHIPS),
             sec.getX() + 0.5, sec.getY() + QUEUE_Y, sec.getZ() + 0.5, horizontalRight(camera));
     }
 
-    /** Mason's benches within {@link #SCAN} blocks of the player (chunk-scoped, cheap). */
     static List<MasonsBenchBlockEntity> nearbyBenches(Minecraft mc) {
         List<MasonsBenchBlockEntity> out = new ArrayList<>();
         if (mc.player == null || mc.level == null) return out;
@@ -468,7 +440,6 @@ public final class StationReadoutEvents {
         return out;
     }
 
-    /** The queue chip the player is aiming at (nearest, and only when it beats the vanilla block). */
     public static QueueHit masonryFindHoveredQueue(Minecraft mc) {
         if (mc.player == null || mc.level == null || mc.screen != null || mc.player.isSpectator()) return null;
         Camera camera = mc.gameRenderer.getMainCamera();
@@ -525,7 +496,6 @@ public final class StationReadoutEvents {
         pose.popPose();
     }
 
-    /** Total uncommitted stone painted flat onto the master half, snapped to front/left/right/back. */
     private static void drawBenchBudget(PoseStack pose, MultiBufferSource buffer, Font font,
                                         MasonsBenchBlockEntity be, Camera camera) {
         int remaining = be.remainingTotal();

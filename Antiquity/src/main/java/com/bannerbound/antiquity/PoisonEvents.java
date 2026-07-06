@@ -46,12 +46,33 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 
 /**
- * Drives the poison lifecycle for EVERY living entity — player, wild animal, or citizen — so a single
- * shared path handles escalation, damage-over-time and each poison's signature effect (vanilla's
- * {@link HuntingEvents} bleed handler is {@code Animal}-only, hence a separate subscriber here).
+ * Drives the poison lifecycle for EVERY living entity -- player, wild animal, or citizen -- so one
+ * shared path handles escalation, damage-over-time and each poison's signature effect
+ * ({@link HuntingEvents}' bleed handler is {@code Animal}-only, hence a separate subscriber). Hot
+ * path: the tick handlers fire for every {@link LivingEntity} every tick, so each not-affected case
+ * is a single attachment read returning a sentinel (NONE / 0L) and an immediate bail, no allocation.
  *
- * <p>Hot path: this fires for every {@link LivingEntity} every tick, so the not-poisoned case is a
- * single attachment read returning the {@code NONE} sentinel and an immediate bail with no allocation.
+ * <p>Delivery: laced food stamps POISON_FOOD_* attachments on the eater and the dose lands only
+ * after a config delay, so the meal isn't the obvious cause. Any {@code #minecraft:arrows} item is
+ * "tipped" by poison paste stamping the ARROW_POISON component; it is read off the fired arrow's
+ * origin ammo stack to poison a struck creature (vanilla damage still runs; the poison kill credits
+ * the shooter), spawn a server-side colour trail (no sync needed), and show openly on the tooltip.
+ * Antidotes cure via shift-right-click, handled on {@code EntityInteract} which fires BEFORE the
+ * target's own interaction so it works on menu-opening entities (citizens); the antidote is consumed
+ * only when the target has its matching poison. Oleander blocks ALL healing (regen, potions,
+ * everything) while active. A crit with any {@code #bannerboundantiquity:blunt_weapons} item
+ * staggers the target ~1s via {@link BluntStun} (handler fires both sides; stun/expire server-gated).
+ *
+ * <p>Curare is the non-lethal kidnap poison: an unconscious victim cannot attack or interact and
+ * takes no fall damage (the tow could spike velocity into a fall hit). A PLAIN rope click (shift is
+ * reserved for FiberRopeItem's spear-reel and the antidote cure) toggles the drag, linking synced
+ * DRAGGED_BY on the victim (drives the rope render) to server-only DRAGGING on the dragger (drives
+ * the tow); the grab click is consumed even when blocked so the rope never falls through to another
+ * interaction. The victim trails FOLLOW_DIST behind, pulled at up to DRAG_SPEED blocks/tick; dragged
+ * players are pre-immobilised and towed via velocity packets plus a teleport catch-up beyond
+ * TELEPORT_DIST; the rope snaps past MAX_TETHER. Friendly-fire on every curare delivery (dart,
+ * arrow coating, grab): it never lands on the shooter's own settlement, and {@link #sameSettlement}
+ * treats unresolvable entities as unsettled so neutral kidnapping keeps working.
  */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID)
 @ApiStatus.Internal
@@ -66,13 +87,12 @@ public final class PoisonEvents {
         if (!(living.level() instanceof ServerLevel level)) {
             return;
         }
-        tickFoodPoison(living, level); // a delayed dose from laced food may now be due
+        tickFoodPoison(living, level);
         if (Poisons.isPoisoned(living)) {
             Poisons.tickPoison(living, level);
         }
     }
 
-    /** Apply a pending food-poison dose once its delay elapses (set when the victim ate laced food). */
     private static void tickFoodPoison(LivingEntity living, ServerLevel level) {
         long applyAt = living.getData(BannerboundAntiquity.POISON_FOOD_APPLY_AT.get());
         if (applyAt <= 0L || level.getGameTime() < applyAt) {
@@ -84,13 +104,10 @@ public final class PoisonEvents {
         living.setData(BannerboundAntiquity.POISON_FOOD_TYPE.get(), "");
         living.setData(BannerboundAntiquity.POISON_FOOD_STAGE.get(), 0);
         if (type != null && stage > 0) {
-            Poisons.applyPoisonAtStage(living, type, stage); // dose → starting stage
+            Poisons.applyPoisonAtStage(living, type, stage);
         }
     }
 
-    /** Eating laced food schedules its poison a short while later (so the meal isn't the obvious cause).
-     *  Fires for any entity that finishes eating; only laced stacks carry the {@code POISONED_FOOD}
-     *  component, so the clean-food case is one component read. */
     @SubscribeEvent
     static void onFinishEating(LivingEntityUseItemEvent.Finish event) {
         if (!Config.POISON_ENABLED.get() || event.getEntity().level().isClientSide) {
@@ -107,9 +124,6 @@ public final class PoisonEvents {
         eater.setData(BannerboundAntiquity.POISON_FOOD_STAGE.get(), laced.dose());
     }
 
-    /** Oleander attacks the healing system: while it's active, ALL healing is blocked — natural regen,
-     *  golden apples, regen potions, everything — so any damage taken sticks while its cardiac clock
-     *  runs down. Fires for every healing entity, so the not-oleander case is one attachment read. */
     @SubscribeEvent
     static void onLivingHeal(LivingHealEvent event) {
         if (Config.POISON_ENABLED.get() && Poisons.blocksHealing(event.getEntity())) {
@@ -117,11 +131,6 @@ public final class PoisonEvents {
         }
     }
 
-    /** Shift-right-click any poisoned creature (mob, player, or citizen) WITH an antidote to cure THEM
-     *  of that antidote's poison. Handled on {@code EntityInteract}, which fires BEFORE the target's own
-     *  interaction — so it works even on entities that open a menu on right-click (citizens). Only fires
-     *  when the target actually has the matching poison; otherwise it passes through (no wasted antidote,
-     *  normal interaction still happens). */
     @SubscribeEvent
     static void onAntidoteOnEntity(PlayerInteractEvent.EntityInteract event) {
         Player player = event.getEntity();
@@ -135,7 +144,7 @@ public final class PoisonEvents {
             return;
         }
         if (!player.level().isClientSide) {
-            Poisons.cure(target, antidote.cures()); // clears only this antidote's poison + plays the heal cue
+            Poisons.cure(target, antidote.cures());
             if (!player.getAbilities().instabuild) {
                 stack.shrink(1);
             }
@@ -144,10 +153,7 @@ public final class PoisonEvents {
         event.setCancellationResult(InteractionResult.sidedSuccess(player.level().isClientSide));
     }
 
-    /** A curare-unconscious player can't act — cancel their own attacks and interactions (the dragger
-     *  is never unconscious, so the kidnap grab / antidote-on-target are unaffected). NeoForge forbids
-     *  subscribing to the abstract {@link PlayerInteractEvent} base, so each concrete right/left-click
-     *  subclass gets a thin handler delegating to {@link #cancelIfUnconscious}. */
+    // NeoForge rejects @SubscribeEvent on the abstract PlayerInteractEvent base -> one thin handler per concrete subclass
     @SubscribeEvent
     static void onUnconsciousRightClickBlock(PlayerInteractEvent.RightClickBlock event) { cancelIfUnconscious(event); }
 
@@ -176,8 +182,6 @@ public final class PoisonEvents {
         }
     }
 
-    /** No fall damage while curare-unconscious — honours the non-lethal promise and avoids the tow/
-     *  pin velocity spiking into a fall hit. */
     @SubscribeEvent
     static void onUnconsciousFall(LivingIncomingDamageEvent event) {
         if (event.getSource().is(DamageTypeTags.IS_FALL) && curareUnconscious(event.getEntity())) {
@@ -189,24 +193,12 @@ public final class PoisonEvents {
         return Poisons.isCurareUnconscious(entity, entity.level().getGameTime());
     }
 
-    /*
-     * Poison ARROWS aren't a special item — ANY arrow (the {@code #minecraft:arrows} tag) is "tipped" by
-     * coating it with a poison paste, which stamps the {@code ARROW_POISON} component (see
-     * {@link com.bannerbound.antiquity.item.PoisonPasteItem}). This delivers it on the fired arrow ENTITY,
-     * read off the ammo it was shot from: a colour trail in flight, and the poison applied on a creature
-     * hit. Works for vanilla AND flint arrows alike (the renderer/model are untouched — the only tell is
-     * the open tooltip + the trail).
-     */
-
-    /** The poison coating the arrow (from the ammo stack it carries), or {@code null}. */
     @Nullable
     private static PoisonType arrowPoison(AbstractArrow arrow) {
         String id = arrow.getPickupItemStackOrigin().get(BannerboundAntiquity.ARROW_POISON.get());
         return id == null ? null : PoisonType.fromId(id);
     }
 
-    /** Apply the coating's poison when a poison-tipped arrow strikes a creature (vanilla damage still
-     *  runs — the event isn't cancelled). */
     @SubscribeEvent
     static void onProjectileImpact(ProjectileImpactEvent event) {
         if (!Config.POISON_ENABLED.get()
@@ -217,18 +209,14 @@ public final class PoisonEvents {
         }
         PoisonType poison = arrowPoison(arrow);
         if (poison != null && hit.getEntity() instanceof LivingEntity living && living.isAlive()) {
-            // Same friendly-fire rule as curare darts: the kidnap poison never lands on the
-            // shooter's own settlement (the arrow itself still hits — only the coating is inert).
             if (poison == PoisonType.CURARE && arrow.getOwner() instanceof LivingEntity shooter
                 && PoisonEvents.sameSettlement(shooter, living)) {
                 return;
             }
-            Poisons.applyPoison(living, poison, arrow.getOwner()); // credit the eventual poison kill to the shooter
+            Poisons.applyPoison(living, poison, arrow.getOwner());
         }
     }
 
-    /** A poison-tipped arrow trails its poison's colour in flight — server-spawned, so every client
-     *  sees the right colour without syncing anything. */
     @SubscribeEvent
     static void onArrowTick(EntityTickEvent.Post event) {
         if (!(event.getEntity() instanceof AbstractArrow arrow)
@@ -246,7 +234,6 @@ public final class PoisonEvents {
             arrow.getX(), arrow.getY(), arrow.getZ(), 1, 0.0, 0.0, 0.0, 0.0);
     }
 
-    /** Show the coating on any tipped arrow's tooltip — openly (it's a weapon, not a hidden lace). */
     @SubscribeEvent
     static void onTooltip(ItemTooltipEvent event) {
         String id = event.getItemStack().get(BannerboundAntiquity.ARROW_POISON.get());
@@ -258,16 +245,6 @@ public final class PoisonEvents {
         }
     }
 
-    /*
-     * Blunt weapons stagger on a crit. When a player lands a critical hit with anything in
-     * {@code #bannerboundantiquity:blunt_weapons} (the bone club, the smithing hammers), the struck
-     * creature is stunned for 1s — half movement speed plus, for a struck player, a blurred-vision daze
-     * (see {@link BluntStun}). A single shared handler so every present and future blunt weapon gets it
-     * for free by sitting in the tag.
-     */
-
-    /** A crit with a blunt weapon staggers the target. Fires on both sides; {@link BluntStun#stun}
-     *  is server-gated, so the client call is a harmless no-op. */
     @SubscribeEvent
     static void onBluntCrit(CriticalHitEvent event) {
         if (!event.isCriticalHit()
@@ -278,8 +255,6 @@ public final class PoisonEvents {
         BluntStun.stun(target);
     }
 
-    /** Expire the stagger once its deadline passes (clears the half-speed modifier). Cheap bail for
-     *  the common un-stunned entity: a single attachment read returning the 0L default. */
     @SubscribeEvent
     static void onLivingTick(EntityTickEvent.Post event) {
         if (event.getEntity() instanceof LivingEntity living && !living.level().isClientSide
@@ -288,21 +263,11 @@ public final class PoisonEvents {
         }
     }
 
-    /*
-     * The curare "kidnap" drag: right-click a curare-UNCONSCIOUS creature with a fiber rope (any
-     * {@code #bannerbound:herder_rope} item) to tether it, then walk — it's towed behind you. Works on
-     * animals, citizens (clean, server-authoritative), and players (immobilised first so they have no
-     * input authority, then towed via velocity packets + a teleport catch-up for big gaps — slightly
-     * rubber-bandy, as players can't be vanilla-leashed). The link is the synced {@code DRAGGED_BY} (on
-     * the victim, drives the rope render) + server-only {@code DRAGGING} (on the dragger, drives the tow).
-     */
-    private static final double FOLLOW_DIST = 2.0;    // the victim trails this far behind
-    private static final double DRAG_SPEED = 0.4;     // blocks/tick pull cap
-    private static final double TELEPORT_DIST = 4.0;  // beyond this, snap a player closer (client authority)
-    private static final double MAX_TETHER = 8.0;     // beyond this the rope "snaps" and releases
+    private static final double FOLLOW_DIST = 2.0;
+    private static final double DRAG_SPEED = 0.4;
+    private static final double TELEPORT_DIST = 4.0;
+    private static final double MAX_TETHER = 8.0;
 
-    /** Grab/release: a PLAIN (non-shift) rope click on a curare-unconscious target toggles the drag.
-     *  Shift is reserved for FiberRopeItem's spear-reel, and the antidote-cure uses shift too. */
     @SubscribeEvent
     static void onRopeGrab(PlayerInteractEvent.EntityInteract event) {
         Player player = event.getEntity();
@@ -311,15 +276,13 @@ public final class PoisonEvents {
             || !Poisons.isCurareUnconscious(target, target.level().getGameTime())) {
             return;
         }
-        // No kidnapping your own settlement's members — cross-settlement/neutral targets only.
-        // The click is still consumed so the rope doesn't fall through to another interaction.
         if (!player.level().isClientSide && !sameSettlement(player, target)) {
             int cur = target.getData(BannerboundAntiquity.DRAGGED_BY.get());
             if (cur == player.getId()) {
-                release(player, target); // re-click my own victim → let go
+                release(player, target);
             } else {
                 if (cur != 0 && target.level().getEntity(cur) instanceof LivingEntity prev) {
-                    prev.setData(BannerboundAntiquity.DRAGGING.get(), 0); // steal from a previous dragger
+                    prev.setData(BannerboundAntiquity.DRAGGING.get(), 0);
                 }
                 target.setData(BannerboundAntiquity.DRAGGED_BY.get(), player.getId());
                 player.setData(BannerboundAntiquity.DRAGGING.get(), target.getId());
@@ -329,9 +292,6 @@ public final class PoisonEvents {
         event.setCancellationResult(InteractionResult.sidedSuccess(player.level().isClientSide));
     }
 
-    /** Friendly-fire guard on the kidnap poison's delivery: a curare dart shot at a member of the
-     *  shooter's OWN settlement (player or citizen) passes through harmlessly — same rule as the
-     *  drag grab above, so members can't be put under by their own. Other poisons are unaffected. */
     @SubscribeEvent
     static void onDartImpact(ProjectileImpactEvent event) {
         if (!(event.getProjectile() instanceof BlowdartProjectile dart) || dart.level().isClientSide
@@ -345,10 +305,6 @@ public final class PoisonEvents {
         event.setCanceled(true);
     }
 
-    /** True when both entities resolve to the SAME settlement (players via the member roster,
-     *  citizens via their own link). Unsettled/unresolvable entities are never "same settlement",
-     *  so neutral kidnapping keeps working. Mirrors {@link HerdingEvents#leashingUnlocked}'s
-     *  defensive settlement resolution. */
     static boolean sameSettlement(LivingEntity a, LivingEntity b) {
         Settlement sa = settlementOf(a);
         if (sa == null) {
@@ -370,13 +326,12 @@ public final class PoisonEvents {
             try {
                 return SettlementData.get(server.overworld()).getByPlayer(sp.getUUID());
             } catch (Exception ex) {
-                return null; // no settlement / not loaded → treat as unsettled
+                return null;
             }
         }
         return null;
     }
 
-    /** Tow the dragged victim toward the dragger each tick (run from the dragger's own tick). */
     @SubscribeEvent
     static void onDraggerTick(EntityTickEvent.Post event) {
         if (!(event.getEntity() instanceof Player dragger) || dragger.level().isClientSide) {
@@ -402,13 +357,12 @@ public final class PoisonEvents {
         Vec3 toDragger = new Vec3(dragger.getX() - victim.getX(), 0.0, dragger.getZ() - victim.getZ());
         double dist = toDragger.length();
         if (dist <= FOLLOW_DIST) {
-            return; // close enough — let it rest (trailing behind)
+            return;
         }
         Vec3 dir = toDragger.scale(1.0 / dist);
         Vec3 pull = dir.scale(Math.min(DRAG_SPEED, dist - FOLLOW_DIST));
         if (victim instanceof ServerPlayer sp) {
-            // The player is already rooted (speed -1) so they can't fight this; nudge, and for a big
-            // gap force a teleport to a trailing point (velocity packets alone lag/rubber-band).
+            // hurtMarked forces the velocity packet; players keep client authority, so big gaps need the teleport
             sp.setDeltaMovement(pull.x, sp.getDeltaMovement().y, pull.z);
             sp.hurtMarked = true;
             if (dist > TELEPORT_DIST) {
@@ -429,7 +383,6 @@ public final class PoisonEvents {
             || HerderWorkGoal.isRope(dragger.getOffhandItem());
     }
 
-    /** Drop both ends of the rope link. */
     static void release(Player dragger, LivingEntity victim) {
         dragger.setData(BannerboundAntiquity.DRAGGING.get(), 0);
         if (victim != null) {

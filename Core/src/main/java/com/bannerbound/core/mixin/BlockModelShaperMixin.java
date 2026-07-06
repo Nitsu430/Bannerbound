@@ -15,11 +15,10 @@ import net.minecraft.client.resources.model.BakedModel;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Swap the baked model for any ore that's currently disguised for the local player. The chunk
- * mesher calls {@code getBlockModel(BlockState)} during meshing — by returning the disguise's
- * model (e.g. stone), the chunk visually contains stone where iron ore actually sits. When the
- * player's research unlocks the reveal flag, ClientResearchState triggers a chunk re-mesh and
- * the real model is used.
+ * Swaps the baked model for any ore currently disguised for the local player. The chunk mesher
+ * calls getBlockModel(BlockState) during meshing; by returning the disguise's model (e.g. stone)
+ * the chunk visually contains stone where iron ore actually sits. When the player's research
+ * unlocks the reveal flag, ClientResearchState triggers a chunk re-mesh and the real model is used.
  */
 @Mixin(BlockModelShaper.class)
 @ApiStatus.Internal

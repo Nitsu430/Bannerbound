@@ -19,10 +19,12 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
 /**
- * {@code /bannerbound poison <player> <poison>} — op/singleplayer test command that simulates a
+ * {@code /bannerbound poison <player> <poison>} -- op/singleplayer test command that simulates a
  * poison dart landing on a player (applies the poison + plays its hit cue, so a second run escalates
- * the stage immediately, just like a real second dart). Registered under the same {@code /bannerbound}
- * root as Core's command — Brigadier merges same-named literal roots across mods.
+ * the stage immediately, just like a real second dart). Also registers {@code /bannerbound
+ * vomit_overlay}, which splatters green goo on the running player's screen (fades over 10s) to test
+ * the "vomited-in-your-face" effect. Registered under the same {@code /bannerbound} root as Core's
+ * command -- Brigadier merges same-named literal roots across mods.
  */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID)
 @ApiStatus.Internal
@@ -48,8 +50,6 @@ public final class PoisonCommand {
                 .executes(PoisonCommand::vomitOverlay)));
     }
 
-    /** {@code /bannerbound vomit_overlay} — splatter green vomit goo on the running player's screen
-     *  (fades over 10s). Singleplayer/op test for the "vomited-in-your-face" effect. */
     private static int vomitOverlay(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         ServerPlayer self = ctx.getSource().getPlayerOrException();
         com.bannerbound.antiquity.item.Intoxication.splatter(self);

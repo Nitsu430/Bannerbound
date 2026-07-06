@@ -13,7 +13,9 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Client mirror of the faith's pantheon ({@link ConstellationsSyncPayload}): drives the
- * believer-sky line rendering and Pantheon mode's used-star exclusions.
+ * believer-sky line rendering and Pantheon mode's used-star exclusions. Both fields are volatile
+ * immutable snapshots swapped wholesale in replace(), so the render thread always reads a
+ * consistent set without locking.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal

@@ -9,11 +9,12 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * A read/write {@link Container} facade over several backing containers — the storage blocks enclosed
- * by a Stockpile. Lets the existing worker drop-off logic ({@link DropOffContainers#insert},
- * {@link DropOffContainers#roomFor}, {@link DropOffContainers#extractOne}, …) treat a whole stockpile
- * as one inventory: a flat slot index maps to a slot in one of the parts. So a worker assigned to the
- * stockpile block fans its yield across every chest / barrel / basket inside, with no Stocker needed.
+ * A read/write Container facade over several backing containers - the storage blocks enclosed by a
+ * Stockpile. Lets the existing worker drop-off logic (DropOffContainers insert/roomFor/extractOne)
+ * treat a whole stockpile as one inventory: a flat slot index maps to a slot in one of the parts, so a
+ * worker assigned to the stockpile block fans its yield across every chest / barrel / basket inside,
+ * with no Stocker needed. maxStack is the min across parts so a stack never overflows the tightest
+ * backing container.
  */
 @ApiStatus.Internal
 final class AggregateContainer implements Container {

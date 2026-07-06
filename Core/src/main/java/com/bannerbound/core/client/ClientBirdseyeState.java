@@ -12,8 +12,10 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * Holds the transient state needed to render the territory birdseye overlay in-world while the
  * {@link ExpandTerritoryScreen} is open: which chunks are own vs foreign vs purchasable, the
- * settlement color, and references to the original / synthetic camera entities so the renderer
- * can no-op when birdseye isn't active.
+ * settlement color, the hovered chunk (set per-frame by the screen), and references to the
+ * original / synthetic camera entities so the renderer can no-op when birdseye isn't active. The
+ * slab Y that chunks are painted on is computed per-session from the player's position so the
+ * overlay sits above local terrain without exceeding render distance from above.
  * <p>
  * Set on screen open, cleared on close. The screen is responsible for setting + clearing.
  */
@@ -29,11 +31,7 @@ public final class ClientBirdseyeState {
     private static int colorOrdinal;
     private static long townHallChunk;
     private static boolean canAfford;
-    /** The chunk currently under the mouse cursor (set per-frame by the screen). Null = none. */
     private static Long hoveredChunk;
-    /** World Y of the slab plane the renderer paints chunks on, computed per-session from the
-     *  player's position so the overlay sits above local terrain without exceeding render
-     *  distance from above. */
     private static int slabY;
     private static int cameraY;
 

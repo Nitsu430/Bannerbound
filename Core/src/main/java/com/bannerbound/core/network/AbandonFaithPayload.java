@@ -8,8 +8,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: the player clicked Abandon Faith (FaithInfoScreen). Chief/owner resolve instantly;
- * COUNCIL members each click to add a yes-vote (see FaithManager.handleAbandonFaith).
+ * C->S: the player clicked Abandon Faith (FaithInfoScreen). Chief/owner resolve instantly; COUNCIL
+ * members each click to add a yes-vote (see FaithManager.handleAbandonFaith). Empty payload.
  */
 public record AbandonFaithPayload() implements CustomPacketPayload {
 

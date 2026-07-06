@@ -9,7 +9,18 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 
-/** Persisted per-settlement state for the currently active crisis. */
+/**
+ * Persisted per-settlement state for the currently active crisis: which crisis, when it started, the
+ * player's chosen response, council votes, and resolution outcome. Saved to / loaded from NBT, so the
+ * tag keys here are a save-format invariant - do not rename them.
+ *
+ * choose() locks in one response and clears votes; vote() only counts while no choice is locked.
+ * The producedBaseline map snapshots each food source's lifetime production total at the moment of
+ * choice, so a "produce N from your fields/fishing/herds" objective measures production SINCE the
+ * choice rather than whatever the settlement already produced beforehand (e.g. anarchy fishers).
+ * snapshotProducedBaseline() is called once right after choose() and only the first non-empty snapshot
+ * sticks - a reload re-loads the saved baseline and never re-snapshots.
+ */
 public final class CrisisState {
     private final String crisisId;
     private final UUID instanceId;
@@ -21,9 +32,6 @@ public final class CrisisState {
     private boolean failed;
     private long resolvedTick;
     private final Map<UUID, String> votes = new HashMap<>();
-    /** Per-source lifetime food-production totals snapshotted when the player picked a response, so a
-     *  "produce N from your fields/fishing/herds" objective measures production SINCE the choice (not
-     *  whatever the settlement already produced beforehand — e.g. anarchy fishers). */
     private final Map<String, Double> producedBaseline = new HashMap<>();
 
     public CrisisState(String crisisId, UUID instanceId, long startedTick) {
@@ -55,15 +63,11 @@ public final class CrisisState {
         this.votes.clear();
     }
 
-    /** Capture the settlement's current per-source production totals as the baseline for "produce N
-     *  since the choice" objectives. Called once, right after {@link #choose}. Idempotent-ish: only the
-     *  first non-empty snapshot sticks (a reload re-loads the saved baseline, never re-snapshots). */
     public void snapshotProducedBaseline(Map<String, Double> totals) {
         if (totals == null || !producedBaseline.isEmpty()) return;
         producedBaseline.putAll(totals);
     }
 
-    /** Production already on the books for {@code source} when the choice was made (0 if none). */
     public double producedBaselineFor(String source) {
         return source == null ? 0.0 : producedBaseline.getOrDefault(source, 0.0);
     }

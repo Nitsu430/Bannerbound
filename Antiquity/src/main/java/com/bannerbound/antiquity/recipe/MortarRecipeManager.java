@@ -20,10 +20,17 @@ import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Datapack loader for Mortar and Pestle recipes — reads every JSON under
+ * Datapack loader for Mortar and Pestle recipes - reads every JSON under
  * {@code data/<namespace>/mortar_recipes/}. Registered as a reload listener on the server
- * data manager (see {@code AntiquityEvents}); the loaded set is server-side only — recipe
- * checks happen during block interaction, which is server-authoritative.
+ * data manager (see {@code AntiquityEvents}); recipe checks happen during block interaction,
+ * which is server-authoritative. applyEntries is public because {@code ClientDatapackRecipes}
+ * reuses it on remote clients, where server datapacks never arrive. Query semantics: find()
+ * matches ingredient + current base liquid, and an empty baseLiquid ("") matches DRY recipes
+ * (whose base_liquid is also "") - e.g. grinding a plant into poison paste needs no water.
+ * isBatchable() is true only for item-output recipes (bricks, pastes), which grind a whole
+ * stack in one session; liquid-output recipes (ink, dyes) fill one bowl and cap at a single
+ * ingredient - it deliberately ignores the current liquid so the insert cap stays stable.
+ * all() feeds JEI and tutorial displays; hasRecipeFor() gates insertion.
  */
 @ApiStatus.Internal
 public class MortarRecipeManager extends SimpleJsonResourceReloadListener {
@@ -40,8 +47,6 @@ public class MortarRecipeManager extends SimpleJsonResourceReloadListener {
         applyEntries(entries);
     }
 
-    /** Parse + store the loaded entries. Public so the client-side jar loader can reuse it on remote
-     *  clients, where server datapacks don't reach (see {@code ClientDatapackRecipes}). */
     public static void applyEntries(Map<ResourceLocation, JsonElement> entries) {
         List<MortarRecipe> loaded = new ArrayList<>();
         for (Map.Entry<ResourceLocation, JsonElement> entry : entries.entrySet()) {
@@ -54,12 +59,10 @@ public class MortarRecipeManager extends SimpleJsonResourceReloadListener {
         BannerboundAntiquity.LOGGER.info("Loaded {} mortar recipe(s).", recipes.size());
     }
 
-    /** Every loaded mortar recipe (for JEI and tutorial displays). */
     public static List<MortarRecipe> all() {
         return recipes;
     }
 
-    /** True if any recipe accepts {@code stack} as its ingredient (used to gate insertion). */
     public static boolean hasRecipeFor(ItemStack stack) {
         if (stack.isEmpty()) {
             return false;
@@ -70,10 +73,6 @@ public class MortarRecipeManager extends SimpleJsonResourceReloadListener {
         return false;
     }
 
-    /** True if grinding {@code stack} can produce an ITEM (as opposed to only a liquid). Item-output
-     *  recipes (bricks, poison pastes) batch — a whole stack grinds in one session; liquid-output
-     *  recipes (ink, dyes) are a single bowl and stay capped at one ingredient. Independent of the
-     *  current liquid so the insert cap is stable. */
     public static boolean isBatchable(ItemStack stack) {
         if (stack.isEmpty()) {
             return false;
@@ -84,9 +83,6 @@ public class MortarRecipeManager extends SimpleJsonResourceReloadListener {
         return false;
     }
 
-    /** The recipe matching this ingredient + base liquid, or {@code null} if none applies. An empty
-     *  {@code baseLiquid} ("") matches a DRY recipe (one whose {@code base_liquid} is also "") — e.g.
-     *  grinding a plant into poison paste needs no water. */
     @Nullable
     public static MortarRecipe find(ItemStack ingredient, String baseLiquid) {
         if (ingredient.isEmpty()) {

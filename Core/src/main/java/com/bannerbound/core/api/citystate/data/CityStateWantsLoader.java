@@ -18,9 +18,10 @@ import net.minecraft.util.GsonHelper;
 import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
- * Loads the authored city-state <b>wants ladder</b> from {@code data/<ns>/citystate_wants/*.json} —
+ * Loads the authored city-state <b>wants ladder</b> from {@code data/<ns>/citystate_wants/*.json} -
  * the third (lowest-rank) demand-candidate pool after the computed tech-gap and biome-complement
- * pools. A want is live once the city-state's adopted tech reaches it. Entries merge across files.
+ * pools. Entries merge across files into {@link WantDef}s; a want is live iff its
+ * {@code requiresTech} is null or already adopted by the city-state.
  * <pre>{@code
  * { "entries": [
  *   { "item": "minecraft:bread" },
@@ -34,7 +35,6 @@ public class CityStateWantsLoader extends SimpleJsonResourceReloadListener {
     private static final Gson GSON = new Gson();
     private static volatile List<WantDef> WANTS = List.of();
 
-    /** One authored want: live iff {@code requiresTech} is null or adopted by the city-state. */
     public record WantDef(String item, String requiresTech) {}
 
     public CityStateWantsLoader() {

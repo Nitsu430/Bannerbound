@@ -10,11 +10,16 @@ import net.minecraft.world.level.block.FenceGateBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * The hardcoded default design set (WALLS_PLAN.md Phase 1): a plain cobblestone wall, a taller
- * corner post, and a fence-gate opening. Exists so the layout engine, ghost rendering, builders
- * and the whole construct flow are playtestable long before the Wall Designer screen (Phase 5)
- * ships. Ids use the {@code bannerbound:default_*} namespace so library designs (player-authored,
- * UUID ids) can never collide.
+ * The hardcoded default design set (WALLS_PLAN.md Phase 1): a plain cobblestone wall (2x1x3, two
+ * cobble courses under a cobblestone-wall cap), a taller corner post (2x2x4 solid cobble, one course
+ * above the wall so corners read at a glance), and a fence-gate opening (2x1x3). Exists so the layout
+ * engine, ghost rendering, builders and the whole construct flow are playtestable long before the
+ * Wall Designer screen (Phase 5) ships. Ids use the {@code bannerbound:default_*} namespace so library
+ * designs (player-authored, UUID ids) can never collide.
+ *
+ * <p>Gate constraint that matters: the fence gate sits at ground level with FACING=NORTH so it spans
+ * the wall line, and it is the {@code minecraft:fence_gates} tag that lets citizens route through it.
+ * Phase 5 swaps library designs into {@link WallDesignSet}, the active trio the layout engine reads.
  */
 public final class DefaultWallDesigns {
 
@@ -40,7 +45,6 @@ public final class DefaultWallDesigns {
         return BY_ID.get(id);
     }
 
-    /** 2×1×3 — two cobble courses topped with a cobblestone wall (silhouette reads as a wall). */
     private static WallDesign buildWall() {
         BlockState cobble = Blocks.COBBLESTONE.defaultBlockState();
         return WallDesign.builder(WALL_ID, "Default Wall", WallDesign.Kind.SEGMENT, 2, 1, 3)
@@ -51,7 +55,6 @@ public final class DefaultWallDesigns {
             .build();
     }
 
-    /** 2×2×4 solid cobble post — one course taller than the wall so corners read at a glance. */
     private static WallDesign buildCorner() {
         BlockState cobble = Blocks.COBBLESTONE.defaultBlockState();
         WallDesign.Builder b = WallDesign.builder(
@@ -62,11 +65,6 @@ public final class DefaultWallDesigns {
         return b.foundation(cobble).build();
     }
 
-    /**
-     * 2×1×3 — fence gates at ground level (outward = north, so FACING=NORTH spans the wall
-     * line and the {@code minecraft:fence_gates} tag makes citizens route through), headroom
-     * above, cobble lintel on top.
-     */
     private static WallDesign buildGate() {
         BlockState gate = Blocks.OAK_FENCE_GATE.defaultBlockState()
             .setValue(FenceGateBlock.FACING, Direction.NORTH);
@@ -77,7 +75,6 @@ public final class DefaultWallDesigns {
             .build();
     }
 
-    /** The active trio the layout engine works from. Phase 5 swaps in library designs here. */
     public record WallDesignSet(WallDesign wall, WallDesign corner, WallDesign gate) {
 
         @Nullable

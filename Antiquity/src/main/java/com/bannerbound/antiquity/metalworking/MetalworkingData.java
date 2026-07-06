@@ -17,16 +17,27 @@ import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
- * Data-driven tuning for metalworking — the mB amounts, melt temperatures, and per-metal/per-mold
- * numbers, loaded from {@code data/<namespace>/metalworking/*.json} (one file, e.g. {@code definitions.json}).
- * Code keeps a {@link #DEFAULTS} table so everything works before/without a datapack; a datapack file
- * overrides it. Server-side reload listener (registered in {@code AntiquityEvents}); jar-loaded on
- * remote clients via {@code ClientDatapackRecipes} so the HUD/renderer see the same numbers.
+ * Data-driven tuning for metalworking - the mB amounts, melt temperatures, and per-metal/per-mold
+ * numbers, loaded from {@code data/<namespace>/metalworking/*.json} (one file, e.g.
+ * {@code definitions.json}). Code keeps a {@link #DEFAULTS} table (the original hardcoded values)
+ * so everything works before/without a datapack; a loaded file's metals/molds maps are merged over
+ * the defaults so a partial file still keeps the rest, and the static accessors fall back to a
+ * neutral stub for unknown metal ids. Server-side reload listener (registered in
+ * {@code AntiquityEvents}); jar-loaded on remote clients via {@code ClientDatapackRecipes} so the
+ * HUD/renderer see the same numbers.
+ *
+ * <p>{@link MetalDef} holds per-metal numbers: molten display colour, hammer rank, melting point
+ * (deg C), and mB per raw unit. {@link Bloomery} is the bloomery temperature tuning
+ * (METALWORKING_PLAN.md Part 1). {@link AlloyDef} is a <b>ratio-driven</b> alloy rule: each
+ * component carries the fraction band (of total molten mB) it must occupy, and a charge becomes
+ * the result only if it contains <i>exactly</i> those metals AND each one's mB share falls inside
+ * its band (e.g. bronze = copper 60-90% + tin 10-40%); an off-ratio mix or a stray third metal
+ * fails the rule and falls back to the dominant metal - the proportions must be right to make a
+ * clean alloy.
  */
 public final class MetalworkingData extends SimpleJsonResourceReloadListener {
     private static final Gson GSON = new Gson();
 
-    /** Per-metal numbers: molten display colour, hammer rank, melting point (°C), mB per raw unit. */
     public record MetalDef(int color, int rank, int meltPoint, int mbPerUnit) {
         static final Codec<Integer> HEX = Codec.STRING.xmap(
             s -> (int) Long.parseLong(s, 16), i -> String.format("%06X", i & 0xFFFFFF));
@@ -38,7 +49,6 @@ public final class MetalworkingData extends SimpleJsonResourceReloadListener {
         ).apply(i, MetalDef::new));
     }
 
-    /** Bloomery temperature tuning (METALWORKING_PLAN.md Part 1). */
     public record Bloomery(float baseCeiling, float bellowsPerPump, float bellowsMax, float bellowsDecay,
                            float climb, float fall, int meltBandWidth, int greenWidth) {
         public static final Codec<Bloomery> CODEC = RecordCodecBuilder.create(i -> i.group(
@@ -53,11 +63,6 @@ public final class MetalworkingData extends SimpleJsonResourceReloadListener {
         ).apply(i, Bloomery::new));
     }
 
-    /** A <b>ratio-driven</b> alloy rule: each component carries the fraction band (of total molten mB)
-     *  it must occupy. A charge becomes {@code result} only if it contains <i>exactly</i> these metals
-     *  AND each one's mB share falls inside its band (e.g. bronze = copper 60–90 % + tin 10–40 %). An
-     *  off-ratio mix (too little tin, or a stray third metal) fails the rule and falls back to the
-     *  dominant metal — so you have to get the proportions right to make a clean alloy. */
     public record AlloyDef(Map<String, Range> components, String result) {
         public record Range(double min, double max) {
             public static final Codec<Range> CODEC = RecordCodecBuilder.create(i -> i.group(
@@ -71,12 +76,10 @@ public final class MetalworkingData extends SimpleJsonResourceReloadListener {
             Codec.STRING.fieldOf("result").forGetter(AlloyDef::result)
         ).apply(i, AlloyDef::new));
 
-        /** True if the charge's per-metal mB map (and its {@code total}) matches every component band
-         *  and carries no metal outside this alloy's components. */
         public boolean matches(Map<String, Integer> byMetal, int total) {
             if (total <= 0) return false;
             for (String present : byMetal.keySet()) {
-                if (!components.containsKey(present)) return false; // a stray metal contaminates the melt
+                if (!components.containsKey(present)) return false;
             }
             for (Map.Entry<String, Range> c : components.entrySet()) {
                 double frac = byMetal.getOrDefault(c.getKey(), 0) / (double) total;
@@ -103,7 +106,6 @@ public final class MetalworkingData extends SimpleJsonResourceReloadListener {
             "copper", new AlloyDef.Range(0.60, 0.90),
             "tin", new AlloyDef.Range(0.10, 0.40)), "bronze"));
 
-    /** Fallback used until a datapack loads (matches the original hardcoded values). */
     public static final Config DEFAULTS = new Config(
         Map.of(
             "copper", new MetalDef(0xED8E56, 1, 1085, 50),
@@ -134,7 +136,7 @@ public final class MetalworkingData extends SimpleJsonResourceReloadListener {
                     "Skipping invalid metalworking config {}: {}", e.getKey(), err))
                 .orElse(null);
             if (parsed != null) {
-                // Merge over the defaults so a partial file (e.g. only molds) keeps the rest.
+                // Merge metals/molds over DEFAULTS so a partial file (e.g. only molds) keeps the rest.
                 Map<String, MetalDef> metals = new HashMap<>(DEFAULTS.metals());
                 metals.putAll(parsed.metals());
                 Map<String, Integer> molds = new HashMap<>(DEFAULTS.molds());
@@ -148,7 +150,6 @@ public final class MetalworkingData extends SimpleJsonResourceReloadListener {
         return config;
     }
 
-    // ── Convenience accessors (with sensible fallbacks for unknown ids) ──────────────────────────
     private static MetalDef metal(String id) {
         return config.metals().getOrDefault(id, DEFAULTS.metals().getOrDefault(id,
             new MetalDef(0xFFFFFF, 1, 600, 50)));

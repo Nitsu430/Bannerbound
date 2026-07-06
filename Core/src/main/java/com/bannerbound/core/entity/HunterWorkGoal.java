@@ -34,85 +34,74 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
 
 /**
- * Hunter {@link GathererWorkGoal} — hunts <b>wild (undomesticated) animals OUTSIDE the
- * settlement's claims</b>, the field counterpart to the {@link HerderWorkGoal herder} (who tends
- * domesticated stock inside a pen). Which animals are huntable is data-driven via the
- * {@code #bannerbound:huntable} entity-type tag, so modded animals can opt in from a datapack.
+ * Hunter GathererWorkGoal -- hunts wild (undomesticated) animals OUTSIDE the settlement's claims,
+ * the field counterpart to the herder (who tends domesticated stock inside a pen). Huntable
+ * species are data-driven via the #bannerbound:huntable entity-type tag, so modded animals opt in
+ * from a datapack; the Job-tab prey toggle (isHunterPreyEnabled) narrows that per citizen.
  *
- * <h2>Trips, like the forager</h2>
- * No giant prey scans: the hunter <b>roams</b> the wild band (unclaimed chunks within
- * {@link #HUNT_BAND_CHUNKS} of the border — a deeper ring than the forager's) and watches a small
- * radius around itself for prey. An animal that flees INTO claimed land gets sanctuary — the
- * hunter only ever kills on unclaimed ground.
+ * <p>Like the forager it does no giant prey scans: it roams the wild band (unclaimed chunks within
+ * HUNT_BAND_CHUNKS of our border, a deeper ring than the forager's) and watches a small radius
+ * around itself. An animal that flees INTO any settlement's claimed land gets sanctuary -- the
+ * hunter only ever kills on unclaimed ground. A per-mob hunt claim (expiry-stamped persistent-data
+ * tags) stops two hunters converging on one animal; a dead hunter's claim simply lapses. The prey
+ * scan is throttled and rescanCooldown is seeded from the entity id so a batch of hunters hired at
+ * once don't all sweep the same tick.
  *
- * <h2>Weapons</h2>
- * The job tool resolves through the {@code "hunt"} tool-age role (swords in the Core ages, a spear
- * in Antiquity's bone age). Once the settlement researches {@link HunterHooks#FLAG_ARCHERY} the
- * hunter upgrades to a stored bow and shoots from range — its arrows are never collectible
- * (skeleton-style {@link AbstractArrow.Pickup#DISALLOWED}) so they can't be farmed. With a spear
- * tool the {@link HunterHooks.Extension} opens each engagement with a throw before the melee kill.
+ * <p>Weapons resolve through the "hunt" tool-age role (swords in the Core ages, a spear in
+ * Antiquity's bone age). Once the settlement researches Archery the hunter swaps its melee tool for
+ * a stored bow (#bannerbound:hunter_bows) and shoots from range; its arrows are skeleton-style
+ * DISALLOWED pickup so they can't be farmed. With a throwable spear the HunterHooks extension opens
+ * each engagement with a throw before the melee kill -- a planted stealth throw while the prey is
+ * still calm (standing up is what spooks it), or a snap running throw once it has bolted and is
+ * pulling away. Tool damage scales by craftsmanship quality (effectiveness only, never durability
+ * -- NPC tools don't wear); bow shots apply quality through the arrow velocity factor so it isn't
+ * double-counted. The bow upgrade is government-only; anarchy hunters keep self-organizing
+ * bare-handed.
  *
- * <h2>Kills</h2>
- * Prey dies a normal death; {@code HunterKillEvents} reroutes the (known-set-filtered) death drops
+ * <p>Prey dies a normal death; HunterKillEvents reroutes the known-set-filtered death drops
  * straight into the hunter's drop-off, so the hunter never hauls meat home by hand.
  */
 @ApiStatus.Internal
 public class HunterWorkGoal extends GathererWorkGoal {
-    /** Per-citizen job id (registered with {@code CitizenJobRegistry} / {@code WorkstationUnlocks}). */
     public static final String JOB_TYPE_ID = "hunters_camp";
 
-    /** Data-driven prey list — entity types a hunter will stalk (datapack-extendable). */
     public static final TagKey<EntityType<?>> HUNTABLE_TAG = TagKey.create(Registries.ENTITY_TYPE,
         ResourceLocation.fromNamespaceAndPath("bannerbound", "huntable"));
 
-    /** Bows a hunter may shoot with once Archery is researched — vanilla bow in Core; Antiquity
-     *  adds its primitive bow via the tag (any expansion bow joins the same way). */
     public static final TagKey<net.minecraft.world.item.Item> HUNTER_BOWS_TAG = TagKey.create(
         Registries.ITEM, ResourceLocation.fromNamespaceAndPath("bannerbound", "hunter_bows"));
 
-    // Roaming (the trip) — a deeper band than the forager's, because game roams farther than flowers.
-    private static final int LEASH_RADIUS = 80;          // how far each roam hop wanders from the hunter
-    private static final int HUNT_BAND_CHUNKS = 6;       // huntable ring depth outside the border (96 blocks)
-    private static final int ROAM_TIMEOUT_TICKS = 300;   // can't reach the roam point → pick a new one
+    private static final int LEASH_RADIUS = 80;
+    private static final int HUNT_BAND_CHUNKS = 6;
+    private static final int ROAM_TIMEOUT_TICKS = 300;
     private static final double ARRIVE_SQ = 2.2 * 2.2;
-    private static final int BARREN_YIELD_STREAK = 4;    // preyless roams in a row → rest (yield to patrol)
+    private static final int BARREN_YIELD_STREAK = 4;
     private static final int BARREN_COOLDOWN_TICKS = 300;
     private static final int RESCAN_COOLDOWN_TICKS = 20;
 
-    // Prey scanning — small box around the hunter itself, never a settlement-wide sweep.
     private static final int PREY_SCAN_RADIUS = 24;
     private static final int PREY_SCAN_HEIGHT = 8;
 
-    // Engagement.
-    private static final double MELEE_REACH_SQ = 4.0;          // ~2 blocks, matches CitizenCombatGoal
-    private static final double CHASE_SPEED_FACTOR = 1.5;      // scared prey → run it down
-    private static final double STEALTH_SPEED_FACTOR = 0.55;   // crouch-stalk gait
+    private static final double MELEE_REACH_SQ = 4.0;
+    private static final double CHASE_SPEED_FACTOR = 1.5;
+    private static final double STEALTH_SPEED_FACTOR = 0.55;
     private static final int REPATH_INTERVAL = 10;
-    private static final int ENGAGE_TIMEOUT_TICKS = 600;       // 30 s on one animal → give up, blacklist it
-    private static final int AVOID_PREY_TICKS = 1200;          // blacklisted animal is skipped ~1 min
-    private static final int CLAIM_TICKS = 100;                // hunt claim refresh window on the prey
+    private static final int ENGAGE_TIMEOUT_TICKS = 600;
+    private static final int AVOID_PREY_TICKS = 1200;
+    private static final int CLAIM_TICKS = 100;
     private static final int STAMINA_PER_KILL = 8;
 
-    // Bow.
     private static final double BOW_RANGE = 14.0;
     private static final int BOW_DRAW_TICKS = 25;
-    private static final int BOW_COOLDOWN_TICKS = 20;          // beat between shots (after the draw)
+    private static final int BOW_COOLDOWN_TICKS = 20;
     private static final double ARROW_VELOCITY = 1.6;
     private static final float ARROW_INACCURACY = 2.0F;
 
-    // Spear opener (Antiquity extension). The stealth throw happens from JUST OUTSIDE the prey's
-    // sneak-detection radius (Antiquity default 12 for a crouching threat) — winding up at 14
-    // blocks keeps the animal calm until the spear is already in the air.
     private static final double SPEAR_RANGE = 14.0;
     private static final int SPEAR_WINDUP_TICKS = 20;
-    /** Spooked prey closer than this is simply run down and stabbed; beyond it (and still in spear
-     *  range) the hunter hurls the spear on the run instead of letting the prey pull away. */
     private static final double RUNNING_THROW_MIN_SQ = 6.0 * 6.0;
-    /** Shorter raise for the running throw — a snap hurl, not the planted stealth windup. */
     private static final int RUNNING_THROW_WINDUP_TICKS = 12;
 
-    /** Hunt claim on the prey so two hunters never converge on one animal (expiry-stamped — a dead
-     *  hunter's claim simply lapses). */
     private static final String CLAIM_ID_TAG = "BannerboundHuntedBy";
     private static final String CLAIM_UNTIL_TAG = "BannerboundHuntClaimUntil";
 
@@ -134,14 +123,13 @@ public class HunterWorkGoal extends GathererWorkGoal {
     private int repathCooldown;
     private Windup windup = Windup.NONE;
     private int windupTicks;
-    private boolean windupMoving;    // running throw: keep chasing while the spear is raised
-    private boolean spearThrown;     // one opener per engagement
-    private int avoidEntityId = -1;  // last given-up prey (single slot is plenty)
+    private boolean windupMoving;
+    private boolean spearThrown;
+    private int avoidEntityId = -1;
     private long avoidUntilGameTime;
 
     public HunterWorkGoal(CitizenEntity citizen, double speedModifier) {
         super(citizen, speedModifier);
-        // Stagger first scans so a batch of hunters hired at once don't all sweep the same tick.
         this.rescanCooldown = citizen.getId() % RESCAN_COOLDOWN_TICKS;
     }
 
@@ -163,7 +151,6 @@ public class HunterWorkGoal extends GathererWorkGoal {
         if (depot == null || !DropOffContainers.hasFreeSlot(depot)) return false;
         maybeUpgradeToBow(sl);
 
-        // Keep a still-valid quarry.
         if (target != null && isValidTarget(sl, target)) {
             phase = Phase.HUNT;
             return true;
@@ -179,7 +166,7 @@ public class HunterWorkGoal extends GathererWorkGoal {
         BlockPos roam = pickRoamPos(sl);
         if (roam == null) {
             rescanCooldown = BARREN_COOLDOWN_TICKS;
-            return false;   // no reachable wilderness in range → patrol for a while
+            return false;
         }
         roamPos = roam;
         roamAge = 0;
@@ -198,7 +185,7 @@ public class HunterWorkGoal extends GathererWorkGoal {
     public void start() {
         citizen.setWorking(true);
         equipWeapon();
-        citizen.setAvoidWaterPathing(true);   // hunt the banks, don't swim after deer… er, cows
+        citizen.setAvoidWaterPathing(true);
         attackCooldown = 0;
         repathCooldown = 0;
         if (phase == Phase.HUNT && target != null) {
@@ -231,10 +218,7 @@ public class HunterWorkGoal extends GathererWorkGoal {
         }
     }
 
-    // ─── Roaming the wild band ─────────────────────────────────────────────────────────────────────
-
     private void tickRoam(ServerLevel sl) {
-        // Keep an eye out for prey while walking — engage anything we pass.
         if (rescanCooldown-- <= 0) {
             rescanCooldown = RESCAN_COOLDOWN_TICKS;
             Mob prey = findPreyNear(sl);
@@ -247,8 +231,6 @@ public class HunterWorkGoal extends GathererWorkGoal {
         if (roamPos == null) { roamPos = pickRoamPos(sl); roamAge = 0; return; }
         double d = citizen.position().distanceToSqr(roamPos.getX() + 0.5, roamPos.getY(), roamPos.getZ() + 0.5);
         if (d <= ARRIVE_SQ || ++roamAge > ROAM_TIMEOUT_TICKS) {
-            // Reached (or gave up on) this roam point with nothing to show — after a few barren
-            // sweeps in a row, rest a while instead of pacing the wilds forever.
             if (++barrenStreak >= BARREN_YIELD_STREAK) {
                 barrenStreak = 0;
                 roamPos = null;
@@ -263,8 +245,6 @@ public class HunterWorkGoal extends GathererWorkGoal {
         if (citizen.getNavigation().isDone()) moveTo(roamPos, skilledSpeed());
     }
 
-    /** A walkable surface point in the hunt band (unclaimed land near our border). Sampled near the
-     *  hunter itself so trips drift along the band; falls back to the drop-off to recover range. */
     private BlockPos pickRoamPos(ServerLevel sl) {
         Settlement settlement = citizen.getSettlement();
         if (settlement == null) return null;
@@ -288,8 +268,6 @@ public class HunterWorkGoal extends GathererWorkGoal {
         return null;
     }
 
-    /** True if the column is unclaimed by ANYONE and within {@link #HUNT_BAND_CHUNKS} of one of OUR
-     *  claimed chunks — the forager-band rule, one ring deeper. */
     private static boolean inHuntBandColumn(ServerLevel sl, Settlement settlement, int x, int z) {
         if (settlement == null) return false;
         int cx = x >> 4;
@@ -304,8 +282,6 @@ public class HunterWorkGoal extends GathererWorkGoal {
         return false;
     }
 
-    // ─── The hunt ──────────────────────────────────────────────────────────────────────────────────
-
     private void tickHunt(ServerLevel sl) {
         if (target == null) { phase = Phase.ROAM; return; }
         if (!target.isAlive()) { onKill(); return; }
@@ -316,7 +292,6 @@ public class HunterWorkGoal extends GathererWorkGoal {
         refreshClaim(sl, target);
         citizen.getLookControl().setLookAt(target, 30.0F, 30.0F);
 
-        // Mid-windup (bow draw / spear raise): hold the pose, release on time.
         if (windup != Windup.NONE) {
             tickWindup(sl);
             return;
@@ -325,7 +300,6 @@ public class HunterWorkGoal extends GathererWorkGoal {
         ItemStack weapon = citizen.getJobTool();
         double dSq = citizen.distanceToSqr(target);
 
-        // Bow: shoot from a standstill whenever the prey is in range with a clear line.
         if (isBowWeapon(weapon)) {
             if (dSq <= BOW_RANGE * BOW_RANGE && citizen.hasLineOfSight(target)) {
                 citizen.getNavigation().stop();
@@ -336,10 +310,6 @@ public class HunterWorkGoal extends GathererWorkGoal {
             return;
         }
 
-        // Spear opener (Antiquity): one throw per engagement. The throw is a SNEAK attack — the
-        // hunter plants and hurls from the crouch while the prey is still calm (standing up is what
-        // spooks it). Once the prey has bolted the spear is only worth hurling on the run when the
-        // animal is pulling away; close in, it's faster to just run it down and stab.
         if (!spearThrown && HunterHooks.get().isThrowableSpear(weapon)
                 && dSq <= SPEAR_RANGE * SPEAR_RANGE && dSq > MELEE_REACH_SQ * 2.0
                 && citizen.hasLineOfSight(target)) {
@@ -353,10 +323,8 @@ public class HunterWorkGoal extends GathererWorkGoal {
                 beginWindup(Windup.SPEAR, RUNNING_THROW_WINDUP_TICKS, false, true);
                 return;
             }
-            // Spooked and close → fall through to the melee chase below.
         }
 
-        // Melee: close and stab.
         if (dSq <= MELEE_REACH_SQ) {
             standUp();
             citizen.getNavigation().stop();
@@ -371,8 +339,6 @@ public class HunterWorkGoal extends GathererWorkGoal {
         }
     }
 
-    /** Close the distance: crouch-stalk while the extension says the prey is still calm, chase at
-     *  speed once it's spooked. Throttled repath, CitizenCombatGoal-style. */
     private void approach(ServerLevel sl, double dSq) {
         HunterHooks.Extension ext = HunterHooks.get();
         double speed;
@@ -392,18 +358,12 @@ public class HunterWorkGoal extends GathererWorkGoal {
         }
     }
 
-    // ─── Windups (bow draw / spear raise) ─────────────────────────────────────────────────────────
-
-    /** Raise the weapon. {@code keepCrouch} holds the stalk pose through a stealth throw (standing
-     *  up is exactly what would spook the prey mid-windup); {@code moving} is the running throw —
-     *  the hunter keeps chasing while the spear is raised instead of planting its feet. */
     private void beginWindup(Windup kind, int ticks, boolean keepCrouch, boolean moving) {
         if (!keepCrouch) standUp();
         windup = kind;
         windupTicks = ticks;
         windupMoving = moving;
-        // The held item's UseAnim drives the client arm pose (BOW_AND_ARROW / THROW_SPEAR).
-        citizen.startUsingItem(InteractionHand.MAIN_HAND);
+        citizen.startUsingItem(InteractionHand.MAIN_HAND);   // held item's UseAnim drives the client arm pose (BOW_AND_ARROW / THROW_SPEAR)
     }
 
     private void tickWindup(ServerLevel sl) {
@@ -411,11 +371,10 @@ public class HunterWorkGoal extends GathererWorkGoal {
         if (target == null || !target.isAlive()
                 || !citizen.hasLineOfSight(target)
                 || citizen.distanceToSqr(target) > rangeSq) {
-            stopWindup();   // prey broke line / bolted out of range — back to the chase
+            stopWindup();
             return;
         }
         citizen.getLookControl().setLookAt(target, 30.0F, 30.0F);
-        // Running throw: keep the chase going under the raised spear so the prey can't pull away.
         if (windupMoving && (--repathCooldown <= 0 || citizen.getNavigation().isDone())) {
             citizen.getNavigation().moveTo(target, skilledSpeed() * CHASE_SPEED_FACTOR);
             repathCooldown = REPATH_INTERVAL;
@@ -431,7 +390,7 @@ public class HunterWorkGoal extends GathererWorkGoal {
             if (HunterHooks.get().throwSpear(citizen, prey, citizen.getJobTool().copy(), qualityScaledDamage())) {
                 spearThrown = true;
             } else {
-                spearThrown = true;   // don't retry a failing opener every tick — fall through to melee
+                spearThrown = true;
             }
         }
     }
@@ -443,19 +402,14 @@ public class HunterWorkGoal extends GathererWorkGoal {
         windupMoving = false;
     }
 
-    /** Skeleton-style shot: the arrow is never collectible, so hunters can't be farmed for arrows.
-     *  The extension may supply the arrow entity (Antiquity → flint arrow) and a velocity factor
-     *  (the primitive bow's quality-scaled handicap) — a slower arrow hits softer, like a player's. */
     private void shootArrow(ServerLevel sl, Mob prey) {
         ItemStack bow = citizen.getJobTool();
         AbstractArrow arrow = HunterHooks.get().createArrow(citizen, bow);
         if (arrow == null) {
             arrow = new Arrow(sl, citizen, new ItemStack(Items.ARROW), citizen.getMainHandItem());
         }
-        // Effective hit ≈ the tool-age weapon damage (AbstractArrow scales base damage by velocity);
-        // the bow's craftsmanship quality acts through the velocity factor, never durability.
         arrow.setBaseDamage(Math.max(2.0, weaponDamage() / ARROW_VELOCITY));
-        arrow.pickup = AbstractArrow.Pickup.DISALLOWED;
+        arrow.pickup = AbstractArrow.Pickup.DISALLOWED;   // skeleton-style: never collectible, so hunters can't be farmed for arrows
         float velocity = (float) ARROW_VELOCITY * HunterHooks.get().bowVelocityFactor(bow);
         double dx = prey.getX() - citizen.getX();
         double dy = prey.getY(0.3333) - arrow.getY();
@@ -467,8 +421,6 @@ public class HunterWorkGoal extends GathererWorkGoal {
             1.0F, 1.0F / (citizen.getRandom().nextFloat() * 0.4F + 0.8F));
     }
 
-    // ─── Targets ───────────────────────────────────────────────────────────────────────────────────
-
     private void setTarget(ServerLevel sl, Mob prey) {
         target = prey;
         engageAge = 0;
@@ -479,19 +431,16 @@ public class HunterWorkGoal extends GathererWorkGoal {
     }
 
     private void onKill() {
-        // Drops were rerouted to the drop-off by HunterKillEvents at death time.
         citizen.grantJobXp(JOB_TYPE_ID, 1.0F, "hunt");
         citizen.consumeStamina(STAMINA_PER_KILL);
         target = null;
         spearThrown = false;
         engageAge = 0;
         standUp();
-        // Stay alert: the herd is scattering — rescan right away rather than roaming off.
         rescanCooldown = 0;
         phase = Phase.ROAM;
     }
 
-    /** Timed out / prey escaped into claims: blacklist it briefly so we don't immediately re-pick it. */
     private void giveUpOnTarget(ServerLevel sl) {
         if (target != null) {
             avoidEntityId = target.getId();
@@ -506,7 +455,6 @@ public class HunterWorkGoal extends GathererWorkGoal {
         rescanCooldown = RESCAN_COOLDOWN_TICKS;
     }
 
-    /** Nearest huntable wild animal around the hunter itself (never a settlement-wide sweep). */
     private Mob findPreyNear(ServerLevel sl) {
         long now = sl.getGameTime();
         AABB box = citizen.getBoundingBox().inflate(PREY_SCAN_RADIUS, PREY_SCAN_HEIGHT, PREY_SCAN_RADIUS);
@@ -523,22 +471,19 @@ public class HunterWorkGoal extends GathererWorkGoal {
         return isHuntable(sl, m, sl.getGameTime());
     }
 
-    /** The full prey test: tagged huntable, adult, wild (no domestication mark of any kind, including
-     *  the expansion's), unleashed, unclaimed by herders or other hunters, standing on unclaimed land. */
     private boolean isHuntable(ServerLevel sl, Mob m, long now) {
         if (!m.isAlive() || m.isBaby()) return false;
         if (!m.getType().is(HUNTABLE_TAG)) return false;
-        if (!citizen.isHunterPreyEnabled(m.getType())) return false;   // Job-tab prey toggle
+        if (!citizen.isHunterPreyEnabled(m.getType())) return false;
         if (m.getId() == avoidEntityId && now < avoidUntilGameTime) return false;
         if (m.isLeashed()) return false;
         if (m.getPersistentData().getBoolean(HerderWorkGoal.DOMESTICATED_TAG)) return false;
         if (m instanceof TamableAnimal t && t.isTame()) return false;
         if (m instanceof AbstractHorse h && h.isTamed()) return false;
         Integer herded = m.getExistingDataOrNull(BannerboundCore.HERDED_BY.get());
-        if (herded != null && herded != 0) return false;   // a herder is corralling it
+        if (herded != null && herded != 0) return false;
         if (HunterHooks.get().isDomesticated(m)) return false;
         if (claimedByOtherHunter(m, now)) return false;
-        // Only on unclaimed ground — an animal that flees into ANY settlement's claims is safe.
         return SettlementData.get(sl).getByChunk(new ChunkPos(m.blockPosition()).toLong()) == null;
     }
 
@@ -553,26 +498,15 @@ public class HunterWorkGoal extends GathererWorkGoal {
         t.putLong(CLAIM_UNTIL_TAG, sl.getGameTime() + CLAIM_TICKS);
     }
 
-    // ─── Weapons ───────────────────────────────────────────────────────────────────────────────────
-
-    /** Show the job tool in the main hand (bare-handed in anarchy when none is installed). */
     private void equipWeapon() {
         ItemStack tool = citizen.getJobTool();
         citizen.setItemSlot(EquipmentSlot.MAINHAND, tool.isEmpty() ? ItemStack.EMPTY : tool.copy());
     }
 
-    /** True for anything the hunter treats as a bow — the {@code #bannerbound:hunter_bows} tag
-     *  (vanilla bow, Antiquity's primitive bow), plus any {@link BowItem} as a safety net. */
     private static boolean isBowWeapon(ItemStack stack) {
         return stack.is(HUNTER_BOWS_TAG) || stack.getItem() instanceof BowItem;
     }
 
-    /**
-     * Once Archery is researched, a hunter holding a melee tool swaps it for a bow (anything in
-     * {@code #bannerbound:hunter_bows}) from the settlement's preferred storage — the melee tool
-     * goes back into that storage. Runs on the throttled work-scan tick, government only — anarchy
-     * hunters keep self-organizing bare-handed.
-     */
     private void maybeUpgradeToBow(ServerLevel sl) {
         if (citizen.isAnarchy()) return;
         if (isBowWeapon(citizen.getJobTool())) return;
@@ -602,24 +536,17 @@ public class HunterWorkGoal extends GathererWorkGoal {
         return s == null ? DEFAULT_BARE_HAND_DAMAGE : s.getWeaponDamageOrDefault(DEFAULT_BARE_HAND_DAMAGE);
     }
 
-    /** Tool-age damage scaled by the held weapon's craftsmanship quality — effectiveness only,
-     *  never durability (NPC tools don't wear). Used for melee strikes and the spear throw; bow
-     *  shots instead apply quality through the velocity factor (see {@link #shootArrow}) so it
-     *  isn't double-counted. An unfletched/creative tool reads as STANDARD (×1.0). */
     private double qualityScaledDamage() {
         return weaponDamage()
             * com.bannerbound.core.api.quality.QualityTier.of(citizen.getJobTool()).statMultiplier();
     }
 
-    /** Ticks between melee swings, from the tool age's {@code weapon_attack_speed} (floored at 5). */
     private int meleeCooldownTicks() {
         Settlement s = citizen.getSettlement();
         double atkSpeed = s == null ? DEFAULT_ATTACK_SPEED : s.getWeaponAttackSpeedOrDefault(DEFAULT_ATTACK_SPEED);
         if (atkSpeed <= 0.0) return 20;
         return Math.max(5, (int) Math.round(20.0 / atkSpeed));
     }
-
-    // ─── Pose / movement helpers ───────────────────────────────────────────────────────────────────
 
     private void crouch() {
         if (citizen.getPose() != Pose.CROUCHING) citizen.setPose(Pose.CROUCHING);

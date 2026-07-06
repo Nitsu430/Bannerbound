@@ -37,15 +37,16 @@ import net.minecraft.world.item.Items;
 
 /**
  * Settlement-to-settlement trade orchestrator (the "reliable trading system"): negotiation
- * (propose / counter / accept / reject / cancel with governance), the value-transparent P2P barter
- * (no accept bar — humans judge; totals via {@link ItemValue}), and the CLOCK delivery model —
- * escrow-when-loaded, distance-timed transit, deposit-with-retry. One active deal per settlement
- * pair. Gated by the Bartering research ({@link #FLAG}).
+ * (propose / counter / accept / reject / cancel with governance - CHIEFDOM is chief-only, COUNCIL
+ * runs a chat-vote on accept), the value-transparent P2P barter (no accept bar - humans judge;
+ * totals via {@link ItemValue}), and the CLOCK delivery model - escrow-when-loaded, distance-timed
+ * transit, deposit-with-retry. One active deal per settlement pair. Gated by the Bartering research
+ * ({@link #FLAG}).
  *
  * <p>Escrow rules (the reliability core): nothing is withdrawn at accept. Each side's goods are
  * withdrawn from its show-for-trading stockpiles when those chunks are loaded (a dormant partner
  * simply waits); BOTH legs must escrow before either departs. A side that can't pay by the escrow
- * deadline fails the deal and the other side is refunded in full — after departure nothing can be
+ * deadline fails the deal and the other side is refunded in full - after departure nothing can be
  * lost (no caravan entity yet; that's the physical-courier phase).
  */
 @ApiStatus.Internal
@@ -59,21 +60,17 @@ public final class TradeManager {
     public static final int ACTION_CANCEL = 4;
 
     private static final int SWEEP_INTERVAL_TICKS = 20;
-    private static final long EXPIRE_TICKS = 3L * 24000L;          // unanswered offers lapse
-    private static final long ESCROW_DEADLINE_TICKS = 2L * 24000L; // gather goods within 2 days
-    private static final long TRAVEL_TICKS_PER_BLOCK = 4L;         // ~0.25 blocks/tick caravan pace
-    private static final long MIN_TRAVEL_TICKS = 1200L;            // never instant, even next door
-    private static final long ARRIVAL_DROP_AFTER_TICKS = 24000L;   // full storage → drop at town hall
+    private static final long EXPIRE_TICKS = 3L * 24000L;
+    private static final long ESCROW_DEADLINE_TICKS = 2L * 24000L;
+    private static final long TRAVEL_TICKS_PER_BLOCK = 4L;
+    private static final long MIN_TRAVEL_TICKS = 1200L;
+    private static final long ARRIVAL_DROP_AFTER_TICKS = 24000L;
     private static final long RESOLVED_RETENTION_TICKS = 5L * 24000L;
-    private static final int MAX_POOL_ROWS = 40;                   // mirror BarbarianBarter's cap
+    private static final int MAX_POOL_ROWS = 40;
 
     private TradeManager() {
     }
 
-    // ─── Gates ──────────────────────────────────────────────────────────────────────────────────────
-
-    /** Whether the Trade button lights up for {@code viewer} against {@code other}: both researched
-     *  Bartering, the pair is at peace, and the viewer has a trading stockpile to deal from. */
     public static boolean canTrade(ServerLevel level, Settlement viewer, Settlement other) {
         if (viewer == null || other == null) return false;
         if (!ResearchManager.hasFlag(viewer, FLAG) || !ResearchManager.hasFlag(other, FLAG)) return false;
@@ -83,10 +80,6 @@ public final class TradeManager {
         return rel != null && rel.discovered && !rel.warActive && !rel.pending();
     }
 
-    // ─── Screen open + live storage ─────────────────────────────────────────────────────────────────
-
-    /** Builds the trade-screen snapshot for {@code player} against {@code target}, marking an
-     *  awaiting deal as read (clears the Diplomacy badge). Null when the viewer has no settlement. */
     @Nullable
     public static OpenTradeScreenPayload buildOpen(ServerLevel level, ServerPlayer player, Settlement target) {
         Settlement mine = SettlementData.get(level).getByPlayer(player.getUUID());
@@ -120,15 +113,10 @@ public final class TradeManager {
             poolEntries(level, mine, mine), poolEntries(level, target, mine));
     }
 
-    /** Live storage snapshots for the poll while the screen is open. */
     public static List<BarterEntry> livePool(ServerLevel level, Settlement owner, Settlement viewer) {
         return poolEntries(level, owner, viewer);
     }
 
-    // ─── Actions ────────────────────────────────────────────────────────────────────────────────────
-
-    /** Routes a screen action. {@code give}/{@code get} are viewer-relative (my side / their side)
-     *  and only meaningful for PROPOSE and COUNTER. */
     public static void handleAction(ServerPlayer player, Settlement target, @Nullable UUID dealId,
                                     int action, List<BarterEntry> give, List<BarterEntry> get) {
         MinecraftServer server = player.getServer();
@@ -137,8 +125,6 @@ public final class TradeManager {
         Settlement mine = SettlementData.get(level).getByPlayer(player.getUUID());
         if (mine == null || mine.id().equals(target.id())) return;
 
-        // Governance: CHIEFDOM = only the chief negotiates; NONE/COUNCIL = any member may put terms
-        // on the table (COUNCIL's check is on ACCEPT, where the vote happens).
         if (!canActOnTrades(mine, player)) {
             player.sendSystemMessage(Component.translatable("bannerbound.trade.error.not_chief")
                 .withStyle(ChatFormatting.RED));
@@ -175,8 +161,6 @@ public final class TradeManager {
         List<BarterEntry> gives = sanitize(give);
         List<BarterEntry> gets = sanitize(get);
         if (gives.isEmpty() && gets.isEmpty()) return;
-        // Courtesy validation against live pools (escrow is the real enforcement later): my side must
-        // exist in my trading stockpiles; their side is checked only when their chunks are loaded.
         if (!coveredByPool(level, mine, gives)) {
             player.sendSystemMessage(Component.translatable("bannerbound.trade.error.short_goods")
                 .withStyle(ChatFormatting.RED));
@@ -237,8 +221,6 @@ public final class TradeManager {
         refreshBadges(server, mine, target);
     }
 
-    /** ACCEPT entry: NONE accepts directly, CHIEFDOM already chief-gated, COUNCIL runs a minor
-     *  60-second chat vote before executing. */
     private static void requestAccept(ServerLevel level, ServerPlayer player, Settlement mine,
                                       @Nullable TradeDeal deal) {
         if (deal == null || !deal.involves(mine.id()) || !mine.id().equals(deal.awaitingParty)
@@ -254,8 +236,6 @@ public final class TradeManager {
         executeAccept(level.getServer(), mine, deal.id);
     }
 
-    /** Executes an agreed deal (direct, or from a passed council vote): re-checks the gates, then
-     *  moves to ACCEPTED and lets the escrow sweep gather both sides' goods. */
     public static void executeAccept(MinecraftServer server, Settlement mine, UUID dealId) {
         ServerLevel level = server.overworld();
         TradeData trades = TradeData.get(level);
@@ -305,8 +285,6 @@ public final class TradeManager {
         }
     }
 
-    // ─── The sweep: expiry, war-cancel, escrow, transit, delivery, refunds ──────────────────────────
-
     public static void tickAll(MinecraftServer server) {
         ServerLevel level = server.overworld();
         if (level.getGameTime() % SWEEP_INTERVAL_TICKS != 0) return;
@@ -320,7 +298,6 @@ public final class TradeManager {
             Settlement proposer = sd.getById(deal.proposer);
             Settlement recipient = sd.getById(deal.recipient);
             if (deal.state.active() && (proposer == null || recipient == null)) {
-                // A party disbanded: end any walking couriers, refund whatever escrowed, close it.
                 TradeCourierManager.abortJourneysFor(level, deal);
                 refundLegIfEscrowed(deal.proposerLeg);
                 refundLegIfEscrowed(deal.recipientLeg);
@@ -355,17 +332,12 @@ public final class TradeManager {
                     }
                 }
             }
-            // Refund legs keep draining regardless of overall state (FAILED deals finish refunding).
             dirty |= tickRefund(level, deal.proposerLeg, proposer);
             dirty |= tickRefund(level, deal.recipientLeg, recipient);
         }
         if (dirty) trades.setDirty();
     }
 
-    /** ACCEPTED: withdraw each PENDING leg from its giver's trading stockpiles when loaded. Both
-     *  escrowed → each leg departs: a Trading-toggled stocker physically walks it when one is
-     *  available (retried for a while), else the abstract clock carries it. Past the escrow
-     *  deadline with a side still unpaid → fail + refund the side that paid. */
     private static boolean tickEscrow(ServerLevel level, TradeDeal deal,
                                       Settlement proposer, Settlement recipient, long now) {
         boolean changed = tryEscrowLeg(level, deal.proposerLeg, proposer);
@@ -384,7 +356,6 @@ public final class TradeManager {
             return changed;
         }
         if (now >= deal.escrowDeadline) {
-            // Whoever hasn't paid defaults; the paid side gets its goods back.
             Settlement defaulter = deal.proposerLeg.state == TradeDeal.Leg.LegState.PENDING
                 ? proposer : recipient;
             refundLegIfEscrowed(deal.proposerLeg);
@@ -403,8 +374,6 @@ public final class TradeManager {
         return changed;
     }
 
-    /** One escrowed leg's departure: prefer a walking courier (kept hunting for a while — stockers
-     *  may be busy or unloaded), then fall back to the abstract clock so trades never stall. */
     private static boolean tickDeparture(ServerLevel level, TradeDeal deal, TradeDeal.Leg leg,
                                          Settlement giver, Settlement receiver, boolean proposerLeg,
                                          long now) {
@@ -414,7 +383,7 @@ public final class TradeManager {
         }
         if (TradeCourierManager.tryDispatch(level, deal, leg, giver, receiver, proposerLeg)) {
             leg.state = TradeDeal.Leg.LegState.IN_TRANSIT;
-            leg.arriveAt = 0; // arrival is event-driven while a courier carries it
+            leg.arriveAt = 0;
             return true;
         }
         if (now >= leg.courierSearchUntil) {
@@ -429,15 +398,15 @@ public final class TradeManager {
 
     private static boolean tryEscrowLeg(ServerLevel level, TradeDeal.Leg leg, Settlement giver) {
         if (leg.state != TradeDeal.Leg.LegState.PENDING) return false;
-        if (leg.manifest.isEmpty()) { // giving nothing is a valid side of a deal (a gift received)
+        if (leg.manifest.isEmpty()) {
             leg.state = TradeDeal.Leg.LegState.ESCROWED;
             return true;
         }
         Container pool = SettlementStorage.tradeAggregate(level, giver);
-        if (pool == null) return false; // unloaded or nothing flagged — wait for the deadline
+        if (pool == null) return false;
         Map<Item, Integer> have = summarize(pool);
-        if (!coveredBy(have, leg.manifest)) return false; // short — they may restock before deadline
-        // Withdraw all lines; a race with a worker rolls back and retries next sweep.
+        if (!coveredBy(have, leg.manifest)) return false;
+        // Partial extract must roll back: re-insert withdrawn stacks and retry next sweep, else items vanish.
         List<ItemStack> withdrawn = new ArrayList<>();
         for (BarterEntry e : leg.manifest) {
             Item item = item(e.itemId());
@@ -454,8 +423,6 @@ public final class TradeManager {
         return true;
     }
 
-    /** IN_TRANSIT: land arrivals and deposit (retrying until the receiver's storage is loaded and
-     *  has room; after a day of no room, the remainder drops at the receiving town hall). */
     private static boolean tickTransit(ServerLevel level, TradeDeal deal,
                                        Settlement proposer, Settlement recipient, long now) {
         boolean changed = tickArrival(level, deal.proposerLeg, proposer, recipient, now);
@@ -481,10 +448,9 @@ public final class TradeManager {
         if (leg.state == TradeDeal.Leg.LegState.IN_TRANSIT) {
             if (leg.journeyId != null) {
                 if (TradeCourierManager.isJourneyLive(leg.journeyId)) {
-                    return false; // a courier is walking it — arrival is event-driven
+                    return false;
                 }
-                // The journey session vanished without a callback (server restart): the courier
-                // will drop its stale flag when next seen; the goods continue by the clock.
+                // Journey session lost (server restart): fall back to the clock so goods never stall.
                 leg.journeyId = null;
                 leg.courierId = null;
                 leg.arriveAt = now + travelTicks(sender, receiver);
@@ -505,8 +471,6 @@ public final class TradeManager {
                 "bannerbound.trade.delivered_in").withStyle(ChatFormatting.GREEN));
             return true;
         }
-        // Storage full for a whole day → spill the remainder at the town hall rather than hold it
-        // hostage (only when the chunk is loaded so the items are real).
         if (now - leg.arriveAt > ARRIVAL_DROP_AFTER_TICKS && dropAtTownHall(level, receiver, leg.manifest)) {
             leg.manifest.clear();
             leg.state = TradeDeal.Leg.LegState.DELIVERED;
@@ -530,7 +494,7 @@ public final class TradeManager {
 
     private static boolean tickRefund(ServerLevel level, TradeDeal.Leg leg, @Nullable Settlement owner) {
         if (leg.state != TradeDeal.Leg.LegState.REFUNDING) return false;
-        if (owner == null) { // nobody left to refund
+        if (owner == null) {
             leg.manifest.clear();
             leg.state = TradeDeal.Leg.LegState.FAILED;
             return true;
@@ -543,8 +507,6 @@ public final class TradeManager {
         return false;
     }
 
-    /** Deposits manifest lines into the receiver's trading stockpiles (fallback: any deposit-open
-     *  storage), draining the list in place. Returns true if anything moved. */
     private static boolean depositInto(ServerLevel level, Settlement receiver, List<BarterEntry> manifest) {
         BlockPos near = receiver.hasTownHall() ? receiver.townHallPos() : receiver.bannerPos();
         Container pool = SettlementStorage.tradeAggregate(level, receiver);
@@ -586,8 +548,6 @@ public final class TradeManager {
         return true;
     }
 
-    // ─── Failure + notification helpers ─────────────────────────────────────────────────────────────
-
     private static void fail(ServerLevel level, TradeDeal deal, String key) {
         TradeCourierManager.abortJourneysFor(level, deal);
         refundLegIfEscrowed(deal.proposerLeg);
@@ -623,7 +583,6 @@ public final class TradeManager {
         return Component.literal(s.name()).withStyle(s.identityFormatting());
     }
 
-    /** CHIEFDOM: only the chief (or regent) negotiates; other governments: any member. */
     private static boolean canActOnTrades(Settlement s, ServerPlayer player) {
         return s.governmentType() != Settlement.Government.CHIEFDOM
             || s.canActAsChief(player.getUUID());
@@ -639,10 +598,6 @@ public final class TradeManager {
         return Math.max(MIN_TRAVEL_TICKS, dist * TRAVEL_TICKS_PER_BLOCK);
     }
 
-    // ─── Pool helpers (mirrors BarbarianBarter's shapes, over the TRADING stockpiles only) ─────────
-
-    /** The show-for-trading pool of {@code owner}, knowledge-filtered to what {@code viewer}'s civ
-     *  comprehends — no "?" items on the table (matches the barbarian barter display rule). */
     private static List<BarterEntry> poolEntries(ServerLevel level, Settlement owner, Settlement viewer) {
         Container pool = SettlementStorage.tradeAggregate(level, owner);
         if (pool == null) return List.of();
@@ -680,7 +635,6 @@ public final class TradeManager {
         return true;
     }
 
-    /** Drops empty/invalid lines and re-prices with the authoritative server unit values. */
     private static List<BarterEntry> sanitize(List<BarterEntry> in) {
         List<BarterEntry> out = new ArrayList<>();
         if (in == null) return out;
@@ -694,7 +648,6 @@ public final class TradeManager {
         return out;
     }
 
-    /** Re-prices persisted lines (NBT stores value 0) for client display. */
     private static List<BarterEntry> valued(List<BarterEntry> in) {
         List<BarterEntry> out = new ArrayList<>(in.size());
         for (BarterEntry e : in) {

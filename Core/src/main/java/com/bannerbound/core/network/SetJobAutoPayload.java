@@ -10,7 +10,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: release a citizen's job pin — return them to settlement labor auto-distribution ("Auto"). */
+/** C->S: release a citizen's job pin - return them to settlement labor auto-distribution ("Auto"). */
 @ApiStatus.Internal
 public record SetJobAutoPayload(int entityId) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<SetJobAutoPayload> TYPE =

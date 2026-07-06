@@ -19,7 +19,15 @@ import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.GsonHelper;
 import net.minecraft.util.profiling.ProfilerFiller;
 
-/** Loads Chronicle entries from data/<namespace>/codex_entries. */
+/**
+ * Datapack reload listener that parses data/<namespace>/codex_entries JSON into immutable
+ * CodexEntry records. Every read goes through GsonHelper defaults so a partial file still
+ * loads; entries default secret=true (hidden until unlocked). Tutorial objectives accept
+ * both new and legacy JSON keys (progress/progress_text, complete/complete_text,
+ * substeps/sub_steps/steps) so older authored content keeps working. The parsed map is held
+ * in a static volatile field replaced wholesale on each reload and exposed read-only via
+ * getAll/get/sorted (sorted by category, then order, then title).
+ */
 public final class CodexEntryLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "codex_entries";
     private static final Gson GSON = new Gson();

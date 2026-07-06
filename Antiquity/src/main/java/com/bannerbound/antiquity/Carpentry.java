@@ -21,37 +21,39 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * Server-authoritative driver for the carpenter's-table saw minigame. Holds one in-flight session
- * per player (table pos), opens the client minigame, and on completion outputs the whole build list
- * while consuming only the logs it cost. The minigame is non-skill, so there's no quality roll and
- * no anti-reroll forfeit: a cancel leaves the budget + list exactly as they were.
+ * per player (keyed by UUID; server thread only), opens the client minigame via
+ * OpenCarpentrySawPayload, and on a validated COMPLETE has the table output its whole build list
+ * while consuming only the materials it cost. Stroke count scales with the total materials the
+ * batch consumes (units x per-unit cost across every list entry), clamped to [MIN_STROKES,
+ * MAX_STROKES] so a big batch saws longer without getting tedious; batch size is the only lever
+ * and is never scored. The minigame is non-skill: no quality roll, no anti-reroll forfeit, and a
+ * cancel or disconnect leaves the wood budget and build list exactly as they were. While a session
+ * is open the table is claimed through WorkBlockLocks (the same lock crafter citizens honor, so an
+ * NPC skips the table mid-minigame); every exit path -- complete, cancel, disconnect, table broken
+ * (abortSessionAt) -- must release that lock. COMPLETE is validated by MinigameGuard reach and
+ * elapsed-time checks and fires the "woodworking_sawed" Chronicle tutorial step. handleAction also
+ * services REMOVE_QUEUE, a sessionless direct build-list edit with its own reach/lock checks.
  */
 @ApiStatus.Internal
 public final class Carpentry {
     private Carpentry() {
     }
 
-    /** Saw strokes for the smallest batch, and the cap for the largest — a bigger wood budget means a
-     *  longer saw (the only "size matters" lever; it is not scored), capped so it never gets tedious. */
     private static final int MIN_STROKES = 4;
     private static final int MAX_STROKES = 28;
 
     private record Session(BlockPos pos, int strokes, long startTime) {}
 
-    /** Active sessions keyed by player UUID (server thread only). */
     private static final Map<UUID, Session> SESSIONS = new HashMap<>();
 
-    /** Opens the saw minigame for {@code player} on the table at {@code pos} (list already non-empty). */
     public static void startSawing(ServerPlayer player, BlockPos pos, WoodworkingTableBlockEntity be) {
         int strokes = strokesFor(be);
         SESSIONS.put(player.getUUID(),
             new Session(pos.immutable(), strokes, player.serverLevel().getGameTime()));
-        // Claim the table so a crafter citizen skips it mid-minigame (mirror of the NPC craft lock).
         com.bannerbound.core.api.workshop.WorkBlockLocks.lock(pos, player.getUUID());
         PacketDistributor.sendToPlayer(player, new OpenCarpentrySawPayload(pos, strokes));
     }
 
-    /** Strokes scale with the total MATERIALS the batch consumes (logs + planks + sticks), clamped to
-     *  [MIN, MAX] — the more budget you spend, the longer you saw. */
     private static int strokesFor(WoodworkingTableBlockEntity be) {
         int materials = 0;
         for (WoodworkingTableBlockEntity.ListEntry e : be.getBuildList()) {
@@ -62,9 +64,7 @@ public final class Carpentry {
         return Math.max(MIN_STROKES, Math.min(MAX_STROKES, MIN_STROKES + materials / 2));
     }
 
-    /** Handles a client carpenter's-table action (saw COMPLETE/CANCEL, or an in-world queue removal). */
     public static void handleAction(ServerPlayer player, CarpentryActionPayload payload) {
-        // Queue removal is a direct in-world edit — no saw session involved.
         if (payload.action() == CarpentryActionPayload.REMOVE_QUEUE) {
             BlockPos pos = payload.pos();
             if (!player.level().isLoaded(pos)) return;
@@ -93,14 +93,12 @@ public final class Carpentry {
             level.sendParticles(new BlockParticleOption(ParticleTypes.BLOCK, Blocks.OAK_PLANKS.defaultBlockState()),
                 sessionPos.getX() + 0.5, sessionPos.getY() + 1.05, sessionPos.getZ() + 0.5,
                 18, 0.5, 0.15, 0.4, 0.02);
-            // Chronicle: completes the "Saw the batch" woodworking tutorial step.
             com.bannerbound.core.codex.CodexManager.onCustom(player, "woodworking_sawed", "");
         }
         com.bannerbound.core.api.workshop.WorkBlockLocks.unlock(sessionPos, player.getUUID());
         SESSIONS.remove(player.getUUID());
     }
 
-    /** Drops a disconnecting player's session (nothing was consumed — the list stays on the table). */
     public static void onPlayerDisconnect(ServerPlayer player) {
         Session session = SESSIONS.remove(player.getUUID());
         if (session != null) {
@@ -108,7 +106,6 @@ public final class Carpentry {
         }
     }
 
-    /** Drops any session anchored at {@code pos} (the table was broken) and clears its work lock. */
     public static void abortSessionAt(BlockPos pos) {
         SESSIONS.values().removeIf(s -> s.pos().equals(pos));
         com.bannerbound.core.api.workshop.WorkBlockLocks.forceUnlock(pos);

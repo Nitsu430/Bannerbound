@@ -34,55 +34,60 @@ import net.neoforged.neoforge.event.level.BlockEvent;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 
-/** Rope-fence event handlers (merged from RopeFenceEvents and RopeFenceEvents). */
+/**
+ * Rope-fence physics and interaction events. The fence's solid feel is faked ANALYTICALLY: block
+ * collision is axis-aligned and cannot follow an angled rope, so each tick every nearby rope is treated
+ * as a capsule (its true tie-point-to-tie-point segment plus the entity's half-width) and entities
+ * inside are pushed out with pure 3D math off the real endpoints -- smooth at any angle and at bends.
+ * The RopeCollisionBlock markers are only the cheap "a rope is near" gate and mob pathfinding
+ * avoidance; the actual blocking comes from segments gathered off RopeTieHost block entities in the
+ * entity's 3x3 chunk neighbourhood, passed around as double[]{ax,ay,az,bx,by,bz,postA,postB} where the
+ * trailing flags mark which ends are fence POSTS. A POST end extends the wall one entity-radius past
+ * the post (hidden inside the post's own collision) and gets a solid radial end-cap, so nothing slides
+ * around the end of a diagonal rope; a GATE end instead pulls the wall back GATE_GAP and gets no cap,
+ * leaving a real ~1-block opening an entity's CENTRE can cross -- THE fix for wide animals and the
+ * herder being shoved out of an open gate (the gate block's own collision handles "closed"). Capsules
+ * overlapping at rope junctions are re-resolved for up to RESOLVE_PASSES iterations, and penetration
+ * under SLOP is ignored to kill sub-pixel jitter.
+ *
+ * <p>Sidedness: players are clamped with identical math on BOTH client and server (client-only clamping
+ * let the server keep its unclamped position and tug the player back across the rope every tick); mobs
+ * are clamped server-side only. Side-keeping uses the SIGNED perpendicular distance against the
+ * entity's position at the end of LAST tick -- tracked ourselves in PREV_CLIENT/PREV_SERVER because
+ * e.xo already equals getX() by the time EntityTickEvent.Post fires for the local player -- so even a
+ * fast move ending well past the rope is shoved back. Entities carrying a fresh TELEPORT_AT_KEY
+ * gametime tag (deliberate teleports, e.g. the herder penning animals) adopt the new position instead
+ * of being bounced back across the rope. The wall is FENCE_HEIGHT tall and unjumpable, so a rising mob
+ * within JUMP_BLOCK_MARGIN of a rope's vertical band has its upward velocity zeroed -- otherwise its
+ * MoveControl jump fires on wall contact and it hops in place forever; this runs even when the mob has
+ * not moved horizontally, since a bouncing mob barely moves between ticks. Flip DEBUG for an action-bar
+ * readout of what the clamp sees.
+ *
+ * <p>Second half: left-click QOL for tie hosts (posts and gates alike). While a host has ropes, or is
+ * the anchor you are mid-tie from, left-click breaks one rope / cancels the tie instead of mining; a
+ * bare host mines normally, and survival block-breaking of a still-roped host is cancelled (peel its
+ * ropes off first). The action is client-predicted (cancel the click, send RopeFenceActionPayload) and
+ * performed authoritatively in serverHandle, which enforces MAX_REACH_SQR and a per-player
+ * ACTION_COOLDOWN (stops creative hold-to-break re-fire). Creative is build mode and exempt -- posts
+ * and gates delete freely there. A logout mid-tie clears the pending anchor so it is not left showing
+ * the roped model.
+ */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID)
 @ApiStatus.Internal
 public final class RopeFenceEvents {
-    // ==== From RopeFenceEvents ====
-
-    /*
-     * Fakes solid rope-fence collision <em>analytically</em>, because Minecraft block collision is
-     * axis-aligned and can't follow an angled rope smoothly. Each tick, for entities near a rope, every
-     * nearby rope is treated as a capsule (its true tie-point-to-tie-point line segment with a radius) and
-     * the entity is pushed out of it — pure 3D maths off the real endpoints, so it's smooth at any angle
-     * and at bends (no per-cell quantization jitter).
-     *
-     * <p>The {@link RopeCollisionBlock} markers are only used as the cheap "a rope is near" gate (and for
-     * mob pathfinding avoidance); the actual blocking comes from the segments, gathered from the rope tie
-     * hosts in the entity's chunk neighbourhood. <b>Sided to avoid rubber-band:</b> the local player is
-     * clamped on the client, mobs on the server.</p>
-     */
-    /** Barrier height above the ground under the rope — tall enough you can't get over it. */
     private static final double FENCE_HEIGHT = 2.0;
-    /** Half-width of the passable opening kept clear at a GATE end of a rope. The wall is pulled back this
-     *  far from the gate tie on each adjacent segment, so the gate is a real ~1-block-wide gap an entity can
-     *  walk its CENTRE through — not the razor-thin line you got from merely dropping the gate end-cap (which
-     *  left the wall running to the tie point, shoving any wide entity, and the herder, straight back out). */
     private static final double GATE_GAP = 0.6;
     private static final double MOVE_EPSILON_SQR = 1.0e-6;
-    /** Tag (gametime) Core sets on an entity it just teleported, so a deliberate cross-rope jump isn't
-     *  clamped back to the old side. Mirrors {@code CitizenEntity.TELEPORT_AT_KEY} (Core can't be
-     *  imported) — every intentional position jump in Core must call its tagDeliberateTeleport. */
+    // Mirrors CitizenEntity.TELEPORT_AT_KEY (Core not importable); every deliberate position jump in Core must tag it.
     private static final String TELEPORT_AT_KEY = "BannerboundTeleportAt";
-    /** Iterations to resolve overlapping capsules (a junction of ropes) to a stable spot per tick. */
     private static final int RESOLVE_PASSES = 6;
-    /** Penetration below this is ignored — stops sub-pixel push/pull jitter against a wall. */
     private static final double SLOP = 1.0e-3;
-    /** A mob whose centre is within (radius + this) of a rope's vertical band is pressed against the wall,
-     *  so any upward (jump) velocity is cancelled — the fence is {@link #FENCE_HEIGHT} tall and unjumpable,
-     *  so it must not hop in place trying to clear it. */
     private static final double JUMP_BLOCK_MARGIN = 0.1;
-    /** Action-bar readout of what the clamp sees (segs/pushed/pre/post/spd). Flip true only to diagnose. */
     private static final boolean DEBUG = false;
-    /** Each entity's position at the end of LAST tick (after any clamp). We track this OURSELVES because
-     *  {@code e.xo} is already == {@code getX()} by the time {@link EntityTickEvent.Post} fires for the
-     *  local player — so it's useless both as a "did it move" test and as the "which side was it on"
-     *  reference the clamp needs. Separate maps per side: in singleplayer the client LocalPlayer and the
-     *  integrated-server ServerPlayer share a UUID in one JVM, so a single map would cross-contaminate. */
+    // Separate map per side: in singleplayer the client and integrated-server player share one UUID in one JVM.
     private static final Map<UUID, double[]> PREV_CLIENT = new ConcurrentHashMap<>();
     private static final Map<UUID, double[]> PREV_SERVER = new ConcurrentHashMap<>();
 
-    /** Unordered pair of anchors, to gather each rope segment once. */
     private record Pair(RopeAnchor lo, RopeAnchor hi) {}
 
     private RopeFenceEvents() {}
@@ -95,11 +100,8 @@ public final class RopeFenceEvents {
         }
         Level level = e.level();
         if (level.isClientSide && (!(e instanceof Player player) || !player.isLocalPlayer())) {
-            return; // client: only the local player (remote players/mobs are server-authoritative there)
+            return;
         }
-        // Clamp the player on BOTH sides (with identical maths) so client and server agree on where it is
-        // — clamping client-only let the server keep its own un-clamped position and tug the player back
-        // across the rope every tick (the residual jitter even when the clamp result was stable).
         Map<UUID, double[]> prevMap = level.isClientSide ? PREV_CLIENT : PREV_SERVER;
         UUID id = e.getUUID();
         double curX = e.getX(), curZ = e.getZ();
@@ -109,10 +111,6 @@ public final class RopeFenceEvents {
         double mdx = curX - ox, mdz = curZ - oz;
         boolean moved = mdx * mdx + mdz * mdz >= MOVE_EPSILON_SQR;
 
-        // A deliberate teleport (e.g. the herder placing penned animals, or relocating itself to the pen
-        // centre) legitimately jumps the entity across a rope. Accept the new spot as its reference rather
-        // than treating the jump as an illegal crossing and shoving it back to the side it was on — that
-        // was bouncing herded animals (and the herder) straight back out of the pen.
         if (e.getPersistentData().contains(TELEPORT_AT_KEY)
                 && level.getGameTime() - e.getPersistentData().getLong(TELEPORT_AT_KEY) <= 1L) {
             prevMap.put(id, new double[] { curX, curZ });
@@ -121,9 +119,6 @@ public final class RopeFenceEvents {
 
         int ecx = Mth.floor(curX) >> 4;
         int ecz = Mth.floor(curZ) >> 4;
-        // Also gather segments for a non-player mob that's rising (mid-jump) even if it didn't move
-        // horizontally — a mob stuck bouncing against the rope barely moves sideways between ticks, so the
-        // `moved` gate alone would never run the jump suppression below that stops the bounce.
         boolean jumpingMob = !(e instanceof Player) && e.getDeltaMovement().y > 0.0;
         boolean wantSegments = moved || jumpingMob || (DEBUG && level.isClientSide && e instanceof Player);
         List<double[]> segments = wantSegments ? gatherSegments(level, ecx, ecz) : List.of();
@@ -131,14 +126,9 @@ public final class RopeFenceEvents {
         if (moved && !segments.isEmpty()) {
             pushed = clamp(e, segments, ox, oz);
         }
-        // A rope fence is FENCE_HEIGHT tall — taller than any mob can jump — so a mob shoved into it must
-        // not be allowed to hop up the invisible wall. Its MoveControl fires jumpControl when it collides
-        // (with the wall or a 1.5-tall post), and the clamp leaves that upward velocity intact, so it
-        // bounces in place forever ("they think they can jump it, but can't"). Cancel the jump here.
         if (!(e instanceof Player) && !segments.isEmpty()) {
             suppressJump(e, segments);
         }
-        // Store the FINAL (possibly clamped) position as next tick's "old" reference.
         prevMap.put(id, new double[] { e.getX(), e.getZ() });
 
         if (DEBUG && level.isClientSide && e instanceof Player p) {
@@ -153,12 +143,6 @@ public final class RopeFenceEvents {
         }
     }
 
-    /** Cancels a mob's upward (jump) velocity while it's pressed against a rope's vertical band. A rope
-     *  fence is {@link #FENCE_HEIGHT} tall — unjumpable — but the horizontal clamp keeps {@code v.y} intact,
-     *  so a mob whose AI fires a jump against the wall hops in place forever. When a rising mob's centre is
-     *  inside a rope's vertical band AND within (radius + {@link #JUMP_BLOCK_MARGIN}) of the rope line, zero
-     *  the upward velocity so it stays grounded and routes around instead. Downward motion (falling /
-     *  walking downslope) is untouched, and a mob clear of the wall on its own side is unaffected. */
     private static void suppressJump(Entity e, List<double[]> segments) {
         Vec3 v = e.getDeltaMovement();
         if (v.y <= 0.0) {
@@ -178,7 +162,7 @@ public final class RopeFenceEvents {
             double ropeY = ay + t * (by - ay);
             double barrierBottom = ropeY - RopeAnchor.TIE_Y;
             if (box.maxY <= barrierBottom || box.minY >= barrierBottom + FENCE_HEIGHT) {
-                continue; // outside this rope's vertical band
+                continue;
             }
             double pdx = cx - qx, pdz = cz - qz;
             if (pdx * pdx + pdz * pdz <= reach * reach) {
@@ -188,7 +172,6 @@ public final class RopeFenceEvents {
         }
     }
 
-    /** DEBUG helper: smallest horizontal distance from (x,z) to any rope segment. */
     private static double minSegDist(List<double[]> segments, double x, double z) {
         double min = Double.MAX_VALUE;
         for (double[] s : segments) {
@@ -201,14 +184,10 @@ public final class RopeFenceEvents {
         return min;
     }
 
-    /** Is this tie point a fence POST (vs a gate upright)? Only posts get the wall extended past them —
-     *  extending past a gate upright would push the rope wall into the gate's (openable) passage. */
     private static boolean isPost(Level level, RopeAnchor a) {
         return level.getBlockState(a.pos()).getBlock() instanceof RopeFencePostBlock;
     }
 
-    /** Rope segments from tie hosts in the entity's 3×3 chunk neighbourhood, as
-     *  {ax,ay,az,bx,by,bz, extendA, extendB} (the trailing flags = 1 if that end is a post). */
     private static List<double[]> gatherSegments(Level level, int ecx, int ecz) {
         Set<Pair> seen = new HashSet<>();
         List<double[]> out = new ArrayList<>();
@@ -223,8 +202,6 @@ public final class RopeFenceEvents {
                         continue;
                     }
                     BlockPos hp = entry.getKey();
-                    // Heal marker coverage saved by older versions (line-only cells) the first time each
-                    // host is seen this session — cheap set check, server-side no-op thereafter.
                     RopeTies.refreshFillersOnce(level, hp, host);
                     for (int slot = 0; slot < host.slotCount(); slot++) {
                         RopeAnchor local = new RopeAnchor(hp, slot);
@@ -248,31 +225,18 @@ public final class RopeFenceEvents {
         return out;
     }
 
-    /** Push the entity out of any rope capsule it's inside; returns true if it moved the entity.
-     *  {@code ox}/{@code oz} are the entity's position at the end of last tick (tracked in PREV_POS,
-     *  NOT {@code e.xo} which is unreliable here) — the side it must be kept on. */
     private static boolean clamp(Entity e, List<double[]> segments, double ox, double oz) {
         AABB box = e.getBoundingBox();
         double r = e.getBbWidth() / 2.0;
         double nx = e.getX(), nz = e.getZ();
         boolean changed = false;
 
-        // Resolve all rope capsules together: a junction overlaps several at once, and pushing out of
-        // one can shove the entity into another, so iterate until it's clear of all (or we give up).
         for (int pass = 0; pass < RESOLVE_PASSES; pass++) {
             boolean pushed = false;
             for (double[] s : segments) {
                 double ax = s[0], ay = s[1], az = s[2], bx = s[3], by = s[4], bz = s[5];
                 double dx = bx - ax, dz = bz - az;
                 double len2 = dx * dx + dz * dz;
-                // POST end: extend the wall one entity-radius PAST the post along the rope direction. On a
-                // diagonal rope you slide along the angled wall; without this you slide off its end at the
-                // post and round the little end-cap through the gap to the far side. The extension lives
-                // inside the post (which has its own collision) so it just plugs that gap.
-                // GATE end (non-post tie host): pull the wall BACK by GATE_GAP so the two segments meeting at
-                // a gate leave a real ~1-block opening centred on the gate, instead of running to the tie and
-                // leaving only a razor-thin passable line. This is THE fix for wide animals / the herder
-                // being shoved out of an open gate — the gate is now a gap their centre can actually cross.
                 if (len2 >= 1.0e-9) {
                     double sl = Math.sqrt(len2);
                     double ux = dx / sl, uz = dz / sl;
@@ -286,30 +250,22 @@ public final class RopeFenceEvents {
                 double t = len2 < 1.0e-9 ? 0.0 : Mth.clamp(((nx - ax) * dx + (nz - az) * dz) / len2, 0.0, 1.0);
                 double cx = ax + t * dx, cz = az + t * dz;
                 double ropeY = ay + t * (by - ay);
-                // Vertical band: ground under the rope up to fence height (rope ties at TIE_Y above base).
                 double barrierBottom = ropeY - RopeAnchor.TIE_Y;
                 if (box.maxY <= barrierBottom || box.minY >= barrierBottom + FENCE_HEIGHT) {
                     continue;
                 }
                 if (len2 >= 1.0e-9 && t > 0.0 && t < 1.0) {
-                    // Beside the rope's span: block crossing of its true perpendicular plane, kept on
-                    // the side the entity was on last tick. SIGNED distance, so even a fast move that
-                    // ends well past the rope (unsigned dist > r) is still detected and shoved back.
                     double sl = Math.sqrt(len2);
                     double perpX = -dz / sl, perpZ = dx / sl;
                     double fOld = perpX * (ox - ax) + perpZ * (oz - az);
                     double fNew = perpX * (nx - ax) + perpZ * (nz - az);
                     double side = fOld >= 0.0 ? 1.0 : -1.0;
                     if (side * fNew >= r - SLOP) {
-                        continue; // safely ≥ r on its own side
+                        continue;
                     }
                     nx += perpX * (side * r - fNew);
                     nz += perpZ * (side * r - fNew);
                 } else {
-                    // Past an end. Only a POST end gets a solid radial cap; a GATE end gets none — combined
-                    // with the GATE_GAP wall-pullback above, that leaves a clean ~1-block opening at the gate.
-                    // (The gate BLOCK's own collision handles "closed"; the rope wall still blocks the fence
-                    // either side of the opening.)
                     boolean endIsPost = (t >= 1.0) ? s[7] != 0.0 : s[6] != 0.0;
                     if (!endIsPost) {
                         continue;
@@ -345,23 +301,14 @@ public final class RopeFenceEvents {
 
         if (changed) {
             e.setPos(nx, e.getY(), nz);
-            // Render interpolates the camera as lerp(partialTick, xo, getX()). The local player's xo is
-            // left at this tick's PRE-clamp position, so without fixing it the camera lerps from the
-            // moved-in spot to the clamped spot every frame → jitter. Set xo to LAST tick's clamped
-            // position (ox/oz, our tracked prev) — NOT this tick's (that would make xo==getX, killing
-            // interpolation entirely → a choppy ~tick-rate "13 FPS" judder while sliding along).
+            // xo/zo must be LAST tick's clamped pos: pre-clamp -> camera jitter; this tick's -> no interpolation (judder).
             e.xo = ox; e.zo = oz;
             e.xOld = ox; e.zOld = oz;
-            // Entity.move() already added this tick's lunge-into-the-rope to walkDist (line ~702), so the
-            // first-person view-bob (which reads walkDist - walkDistO) sways as if you're walking on the
-            // spot. Rewrite walkDist to the NET movement so the camera only bobs for real progress.
+            // Rewrite walkDist to NET movement (0.6 = vanilla Entity.move factor) or view-bob sways while pinned.
             double ddx = nx - ox, ddz = nz - oz;
             double net = Math.sqrt(ddx * ddx + ddz * ddz);
             e.walkDist = (float) (e.walkDistO + net * 0.6);
-            // Do NOT touch a PLAYER'S velocity. The position clamp alone holds it (its input-capped speed
-            // already produces a normal slide), and writing deltaMovement server-side gets broadcast back
-            // to the client where it stacks onto local movement → the speed-boost "launch". Mobs are
-            // momentum-driven and server-authoritative, so we DO cancel their into-rope velocity.
+            // Never write a player's deltaMovement: the server echo stacks onto client input -> speed launch. Mobs only.
             if (!(e instanceof Player)) {
                 Vec3 v = e.getDeltaMovement();
                 e.setDeltaMovement(ddx, v.y, ddz);
@@ -370,18 +317,7 @@ public final class RopeFenceEvents {
         return changed;
     }
 
-    // ==== From RopeFenceEvents ====
-
-    /*
-     * Left-click QOL for rope ties (posts and gates alike). A tie host is only "locked" while it has ropes
-     * (or is the host you're tying from): left-click then breaks one rope / cancels the tie; otherwise it
-     * mines normally (an axe is faster but not required). The action is predicted on the client (cancel
-     * the left-click, send {@link RopeFenceActionPayload}) and performed authoritatively in
-     * {@link #serverHandle}. Creative is build mode and exempt — posts/gates delete freely there.
-     */
-    /** Max distance² the server will honour a rope action from (anti-cheat / sanity). */
     private static final double MAX_REACH_SQR = 64.0;
-    /** Min ticks between honoured rope actions per player — stops creative hold-to-break re-firing. */
     private static final long ACTION_COOLDOWN = 5L;
     private static final Map<UUID, Long> LAST_ACTION = new HashMap<>();
 
@@ -393,7 +329,7 @@ public final class RopeFenceEvents {
         }
         Player player = event.getEntity();
         if (player.getAbilities().instabuild) {
-            return; // creative deletes posts/gates freely
+            return;
         }
         BlockPos pos = event.getPos();
         RopeTieHost host = RopeTies.hostAt(level, pos);
@@ -403,27 +339,25 @@ public final class RopeFenceEvents {
         RopeAnchor pend = RopeTieState.get();
         boolean pendingHere = pend != null && pend.pos().equals(pos);
         if (!pendingHere && !RopeTies.isConnectedAnySlot(host)) {
-            return; // bare, un-tying → let normal mining break it
+            return;
         }
         if (pendingHere) {
-            RopeTieState.clear(); // responsive preview removal; server confirms
+            RopeTieState.clear();
         }
         event.setCanceled(true);
         PacketDistributor.sendToServer(new RopeFenceActionPayload(pos.immutable()));
     }
 
-    /** Block destroying a tie host while it still has ropes — also covers creative insta-break. */
     @SubscribeEvent
     public static void onBreak(BlockEvent.BreakEvent event) {
         Player breaker = event.getPlayer();
         if (breaker != null && !breaker.getAbilities().instabuild
                 && breaker.level().getBlockEntity(event.getPos()) instanceof RopeTieHost host
                 && RopeTies.isConnectedAnySlot(host)) {
-            event.setCanceled(true); // peel its ropes off first
+            event.setCanceled(true);
         }
     }
 
-    /** A player who logs out mid-tie shouldn't leave their anchor stuck showing the roped model. */
     @SubscribeEvent
     public static void onLogout(PlayerEvent.PlayerLoggedOutEvent event) {
         if (event.getEntity() instanceof ServerPlayer player) {
@@ -431,7 +365,6 @@ public final class RopeFenceEvents {
         }
     }
 
-    /** Server-authoritative rope action for a left-click relayed by {@link RopeFenceActionPayload}. */
     public static void serverHandle(ServerPlayer player, BlockPos pos) {
         Level level = player.level();
         if (player.blockPosition().distSqr(pos) > MAX_REACH_SQR) {

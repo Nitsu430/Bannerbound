@@ -22,14 +22,20 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Renders the Fletching Station's placed-item pile (a 3×3 grid on top) and — when the pile matches a
- * recipe — the base result floating and spinning above it. Mirrors {@code CraftingStoneRenderer};
- * the station block itself renders from its blockstate model.
+ * BER for the Fletching Station's placed-item pile: a 3x3 grid of stacks on the tabletop (one cell
+ * per stack, multiples pile up as layers in that cell) plus, when the pile matches a recipe, the
+ * base result floating and spinning above. Mirrors CraftingStoneRenderer; the station block itself
+ * renders from its blockstate model. Items sit at TOP_Y = 0.875, i.e. just above the model's 13px
+ * tabletop (13/16 + 1px), matching the crafting stone's +1px convention. A half-made in-progress
+ * piece lies flat in the middle while a minigame session runs (the pile is consumed at commit, so
+ * the grid is empty by then). Ghost recipe preview renders still-missing ingredients as low-alpha
+ * silhouettes (via {@link GhostItemRenderer#wrap}) and the candidate's result ghosted where the
+ * real preview will appear; a ghost can coexist with a solid result (locked recipe plus an
+ * incidental exact match), in which case the solid result floats higher (1.8 vs 1.35).
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class FletchingStationRenderer implements BlockEntityRenderer<FletchingStationBlockEntity> {
-    /** Items sit just above the model's 13px tabletop (13/16 + 1px), like the crafting stone's +1px. */
     private static final double TOP_Y = 0.875;
     private static final double CELL = 0.2;
     private static final float BLOCK_SCALE = 0.2F;
@@ -54,7 +60,6 @@ public class FletchingStationRenderer implements BlockEntityRenderer<FletchingSt
             slide = f * f * 0.6F;
         }
 
-        // One cell per stack; multiples pile up in that cell (see CraftingStoneRenderer).
         for (int cell = 0; cell < contents.size() && cell < 9; cell++) {
             ItemStack s = contents.get(cell);
             if (s.isEmpty()) continue;
@@ -80,8 +85,6 @@ public class FletchingStationRenderer implements BlockEntityRenderer<FletchingSt
             }
         }
 
-        // Work in progress: the half-made piece lies flat in the middle of the tabletop while its
-        // minigame session runs (the pile is consumed at commit, so the grid is empty by then).
         ItemStack inProgress = be.getInProgress();
         if (!inProgress.isEmpty()) {
             pose.pushPose();
@@ -93,9 +96,6 @@ public class FletchingStationRenderer implements BlockEntityRenderer<FletchingSt
             pose.popPose();
         }
 
-        // Ghost preview: still-missing ingredients as low-alpha silhouettes + the candidate's
-        // result floating ghosted where the real preview will appear (see CraftingStoneRenderer).
-        // Can coexist with a solid result (locked recipe + incidental exact match floats higher).
         ItemStack ghostResult = be.getGhostResult();
         ItemStack result = be.getResult();
         if (!ghostResult.isEmpty()) {

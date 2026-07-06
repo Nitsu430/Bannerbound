@@ -21,50 +21,61 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BedPart;
 
 /**
- * Citizens go home at night and sleep in a bed until morning. Sleep preempts work goals (so a
- * gatherer mid-shift drops their tool, walks home, and lies down when night falls), and
- * yields itself when a panic situation kicks in — fire, mobs, etc. should still wake the
- * citizen up the way they would a vanilla villager.
+ * Citizens go home at night and sleep in a bed until morning. Sleep preempts work goals (a
+ * gatherer mid-shift drops its tool, walks home, and lies down when night falls) and yields to
+ * panic -- fire, mobs, and the like still wake a citizen the way they would a vanilla villager.
  *
- * <p><b>Priority:</b> 2, sharing the slot with door/gate goals. Strictly less than the work
- * goals at 3 (so we preempt them — vanilla's WrappedGoal uses strict-less-than for
- * preemption), and strictly greater than panic at 1 (so PanicGoal preempts us). OpenDoorGoal
- * and OpenFenceGateGoal sit at 2 too, but they don't claim {@code Flag.MOVE}, so a
- * citizen walking home through a door still opens it on the way.
+ * <p>Priority 2, sharing the slot with the door/gate goals. Strictly less than the work goals at 3
+ * so we preempt them (vanilla's WrappedGoal uses strict-less-than for preemption), and strictly
+ * greater than panic at 1 so PanicGoal preempts us. OpenDoorGoal / OpenFenceGateGoal sit at 2 too
+ * but don't claim {@code Flag.MOVE}, so a citizen walking home through a door still opens it.
  *
- * <p><b>Bed selection:</b> the home's union is scanned at {@link #canUse()} for BedBlock HEAD
- * halves whose {@code OCCUPIED} state is false. Picks the nearest. Setting OCCUPIED on the
- * picked bed is what stops other citizens from converging on the same one — same trick
- * vanilla uses for villager-bed claims.
+ * <p>Bed selection scans the home's selection union for the nearest unoccupied, unreserved BedBlock
+ * HEAD. RESERVED_BEDS is an in-memory reservation set shared across every SleepGoal instance on the
+ * server: OCCUPIED is not written to the block until a citizen actually arrives and calls
+ * startSleeping, so without this two citizens whose canUse ticks land in the same game tick would
+ * both see the bed free and pile onto it. canUse adds the picked bed, stop() removes it, and
+ * {@link #releaseReservation} is the public clear called from {@code CitizenLifecycleEvents} when a
+ * sleeping citizen dies -- vanilla does not guarantee stop() runs before entity removal, so the
+ * reservation would otherwise leak and block the bed forever. The set is a ConcurrentHashMap-backed
+ * keyset for safety if a non-main thread ever pokes it.
  *
- * <p><b>Stuck-bed safety:</b> if the bed is destroyed or replaced mid-night,
- * {@link #canContinueToUse()} returns false, the goal stops, and the citizen will re-evaluate
- * on the next tick — either finding a different free bed (still under this goal) or falling
- * through to patrol if none remain. We never leave a stale OCCUPIED state behind: every wake
- * path (morning, bed destroyed, panic preempt) runs through {@link #stop()}.
+ * <p>Stuck-bed safety: if the bed is destroyed/replaced/rotated or the home goes invalid mid-night,
+ * {@link #canContinueToUse} returns false and stop() wakes the citizen and frees the bed cleanly.
+ * Every wake path (morning, bed lost, panic preempt, eviction) runs through stop(), so a stale
+ * OCCUPIED flag is never left behind. OCCUPIED is set on the HEAD half only, matching where vanilla
+ * checks it for both renderer and claim semantics.
+ *
+ * <p>Reload recovery: vanilla persists the sleeping pos + pose, but this goal's transient
+ * lying/targetBed fields are not saved. A save-and-reload mid-sleep thus leaves the citizen
+ * visually lying down with isSleeping() true but no goal running, so work/patrol goals would grab
+ * MOVE and drag the sleeper around. canUse detects that state and either reclaims the bed (when it
+ * is still a valid bed in this home or outpost) or calls stopSleeping to break out so the normal
+ * pick path can run.
+ *
+ * <p>Outpost lodging: an assigned worker beds down ON SITE when its outpost chunk offers a roofed,
+ * free, unreserved bed -- beating the nightly trek home at the price of the ROUGH_LODGING thought.
+ * "Roofed" means any motion-blocking block within 6 above the bed head (no walls required, a
+ * lean-to is enough). That scan walks a chunk-sized region, so a miss is cached briefly via
+ * outpostBedRetryAt rather than re-run on every canUse poll through the night. Night-watch guards
+ * under the NIGHT_WATCH policy skip sleep entirely (a weary thought is the price) and have any
+ * vanilla sleeping pose from a reload broken here.
+ *
+ * <p>Constants: NIGHT_START 12500 / NIGHT_END 23460 bracket vanilla's sleep window on dayTime mod
+ * 24000 (monsters spawn / beds usable at 12541 rounded to 12500; natural wake at 23459).
+ * BED_REACH_SQ (~1.8 blocks) is "at the bed"; BED_SETTLE_REACH_SQ (~2.5 blocks) is the fallback
+ * reach used once navigation is done -- a bed under a low roof has no standable cell a 2-tall
+ * citizen can path onto, so the navmesh only gets them near it, which is enough because vanilla
+ * startSleeping snaps them onto the pillow regardless of headroom. REPATH_INTERVAL caps the moveTo
+ * re-issue at once a second.
  */
 @ApiStatus.Internal
 public class SleepGoal extends Goal {
-    /** Vanilla's "you can sleep now" window (dayTime mod 24000). 12541 is when monsters spawn /
-     *  beds become usable; we round to 12500. 23459 is when natural wake happens. */
     private static final long NIGHT_START = 12_500L;
     private static final long NIGHT_END = 23_460L;
-    /** Distance² at which we count as "at the bed" and call startSleeping. ~1.8 blocks. */
     private static final double BED_REACH_SQ = 3.25;
-    /** Fallback reach² (~2.5 blocks) used once the citizen has stopped making progress. A bed with
-     *  the roof right above it (only 1 block of headroom, or none) has no standable cell at the bed
-     *  for a 2-tall citizen, so the navmesh can only get them <i>near</i> it — that's enough: vanilla
-     *  {@code startSleeping} snaps the citizen onto the pillow regardless of the ceiling. Lets low,
-     *  cosy huts (roof 1 block above the bed) work, not just the recommended 2-high ones. */
     private static final double BED_SETTLE_REACH_SQ = 6.25;
-    /** Re-issue moveTo at most once a second — vanilla navigation can spam-call otherwise. */
     private static final int REPATH_INTERVAL = 20;
-    /** In-memory bed reservations shared across every SleepGoal instance on the server. Without
-     *  this, two citizens whose {@link #canUse} ticks land in the same game tick both see the
-     *  same bed as {@code OCCUPIED=false} (the flag isn't written until they arrive and call
-     *  {@code startSleeping}), so they both walk to it and pile on top of each other. A canUse
-     *  that picks a bed adds it here; {@link #stop} removes it. ConcurrentHashMap.newKeySet so
-     *  iterator/contains/add/remove are all thread-safe in case a non-main thread ever pokes it. */
     private static final java.util.Set<BlockPos> RESERVED_BEDS =
         java.util.concurrent.ConcurrentHashMap.newKeySet();
 
@@ -72,14 +83,9 @@ public class SleepGoal extends Goal {
     private final double speedModifier;
 
     private BlockPos targetBed;
-    /** True once {@link CitizenEntity#startSleeping} has been called for this run; on stop we
-     *  use this to decide whether to call {@link CitizenEntity#stopSleeping} and clear OCCUPIED. */
     private boolean lying;
     private int repathCooldown;
-    /** This run's bed is at the citizen's outpost (rough lodging) rather than their home. */
     private boolean atOutpost;
-    /** Last tickCount an outpost-bed scan came up empty — skipped for a while after (the scan
-     *  walks a chunk region, too heavy to repeat every canUse poll all night). */
     private int outpostBedRetryAt;
 
     public SleepGoal(CitizenEntity citizen, double speedModifier) {
@@ -93,9 +99,6 @@ public class SleepGoal extends Goal {
         return t >= NIGHT_START && t < NIGHT_END;
     }
 
-    /** Public clear of a bed's reservation. Used by {@code CitizenLifecycleEvents} when a
-     *  sleeping citizen dies — vanilla doesn't guarantee {@link #stop} runs before entity
-     *  removal, so the reservation would otherwise leak and block the bed for everyone else. */
     public static void releaseReservation(BlockPos bed) {
         if (bed != null) RESERVED_BEDS.remove(bed);
     }
@@ -106,9 +109,6 @@ public class SleepGoal extends Goal {
         if (!isNight(sl)) return false;
         Settlement settlement = citizen.getSettlement();
         if (settlement == null) return false;
-        // NIGHT WATCH: guards stand through the night while the policy is active — no bed for the
-        // watch (their weary thought is the price; see PolicyEffects). If a reload left this guard
-        // in vanilla's sleeping pose, break it here — the reclaim branch below won't run for us.
         if (citizen.isGuard() && settlement.hasPolicy(
                 com.bannerbound.core.api.settlement.PolicyRegistry.NIGHT_WATCH)) {
             if (citizen.isSleeping()) citizen.stopSleeping();
@@ -116,14 +116,6 @@ public class SleepGoal extends Goal {
         }
         Home home = settlement.getHomeFor(citizen.getUUID());
 
-        // ── Reload-recovery path ─────────────────────────────────────────────────────────────
-        // Vanilla saves DATA_SLEEPING_POS_ID + the sleeping pose; this goal's transient
-        // {@code lying}/{@code targetBed} fields are NOT saved. So a save-and-reload mid-sleep
-        // leaves the citizen visually lying down with vanilla {@code isSleeping()} reporting
-        // true, but our goal isn't running — so work / patrol / conversation goals claim the
-        // MOVE flag and walk the citizen around while their pose stays SLEEPING. The fix: if
-        // the citizen is already in vanilla's sleeping state on a bed in this home (or at this
-        // citizen's outpost), reclaim the bed and skip straight to the {@code lying} state.
         if (citizen.isSleeping()) {
             BlockPos already = citizen.getSleepingPos().orElse(null);
             boolean reclaimable = already != null
@@ -135,13 +127,9 @@ public class SleepGoal extends Goal {
                 RESERVED_BEDS.add(targetBed);
                 return true;
             }
-            // Sleeping but the bed isn't in this home (player teleport, home moved, bed
-            // destroyed). Break out of the bad state so the regular pick path can run.
             citizen.stopSleeping();
         }
 
-        // Outpost workers bed down ON SITE when the outpost offers a roofed free bed — beats the
-        // nightly trek home, at the price of the ROUGH_LODGING thought (lower life conditions).
         BlockPos outpostBed = findOutpostBed(sl, settlement);
         if (outpostBed != null) {
             targetBed = outpostBed;
@@ -154,9 +142,6 @@ public class SleepGoal extends Goal {
         return targetBed != null;
     }
 
-    /** True iff {@code bedPos} is a BedBlock HEAD and lies inside one of the home's selection
-     *  boxes. Used by the reload-recovery branch in {@link #canUse} to validate the
-     *  vanilla-restored sleeping position before reclaiming it. */
     private static boolean isBedInHome(ServerLevel sl, Home home, BlockPos bedPos) {
         BlockState bs = sl.getBlockState(bedPos);
         if (!(bs.getBlock() instanceof BedBlock)) return false;
@@ -173,14 +158,9 @@ public class SleepGoal extends Goal {
         if (!(citizen.level() instanceof ServerLevel sl)) return false;
         if (!isNight(sl)) return false;
         if (targetBed == null) return false;
-        // Bed destroyed/replaced/rotated to a different head pos → wake up.
         BlockState bs = sl.getBlockState(targetBed);
         if (!(bs.getBlock() instanceof BedBlock)) return false;
         if (bs.getValue(BedBlock.PART) != BedPart.HEAD) return false;
-        // The bed must still belong to a VALID home this citizen lives in (or a valid outpost bed).
-        // Without this a sleeper keeps lying there after the home goes invalid / they're evicted —
-        // Homes.validate's eviction wakes them, but a still-running goal (lying=true) just holds them
-        // in place. Self-terminating here runs stop(), which wakes + frees the bed cleanly.
         Settlement settlement = citizen.getSettlement();
         boolean homeOk = false;
         if (settlement != null) {
@@ -205,8 +185,6 @@ public class SleepGoal extends Goal {
         if (!(citizen.level() instanceof ServerLevel sl)) return;
 
         if (lying) {
-            // Already sleeping — vanilla LivingEntity handles the pose, position lock, time skip
-            // logic. We just hold the goal open until canContinueToUse() returns false.
             return;
         }
 
@@ -217,24 +195,16 @@ public class SleepGoal extends Goal {
             targetBed.getX() + 0.5, targetBed.getY() + 0.5, targetBed.getZ() + 0.5);
 
         double distSq = dx * dx + dy * dy + dz * dz;
-        // Lie down if we walked right up to the bed, OR if we've gotten as close as the navmesh
-        // allows (navigation done) and we're still reasonably near — covers beds under a low roof
-        // that a standing citizen can't path directly onto.
         boolean settledNearby = distSq <= BED_SETTLE_REACH_SQ && citizen.getNavigation().isDone();
         if (distSq <= BED_REACH_SQ || settledNearby) {
             citizen.getNavigation().stop();
             citizen.startSleeping(targetBed);
-            // Mark the bed occupied so other citizens won't pick the same one. We set OCCUPIED
-            // on the HEAD half only — that's where vanilla checks it for both renderer + claim
-            // semantics. The FOOT half is left as-is, matching vanilla's BedBlock.setPlacedBy
-            // behaviour.
+            // OCCUPIED on the HEAD half only -- where vanilla checks it for render + claim.
             BlockState bs = sl.getBlockState(targetBed);
             if (bs.getBlock() instanceof BedBlock && bs.getValue(BedBlock.PART) == BedPart.HEAD) {
                 sl.setBlock(targetBed, bs.setValue(BedBlock.OCCUPIED, true), Block.UPDATE_ALL);
             }
             lying = true;
-            // Rough lodging: sleeping at the outpost beats the trek home, but it's a draughty cot
-            // on wild land — the worker wakes with a mood debuff (lower life conditions on site).
             if (atOutpost && citizen.getThoughts() != null) {
                 citizen.getThoughts().add(com.bannerbound.core.social.ThoughtKind.ROUGH_LODGING,
                     null, sl.getGameTime(), sl.random);
@@ -261,9 +231,6 @@ public class SleepGoal extends Goal {
             }
             lying = false;
         }
-        // Release the reservation regardless of whether we ever actually lay down. A goal that
-        // gets preempted (panic, dawn while still walking) needs to free its bed too so the
-        // next homeless citizen can claim it.
         if (targetBed != null) {
             RESERVED_BEDS.remove(targetBed);
         }
@@ -272,20 +239,11 @@ public class SleepGoal extends Goal {
         atOutpost = false;
     }
 
-    // ─── Outpost lodging: a roofed free bed in the citizen's outpost chunk ───────────────────────
-
-    /**
-     * A free, unreserved, ROOFED bed in this citizen's outpost chunk ({@link
-     * CitizenEntity#getOutpostSite}), or null. Roof = any motion-blocking block within a few
-     * blocks above the bed head — no walls required, per the outpost lodging rule. The scan walks
-     * a chunk-sized region, so a miss is cached briefly ({@link #outpostBedRetryAt}) rather than
-     * re-scanned on every canUse poll through the night.
-     */
     private BlockPos findOutpostBed(ServerLevel sl, Settlement settlement) {
         BlockPos site = citizen.getOutpostSite();
         if (site == null) return null;
         net.minecraft.world.level.ChunkPos cp = new net.minecraft.world.level.ChunkPos(site);
-        if (!settlement.workingClaims().contains(cp.toLong())) return null;   // outpost fell
+        if (!settlement.workingClaims().contains(cp.toLong())) return null;
         if (!sl.hasChunk(cp.x, cp.z)) return null;
         if (citizen.tickCount < outpostBedRetryAt) return null;
 
@@ -315,15 +273,13 @@ public class SleepGoal extends Goal {
             }
         }
         if (best == null) {
-            outpostBedRetryAt = citizen.tickCount + 200;   // nothing roofed/free — retry in ~10s
+            outpostBedRetryAt = citizen.tickCount + 200;
             return null;
         }
         RESERVED_BEDS.add(best);
         return best;
     }
 
-    /** Roofed = any motion-blocking block within 6 above the bed head. Walls deliberately not
-     *  required — a lean-to over the cot is enough for outpost lodging. */
     private static boolean hasRoof(ServerLevel sl, BlockPos bed) {
         BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos();
         for (int dy = 1; dy <= 6; dy++) {
@@ -333,8 +289,6 @@ public class SleepGoal extends Goal {
         return false;
     }
 
-    /** Reload-recovery twin of {@link #isBedInHome}: the restored sleeping pos is a bed HEAD in
-     *  one of this settlement's working-claimed (outpost) chunks. */
     private static boolean isOutpostBed(ServerLevel sl, Settlement settlement, BlockPos bedPos) {
         BlockState bs = sl.getBlockState(bedPos);
         if (!(bs.getBlock() instanceof BedBlock)) return false;
@@ -343,10 +297,6 @@ public class SleepGoal extends Goal {
             new net.minecraft.world.level.ChunkPos(bedPos).toLong());
     }
 
-    /** Nearest unoccupied AND unreserved BedBlock HEAD in the home's selection union.
-     *  {@code null} if every bed is already taken — caller treats null as "no goal." Adds the
-     *  chosen bed to {@link #RESERVED_BEDS} so a concurrent canUse on another citizen this same
-     *  tick won't pick it. */
     private BlockPos findFreeBed(ServerLevel sl, Home home) {
         BlockSelectionRegistry registry = BlockSelectionRegistry.get(sl);
         List<BlockSelection> boxes = registry.findByHome(home.id());
@@ -361,7 +311,7 @@ public class SleepGoal extends Goal {
                     for (int z = box.minZ(); z <= box.maxZ(); z++) {
                         BlockPos p = new BlockPos(x, y, z);
                         if (!seen.add(p)) continue;
-                        if (RESERVED_BEDS.contains(p)) continue; // claimed by another citizen
+                        if (RESERVED_BEDS.contains(p)) continue;
                         BlockState bs = sl.getBlockState(p);
                         if (!(bs.getBlock() instanceof BedBlock)) continue;
                         if (bs.getValue(BedBlock.PART) != BedPart.HEAD) continue;

@@ -24,24 +24,38 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 
 /**
- * The Crafter's work loop (see CRAFTER_PLAN.md Phase 2): resolve the citizen's bound workshop →
- * claim a free work block whose executor has something to craft from the workshop storage → walk
- * there → withdraw the inputs → play the craft (arm swings per beat; the executor adds the
- * station's sounds/particles/visible pile) → deposit the finished item back into workshop storage.
+ * The Crafter's work loop (CRAFTER_PLAN.md Phase 2): resolve the citizen's bound workshop, claim a
+ * free work block whose executor has something to craft from workshop storage, walk there, withdraw
+ * the inputs, play the craft (arm swings per beat; the executor adds the station's sounds/particles/
+ * visible pile), then deposit the finished item back into storage. Subclass of WorkGoal; the generic
+ * "crafter" plus registry jobs (Carpenter, etc.) that bind to a Workshop all run through it.
  *
- * <p>Crafting is demand-driven: queued orders, chain-derived auto-orders, or positive min-stock
- * deficits pick the next craft. Stored inputs alone do not make a crafter keep producing.
+ * Crafting is demand-driven: queued orders, chain-derived auto-orders, or positive min-stock deficits
+ * pick the next craft. Stored inputs alone do not make a crafter keep producing. When nothing can be
+ * made we split NO_ORDERS (nothing wanted) from NEED_MATERIALS (a craft is wanted but its inputs are
+ * not stocked yet, per an executor's non-empty missingInputs) so the Job-tab headline stays honest.
  *
- * <p>The work block is locked for the craft's duration ({@link WorkBlockLocks}) so players can't
- * disturb the pile mid-craft, mirroring how a player's own station session blocks NPCs.
+ * In a mixed workshop each worker locks to ONE station family (its "position") so experience pools in
+ * a single profession instead of smearing across whatever block is free; an unpositioned worker
+ * self-assigns to the family it has the most XP in, and a stale position (family gone) clears for a
+ * re-pick. workTypeId is the CLAIMED block's family (not the workshop's derived type, which can be
+ * MIXED) and is the XP bucket each completed craft pays into.
+ *
+ * The claimed work block is locked for the craft's duration (WorkBlockLocks) so players can't disturb
+ * the pile mid-craft. Inputs are withdrawn all-or-nothing and tracked in withdrawn so an abort
+ * (station broken/swapped, interruption) always returns them; reusable (non-consumed) inputs are
+ * returned on finish. Products are never voided: storage overflow pops the item to the world.
+ *
+ * Two knobs scale the base craft duration: crafter skill (XP saturation, novice ~1.0x down to ~0.6x
+ * master) and mood (happier is faster). One completed craft grants one XP into the claimed family's
+ * bucket, scaled by workshop appeal (0.8x..1.25x, never zero) which also echoes a LOVELY_WORKPLACE /
+ * DREARY_WORKPLACE mood thought, refreshed at most once per active thought so a spree can't stack it.
  */
 @ApiStatus.Internal
 public class CrafterWorkGoal extends WorkGoal {
     public static final String JOB_TYPE_ID = "crafter";
 
-    /** Re-run the full workshop validation (reachability BFS) at most this often. */
     private static final long VALIDATE_MAX_AGE_TICKS = 100L;
-    /** Close enough to the station to work it. */
     private static final double USE_DIST_SQ = 2.6 * 2.6;
 
     private Workshop workshop;
@@ -49,15 +63,10 @@ public class CrafterWorkGoal extends WorkGoal {
     private BlockPos targetBlock;
     private WorkExecutor executor;
     private WorkExecutor.Craft craft;
-    /** Workshop-type id of the CLAIMED work block (not the workshop's derived type, which can be
-     *  MIXED) — the per-profession XP bucket each completed craft pays into. */
     private String workTypeId;
-    /** Stacks actually withdrawn from storage — returned on abort so inputs are never lost. */
     private final List<ItemStack> withdrawn = new ArrayList<>();
     private boolean started;
     private int ticksLeft;
-    /** The craft's base duration scaled by the worker's skill — a more practised crafter works each
-     *  step faster. Computed once when the craft starts; drives both the countdown and the beat cadence. */
     private int effectiveTicks;
     private int beatsDone;
     private int repathCooldown;
@@ -76,13 +85,11 @@ public class CrafterWorkGoal extends WorkGoal {
         this.fixedWorkshopTypeId = fixedWorkshopTypeId;
     }
 
-    /** True for the generic Crafter and registry jobs that bind to a Workshop, such as Carpenter. */
     public static boolean isWorkshopJob(@Nullable String typeId) {
         return JOB_TYPE_ID.equals(typeId)
             || com.bannerbound.core.api.job.CitizenJobRegistry.isWorkshopBound(typeId);
     }
 
-    /** The station/workshop type a workshop job is restricted to, or {@code null} for generic. */
     @Nullable
     public static String workshopTypeForJob(@Nullable String typeId) {
         if (typeId == null) return null;
@@ -106,10 +113,6 @@ public class CrafterWorkGoal extends WorkGoal {
         if (Workshops.validateCached(sl, w, VALIDATE_MAX_AGE_TICKS) != Workshop.Status.VALID) {
             return false;
         }
-        // Resolve this citizen's station POSITION — in a mixed workshop each worker locks to ONE
-        // station family (fletching stations OR crafting stones), so experience pools in a single
-        // profession instead of smearing across whatever block happens to be free. A stale
-        // position (its station family left the workshop) clears for a fresh re-pick.
         String position = fixedWorkshopTypeId != null ? fixedWorkshopTypeId : w.positionOf(citizen.getUUID());
         if (position != null && !hasStationOfType(sl, w, position)) {
             if (fixedWorkshopTypeId != null) {
@@ -121,8 +124,6 @@ public class CrafterWorkGoal extends WorkGoal {
             }
         }
 
-        // Claim a free work block with work: positioned workers only consider their own family;
-        // an unpositioned worker self-assigns to the family (with work NOW) it has the most XP in.
         BlockPos bestPos = null;
         WorkBlockRegistry.WorkBlockDef bestDef = null;
         WorkExecutor.Craft bestCraft = null;
@@ -149,11 +150,6 @@ public class CrafterWorkGoal extends WorkGoal {
             }
         }
         if (bestPos == null) {
-            // Workshop is bound and valid but nothing can be crafted right now. Distinguish "nothing
-            // is wanted" (NO_ORDERS) from "work is wanted but the inputs aren't stocked yet"
-            // (NEED_MATERIALS) so the Job-tab headline isn't a misleading "nothing to craft" while the
-            // station is actually just waiting on the stocker. An executor reporting a non-empty
-            // missingInputs is, by contract, one that wants a craft it can't currently make.
             boolean wantsSupply = false;
             for (BlockPos p : w.workBlocks()) {
                 WorkBlockRegistry.WorkBlockDef def = WorkBlockRegistry.of(sl.getBlockState(p));
@@ -194,7 +190,6 @@ public class CrafterWorkGoal extends WorkGoal {
         return def != null && def.toolRequired();
     }
 
-    /** True when the workshop still contains a work block of the given station family. */
     private static boolean hasStationOfType(ServerLevel sl, Workshop w, String typeId) {
         for (BlockPos p : w.workBlocks()) {
             WorkBlockRegistry.WorkBlockDef def = WorkBlockRegistry.of(sl.getBlockState(p));
@@ -226,7 +221,6 @@ public class CrafterWorkGoal extends WorkGoal {
         citizen.getLookControl().setLookAt(
             targetBlock.getX() + 0.5, targetBlock.getY() + 0.6, targetBlock.getZ() + 0.5);
 
-        // The station was broken / swapped mid-craft → abort (stop() returns any withdrawn inputs).
         if (started && WorkBlockRegistry.of(sl.getBlockState(workBlock)) == null) {
             abort(sl);
             return;
@@ -245,8 +239,6 @@ public class CrafterWorkGoal extends WorkGoal {
         }
         citizen.getNavigation().stop();
 
-        // Arrived: withdraw the inputs once (all-or-nothing; storage may have changed since the
-        // craft was planned — if anything is missing, return what we took and yield).
         if (!started) {
             for (ItemStack input : craft.inputs()) {
                 ItemStack got = WorkshopStorage.extract(sl, workshop, input.getItem(), input.getCount());
@@ -264,7 +256,6 @@ public class CrafterWorkGoal extends WorkGoal {
             return;
         }
 
-        // Working: arm-swing beats on the executor's cadence, then finish + deposit.
         ticksLeft--;
         int beats = Math.max(1, craft.beats());
         int interval = Math.max(1, effectiveTicks / beats);
@@ -283,16 +274,13 @@ public class CrafterWorkGoal extends WorkGoal {
         if (ticksLeft <= 0) {
             ItemStack out = executor.finish(sl, citizen, workBlock, craft);
             if (!out.isEmpty()) {
-                workshop.recordCraftOutput(out.getCount()); // Stats tab: workshop output throughput
+                workshop.recordCraftOutput(out.getCount());
             }
             returnReusableInputs(sl, craft);
             ItemStack leftover = WorkshopStorage.insert(sl, workshop, out);
             if (!leftover.isEmpty()) {
-                // Storage filled up mid-craft — never void the product.
                 Block.popResource(sl, dropPos(), leftover);
             }
-            // Count the craft against the order queue (any craft of a queued item fulfils it,
-            // whether the queue or the min-stock fallback picked the recipe).
             if (workshop.fulfillOrder(net.minecraft.core.registries.BuiltInRegistries.ITEM
                     .getKey(out.getItem()).toString(),
                     executor.fulfilledOrderUnits(sl, workBlock, craft, out))) {
@@ -301,14 +289,14 @@ public class CrafterWorkGoal extends WorkGoal {
             }
             grantCraftReward(sl);
             citizen.consumeStamina(2);
-            craft = null; // canKeepWorking → false; the think-tick poll starts the next craft
+            craft = null;
         }
     }
 
     private void finishCraft(ServerLevel sl) {
         ItemStack out = executor.finish(sl, citizen, workBlock, craft);
         if (!out.isEmpty()) {
-            workshop.recordCraftOutput(out.getCount()); // Stats tab: workshop output throughput
+            workshop.recordCraftOutput(out.getCount());
         }
         returnReusableInputs(sl, craft);
         ItemStack leftover = WorkshopStorage.insert(sl, workshop, out);
@@ -326,18 +314,10 @@ public class CrafterWorkGoal extends WorkGoal {
         craft = null;
     }
 
-    /**
-     * One completed craft = one XP into the claimed station's profession bucket, scaled by
-     * workplace appeal (carrot-not-stick: a beautiful workshop teaches up to a quarter faster,
-     * a dump a fifth slower — never zero, ugliness slows learning but can't stop it). The
-     * appeal also echoes into the worker's mood: LOVELY_WORKPLACE at ≥ ATTRACTIVE,
-     * DREARY_WORKPLACE at ≤ UNAPPEALING, refreshed at most once per active thought so a craft
-     * spree doesn't stack the modifier.
-     */
     private void grantCraftReward(ServerLevel sl) {
         ChunkBeauty beauty = workshop.cachedAppealBeauty();
-        int idx = beauty == null ? 0 : beauty.tierIndex(); // −4..+4; unscored counts as bland
-        float mult = Math.max(0.8F, 1.0F + idx * 0.0625F); // 0.8 .. 1.25
+        int idx = beauty == null ? 0 : beauty.tierIndex();
+        float mult = Math.max(0.8F, 1.0F + idx * 0.0625F);
         citizen.grantJobXp(workTypeId, mult, workTypeId);
         if (beauty == null || citizen.getThoughts() == null) return;
         ThoughtKind mood = idx >= ChunkBeauty.ATTRACTIVE.tierIndex() ? ThoughtKind.LOVELY_WORKPLACE
@@ -349,15 +329,11 @@ public class CrafterWorkGoal extends WorkGoal {
         }
     }
 
-    /** Base craft duration scaled by the worker's practice in this profession: a more skilled crafter
-     *  works each step faster — full time as a novice, down to ~40% quicker once a master. Reuses the
-     *  quality sim's XP→skill saturation so "skill" means one consistent thing across the crafter system. */
     private int skillScaledTicks(int baseTicks) {
         float xp = citizen.getJobXp(workTypeId);
-        float skill = xp / (xp + com.bannerbound.core.api.quality.QualityMath.NPC_XP_HALF); // 0 → ~1
-        float mult = 1.0F - 0.45F * skill; // novice ≈ 1.0, master ≈ 0.6
-        // Mood reacts on top of skill: a happy worker is sharper (+15% → fewer ticks), a miserable
-        // one sluggish (-30% → more ticks). Divide because the multiplier is a speed, not a duration.
+        float skill = xp / (xp + com.bannerbound.core.api.quality.QualityMath.NPC_XP_HALF);
+        float mult = 1.0F - 0.45F * skill;
+        // Divide, not multiply: happinessPerformanceMultiplier is a speed, so it shortens duration.
         mult /= citizen.happinessPerformanceMultiplier();
         return Math.max(1, Math.round(baseTicks * mult));
     }
@@ -400,7 +376,7 @@ public class CrafterWorkGoal extends WorkGoal {
         citizen.setWorking(false);
         citizen.setCurrentWorkStatus(CitizenWorkStatus.IDLE);
         if (citizen.level() instanceof ServerLevel sl && started && craft != null) {
-            abort(sl); // interrupted mid-craft (stamina, night, reassignment) — clean the station
+            abort(sl);
         }
         if (workBlock != null) {
             WorkBlockLocks.unlock(workBlock, citizen.getUUID());

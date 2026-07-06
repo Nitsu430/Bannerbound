@@ -21,22 +21,22 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 /**
- * Staggered background re-validation of homes — the residence twin of {@link WorkshopRevalidator}.
+ * Staggered background re-validation of homes - the residence twin of {@link WorkshopRevalidator}.
  * Homes have no anchor block entity to tick, so this sweep keeps their status / bed count / appeal
  * fresh without anyone opening the panel: break a wall and the home flips to "not enclosed" (and
  * evicts its residents) within the cycle, not whenever you next click it.
  *
  * <p>Lag-safe by design: at most ONE home validates every {@link #TICKS_PER_VALIDATION} ticks
- * (round-robin over all settlements), homes in unloaded chunks are skipped for free, and a
- * summaries broadcast goes out only when a validation actually changed something. With N loaded
- * homes a full sweep takes N×{@value #TICKS_PER_VALIDATION} ticks — matching the workshops' cadence.
+ * (round-robin over all settlements), homes in unloaded chunks are skipped for free (never
+ * force-loaded), and a summaries broadcast goes out only when a validation actually changed
+ * something. With N loaded homes a full sweep takes N x {@value #TICKS_PER_VALIDATION} ticks -
+ * matching the workshops' cadence.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
 public final class HomeRevalidator {
     private static final int TICKS_PER_VALIDATION = 2;
 
-    /** Pending (settlementId, homeId) pairs for the current sweep; rebuilt when drained. */
     private static final ArrayDeque<UUID[]> QUEUE = new ArrayDeque<>();
     private static int tickCounter;
 
@@ -61,7 +61,7 @@ public final class HomeRevalidator {
         if (settlement == null) return;
         Home home = settlement.getHomeById(next[1]);
         if (home == null) return;
-        if (!anyChunkLoaded(sl, home)) return; // unloaded → free skip, swept next cycle
+        if (!anyChunkLoaded(sl, home)) return; // never force-load: skip unloaded, swept next cycle
 
         Home.Status oldStatus = home.status();
         int oldBeds = home.bedCount();
@@ -74,8 +74,6 @@ public final class HomeRevalidator {
         }
     }
 
-    /** True when any of the home's selection boxes sits in a loaded chunk (cheap guard so
-     *  background validation never forces chunk loads). */
     private static boolean anyChunkLoaded(ServerLevel sl, Home home) {
         for (BlockSelection sel : BlockSelectionRegistry.get(sl).findByHome(home.id())) {
             ChunkPos cp = new ChunkPos(sel.a());

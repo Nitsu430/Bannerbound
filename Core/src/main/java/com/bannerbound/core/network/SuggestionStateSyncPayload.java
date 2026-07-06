@@ -18,16 +18,15 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C snapshot of every active research-suggestion marker for the player's settlement.
+ * S->C snapshot of every active research-suggestion marker for the player's settlement.
  * Sent on every toggle (a non-chief click adds or retracts) and on every enact (chief
  * actually researches the node, clearing the marker).
  *
- * <p>Two parallel maps for the two trees. Each entry is "research id → list of suggester
- * UUIDs in click order"; the client looks up the player's skin texture via the existing
- * tab-list {@code PlayerInfo} mapping and renders 8×8 head icons next to a [+N] badge.
- *
- * <p>UUIDs (not names) are sent because the player skin lookup is keyed by UUID on the
- * client. Names are derived from the same {@code PlayerInfo} cache on hover (later polish).
+ * <p>Two parallel entry lists for the two trees (science, culture). Each entry is
+ * "research id -> list of suggester UUIDs in click order"; the client looks up the player's
+ * skin texture via the existing tab-list {@code PlayerInfo} mapping and renders 8x8 head icons
+ * next to a [+N] badge. UUIDs (not names) are sent because the client skin lookup is keyed by
+ * UUID; names come from the same {@code PlayerInfo} cache on hover.
  */
 @ApiStatus.Internal
 public record SuggestionStateSyncPayload(
@@ -69,7 +68,6 @@ public record SuggestionStateSyncPayload(
         return out;
     }
 
-    /** Flatten a settlement's suggestion map into the wire-friendly entry list. */
     public static List<Entry> flatten(Map<String, LinkedHashSet<UUID>> source) {
         List<Entry> out = new ArrayList<>(source.size());
         for (Map.Entry<String, LinkedHashSet<UUID>> e : source.entrySet()) {

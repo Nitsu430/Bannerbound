@@ -12,18 +12,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: a carpenter's-table interaction.
- * <ul>
- *   <li>{@link #COMPLETE} / {@link #CANCEL} — end of the saw minigame (session-based; {@code index}
- *       unused).</li>
- *   <li>{@link #REMOVE_QUEUE} — right-clicked the in-world queue item at {@code index}; the server
- *       removes that queued output.</li>
- * </ul>
- * (Add-to-queue and browse-cycle reuse the shared ghost-preview path — {@code GhostActionPayload}.)
- *
- * @param pos    the table
- * @param action one of {@link #COMPLETE} / {@link #CANCEL} / {@link #REMOVE_QUEUE}
- * @param index  the queue slot for {@link #REMOVE_QUEUE} (else ignored)
+ * Client -> server: a carpenter's-table interaction at {@code pos}. {@link #COMPLETE} /
+ * {@link #CANCEL} end the saw minigame (session-based; {@code index} unused, -1);
+ * {@link #REMOVE_QUEUE} means the player right-clicked the in-world queue item at {@code index}
+ * and the server removes that queued output. Add-to-queue and browse-cycle reuse the shared
+ * ghost-preview path ({@code GhostActionPayload}), not this payload.
  */
 @ApiStatus.Internal
 public record CarpentryActionPayload(BlockPos pos, int action, int index) implements CustomPacketPayload {

@@ -18,7 +18,18 @@ import com.bannerbound.core.api.world.BlockSelectionRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 
-/** Structure rules for Antiquity tannery workshops: a tannery needs a clay tank inside to cure. */
+/**
+ * Structure rules + lookup helpers for the Antiquity tannery, shared by workshop validation and
+ * {@link TanneryExecutor}. A valid tannery must contain a clay tank; the tank "controller" is the
+ * multiblock's bottom block (PART == 0) and is the only part counted or resolved to a block
+ * entity. countTankBases exists because each tank base needs its own fired clay bucket kept in
+ * workshop storage - the bucket is required for water fetching but never consumed. leatherInProgress
+ * counts racks in DRYING or DRY phase: committed leather units the demand gate must subtract (see
+ * Workshops.wantsAnother) so a single order does not lay a second hide to dry while one is already
+ * drying. findWaterSource scans a WATER_SCOOP_RADIUS box around the tank pillar for the nearest
+ * open-water source block, so water only has to be near the tank rather than glued to it; the scan
+ * is cheap and only runs when a tank charge is actually due.
+ */
 @ApiStatus.Internal
 public final class TanneryWorkshopRules {
     private TanneryWorkshopRules() {
@@ -30,7 +41,6 @@ public final class TanneryWorkshopRules {
         return findTankController(sl, marked) == null ? Workshop.Status.MISSING_CURING_LIQUID : null;
     }
 
-    /** A clay tank controller (the bottom, PART 0) inside the marked set, or {@code null}. */
     @Nullable
     public static BlockPos findTankController(ServerLevel sl, Set<BlockPos> marked) {
         for (BlockPos pos : marked) {
@@ -42,9 +52,6 @@ public final class TanneryWorkshopRules {
         return null;
     }
 
-    /** How many clay tank bases (controllers, PART 0) sit inside the workshop. Each one needs its own
-     *  fired clay bucket kept in storage — the tanner uses it to scoop water in to charge the tank
-     *  (the bucket is never consumed, just required to be present). One tank → one base, normally. */
     public static int countTankBases(ServerLevel sl, Workshop workshop) {
         List<BlockSelection> boxes = BlockSelectionRegistry.get(sl).findByWorkshop(workshop.id());
         if (boxes.isEmpty()) return 0;
@@ -58,7 +65,6 @@ public final class TanneryWorkshopRules {
         return count;
     }
 
-    /** The clay tank controller for a workshop, resolved from its marked boxes, or {@code null}. */
     @Nullable
     public static ClayTankBlockEntity findTank(ServerLevel sl, Workshop workshop) {
         List<BlockSelection> boxes = BlockSelectionRegistry.get(sl).findByWorkshop(workshop.id());
@@ -67,10 +73,6 @@ public final class TanneryWorkshopRules {
         return controller != null && sl.getBlockEntity(controller) instanceof ClayTankBlockEntity be ? be : null;
     }
 
-    /** How many leather units are already in flight on the workshop's racks — a hide DRYING, or a
-     *  finished-but-uncollected leather (DRY). These are committed units the demand check must
-     *  subtract (see {@code Workshops.wantsAnother}) so a single order doesn't lay a second hide to
-     *  dry while one is already drying. */
     public static int leatherInProgress(ServerLevel sl, Workshop workshop) {
         int count = 0;
         for (BlockPos p : workshop.workBlocks()) {
@@ -85,19 +87,13 @@ public final class TanneryWorkshopRules {
         return count;
     }
 
-    /** True when the workshop has a clay tank holding curing liquid (a CURE step can run). */
     public static boolean hasCuring(ServerLevel sl, Workshop workshop) {
         ClayTankBlockEntity tank = findTank(sl, workshop);
         return tank != null && tank.getLiquid() == LiquidType.CURING && tank.getBuckets() > 0;
     }
 
-    /** Horizontal reach (blocks) the tanner will walk to fetch water from to charge a tank. */
     private static final int WATER_SCOOP_RADIUS = 10;
 
-    /** The nearest open-water source block within reach of the workshop's tank, or {@code null} when
-     *  none is close enough. The tanner walks here with the fired clay bucket, fills it, and returns
-     *  to charge the tank — so water no longer has to sit glued to the tank, only somewhere nearby.
-     *  Scanned in a small box around the tank pillar (cheap, and only when a charge is actually due). */
     @Nullable
     public static BlockPos findWaterSource(ServerLevel sl, ClayTankBlockEntity tank) {
         BlockPos base = tank.getBlockPos();

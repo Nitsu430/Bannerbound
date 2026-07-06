@@ -31,10 +31,12 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Block entity renderer for the Bloomery — draws the full 1×1×2 model from the lower segment,
+ * Block entity renderer for the Bloomery - draws the full 1x1x2 model from the lower segment,
  * rotated to the block's facing, plays the door open/close animation, and renders whatever item
- * is held inside (one copy for a single item, two slightly-clipping copies for a stack), with a
- * short slide-in when an item is freshly inserted.
+ * is held inside (one copy for a single item, two slightly-clipping copies for a stack; block
+ * items at half the size of flat items, which are laid down). While lit, the "Inside" bone is
+ * drawn full-bright with an orange tint. A freshly inserted item slides in through the door with
+ * an ease-out curve (quick start, gentle settle), Create-style.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -57,7 +59,7 @@ public class BloomeryRenderer implements BlockEntityRenderer<BloomeryBlockEntity
         Direction facing = be.getBlockState().getValue(BloomeryBlock.FACING);
 
         pose.pushPose();
-        // Place on the block, rotate to the facing, then apply the standard entity-model flip.
+        // Entity-model convention: translate to (0.5, 1.5, 0.5) then scale(1, -1, -1) flips into block space.
         pose.translate(0.5, 1.5, 0.5);
         pose.mulPose(Axis.YP.rotationDegrees(-facing.toYRot()));
         pose.scale(1.0F, -1.0F, -1.0F);
@@ -73,7 +75,6 @@ public class BloomeryRenderer implements BlockEntityRenderer<BloomeryBlockEntity
 
         VertexConsumer vc = buffers.getBuffer(RenderType.entityCutoutNoCull(TEXTURE));
         model.renderBody(pose, vc, light, overlay);
-        // While lit, the furnace interior glows orange at full brightness.
         boolean lit = be.isLit();
         model.renderInside(pose, vc,
             lit ? LightTexture.FULL_BRIGHT : light, overlay,
@@ -86,10 +87,8 @@ public class BloomeryRenderer implements BlockEntityRenderer<BloomeryBlockEntity
         }
     }
 
-    /** Draws the held stack inside the bloomery — one copy, or two clipping copies for a stack. */
     private void renderHeldItem(BloomeryBlockEntity be, ItemStack stack, Direction facing,
                                 float partialTick, PoseStack pose, MultiBufferSource buffers, int light) {
-        // Slide-in through the door — ease-out (quick start, gentle settle), like Create.
         float slide = 0.0F;
         if (be.getInsertAnimTicks() > 0) {
             float f = Math.max(0.0F, (be.getInsertAnimTicks() - partialTick) / BloomeryBlockEntity.SLIDE_TICKS);
@@ -97,22 +96,22 @@ public class BloomeryRenderer implements BlockEntityRenderer<BloomeryBlockEntity
         }
 
         boolean blockItem = stack.getItem() instanceof BlockItem;
-        float scale = blockItem ? 0.25F : 0.5F; // block items render at half size
+        float scale = blockItem ? 0.25F : 0.5F;
 
         pose.pushPose();
-        pose.translate(0.5, 0.32, 0.5);                          // rest spot inside the bloomery
-        pose.mulPose(Axis.YP.rotationDegrees(-facing.toYRot())); // orient with the bloomery
-        pose.translate(0.0, 0.0, slide);                         // slide in along the door axis
+        pose.translate(0.5, 0.32, 0.5);
+        pose.mulPose(Axis.YP.rotationDegrees(-facing.toYRot()));
+        pose.translate(0.0, 0.0, slide);
         pose.scale(scale, scale, scale);
 
         int copies = stack.getCount() > 1 ? 2 : 1;
         for (int i = 0; i < copies; i++) {
             pose.pushPose();
             if (i == 1) {
-                pose.translate(0.22, 0.14, 0.22); // second copy clips slightly into the first
+                pose.translate(0.22, 0.14, 0.22);
             }
             if (!blockItem) {
-                pose.mulPose(Axis.XP.rotationDegrees(90.0F)); // lay flat items down
+                pose.mulPose(Axis.XP.rotationDegrees(90.0F));
             }
             itemRenderer.renderStatic(stack, ItemDisplayContext.NONE, light, OverlayTexture.NO_OVERLAY,
                 pose, buffers, be.getLevel(), 0);
@@ -123,7 +122,7 @@ public class BloomeryRenderer implements BlockEntityRenderer<BloomeryBlockEntity
 
     @Override
     public AABB getRenderBoundingBox(BloomeryBlockEntity be) {
-        // The model is two blocks tall — grow the cull box up so the top isn't clipped.
+        // Model is two blocks tall: shrink this cull box and the top segment gets frustum-clipped.
         BlockPos pos = be.getBlockPos();
         return new AABB(pos).expandTowards(0.0, 3.0, 0.0);
     }

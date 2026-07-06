@@ -21,28 +21,33 @@ import net.minecraft.world.phys.Vec3;
  *
  * <p>Two modes:
  * <ul>
- *   <li><b>Brute</b> (e.g. spearmen): FLAGLESS — runs alongside {@code CitizenCombatGoal} so the
+ *   <li><b>Brute</b> (e.g. spearmen): FLAGLESS -- runs alongside {@code CitizenCombatGoal} so the
  *       fighter charges while hurling spears, then melees up close.</li>
- *   <li><b>Kiter</b> (bowmen, behaviour {@code skirmisher}): claims MOVE+LOOK — it holds the bow,
+ *   <li><b>Kiter</b> (bowmen, behaviour {@code skirmisher}): claims MOVE+LOOK -- it holds the bow,
  *       backs away when the enemy closes, fires from range, and advances when out of range. Its
  *       {@code CitizenCombatGoal} only engages when truly cornered (see {@link CitizenEntity#prefersRanged}),
  *       and switches the held item to the melee weapon then.</li>
  * </ul>
+ *
+ * <p>Every shot is TELEGRAPHED: the mob plants, raises the weapon (UseAnim) and holds a visible
+ * wind-up ({@code windupLength}, ~0.7s bow / ~0.9s spear) before release so the player gets a tell;
+ * interrupting the goal drops the aim pose. Ranges are stored squared (MIN/MAX for brutes, KITE_NEAR/
+ * KITE_ACTIVE for kiters).
  */
 public class BarbarianRangedGoal extends Goal {
-    private static final double MIN_RANGE_SQ = 4.0 * 4.0;    // brute: closer than this → just melee
-    private static final double MAX_RANGE_SQ = 20.0 * 20.0;  // beyond this → can't reach
-    private static final double KITE_NEAR_SQ = 8.0 * 8.0;    // kiter: back away if closer than this
-    private static final double KITE_ACTIVE_SQ = 28.0 * 28.0; // kiter stays engaged out to here
-    private static final int INTERVAL = 35;                  // ticks between shots
+    private static final double MIN_RANGE_SQ = 4.0 * 4.0;
+    private static final double MAX_RANGE_SQ = 20.0 * 20.0;
+    private static final double KITE_NEAR_SQ = 8.0 * 8.0;
+    private static final double KITE_ACTIVE_SQ = 28.0 * 28.0;
+    private static final int INTERVAL = 35;
 
     private final BarbarianEntity mob;
     private final ResourceLocation projectileId;
     private final double damage;
     private final boolean kite;
-    private final int windupLength;   // telegraph: ticks of visible aim/draw before release
+    private final int windupLength;
     private int cooldown;
-    private int windup;               // >0 while winding up a throw/draw
+    private int windup;
     private LivingEntity windupTarget;
 
     public BarbarianRangedGoal(BarbarianEntity mob, ResourceLocation projectileId, double damage,
@@ -51,28 +56,24 @@ public class BarbarianRangedGoal extends Goal {
         this.projectileId = projectileId;
         this.damage = damage;
         this.kite = kite;
-        // Telegraph the attack like the hunter: a bow draws ~0.7s, a spear winds up ~0.9s. Without this
-        // there's no tell before a projectile leaves, which the player called out.
         this.windupLength = kite ? 14 : 18;
         if (kite) {
-            setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK)); // kiters drive their own positioning
+            setFlags(EnumSet.of(Flag.MOVE, Flag.LOOK));
         }
-        // Brutes stay flagless so the melee goal moves them while this still fires.
     }
 
     @Override
     public void stop() {
-        if (windup > 0) mob.stopUsingItem(); // drop the aim pose if interrupted
+        if (windup > 0) mob.stopUsingItem();
         windup = 0;
         windupTarget = null;
     }
 
-    /** Enter the visible aim/draw telegraph: raise the weapon (UseAnim) and hold for windupLength. */
     private void beginWindup(LivingEntity target) {
         windup = windupLength;
         windupTarget = target;
-        mob.getNavigation().stop();              // plant feet to aim
-        mob.startUsingItem(InteractionHand.MAIN_HAND); // arm raise / bow draw pose
+        mob.getNavigation().stop();
+        mob.startUsingItem(InteractionHand.MAIN_HAND);
     }
 
     @Override
@@ -95,7 +96,6 @@ public class BarbarianRangedGoal extends Goal {
         if (t == null) return;
         mob.getLookControl().setLookAt(t, 30.0F, 30.0F);
 
-        // Mid-telegraph: keep aim locked, hold the draw, release when the wind-up elapses.
         if (windup > 0) {
             if (kite) mob.getNavigation().stop();
             if (--windup <= 0) {
@@ -111,23 +111,23 @@ public class BarbarianRangedGoal extends Goal {
         }
 
         double d = mob.distanceToSqr(t);
-        double speed = mob.combatSpeed(); // slowed + per-member varied, same as the melee chase
+        double speed = mob.combatSpeed();
         if (kite) {
             holdRangedItem();
             if (d < KITE_NEAR_SQ) {
-                backAwayFrom(t, speed);                // too close — retreat to regain distance
+                backAwayFrom(t, speed);
             } else if (d <= MAX_RANGE_SQ) {
-                mob.getNavigation().stop();            // in the sweet spot — stand and loose
+                mob.getNavigation().stop();
                 if (cooldown-- <= 0 && mob.getSensing().hasLineOfSight(t)) {
-                    beginWindup(t);                    // draw the bow (telegraph) before firing
+                    beginWindup(t);
                 }
             } else {
-                mob.getNavigation().moveTo(t, 0.9 * speed); // too far — close to firing range
+                mob.getNavigation().moveTo(t, 0.9 * speed);
             }
         } else {
             if (cooldown-- <= 0 && d >= MIN_RANGE_SQ && d <= MAX_RANGE_SQ
                     && mob.getSensing().hasLineOfSight(t)) {
-                beginWindup(t);                        // wind up the spear throw (telegraph)
+                beginWindup(t);
             }
         }
     }
@@ -151,10 +151,10 @@ public class BarbarianRangedGoal extends Goal {
         AbstractArrow arrow = BarbarianProjectiles.create(sl, mob, projectileId, damage);
         if (arrow == null) return;
         double dx = target.getX() - arrow.getX();
-        double dy = target.getY(0.5) - arrow.getY(); // aim at the target's body centre
+        double dy = target.getY(0.5) - arrow.getY();
         double dz = target.getZ() - arrow.getZ();
         double horiz = Math.sqrt(dx * dx + dz * dz);
-        arrow.shoot(dx, dy + horiz * 0.10, dz, 1.5F, 8.0F); // slight arc + a little inaccuracy
+        arrow.shoot(dx, dy + horiz * 0.10, dz, 1.5F, 8.0F);
         mob.swing(InteractionHand.MAIN_HAND);
         sl.addFreshEntity(arrow);
     }

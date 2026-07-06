@@ -10,37 +10,33 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 
 /**
- * A registered community-storage building — a Stockpile Block plus the container blocks enclosed
- * with it inside a fence/wall + roof. Parallel to {@link Home}: same per-settlement
- * {@code Map<Long, Stockpile>} storage shape, same per-pos validity flag, same NBT round-trip.
- *
- * <p><b>Auto-scanned, not rod-marked.</b> Unlike a home (whose region is drawn with the Selection
- * Orders tool), a stockpile's enclosure is flooded outward from the block to the surrounding fence
- * ring by {@code StockpileEnclosure.scan(...)}. Validation writes the result here: {@link #valid},
- * the enclosed {@link #containers} (capped at {@link #MAX_CONTAINERS}), and a {@link #status} the
- * right-click terminal surfaces. The Selection Orders override (refine an imperfect auto-scan) is
- * layered on later, the same way the House Block has both Detect and rod marking.
- *
- * <p>The container count is the cap, mirroring a home's bed count. The enclosed inventories are the
- * settlement's town storage — see {@code StockpileService}, which resolves these positions to live
- * {@code IItemHandler}s on demand.
+ * A registered community-storage building: a Stockpile Block plus the container blocks enclosed
+ * with it inside a fence/wall + roof. Parallel to Home: same per-settlement Map<Long, Stockpile>
+ * storage shape, same per-pos validity flag, same NBT round-trip. Auto-scanned, not rod-marked --
+ * the enclosure is flooded outward from the block to the surrounding fence ring by
+ * StockpileEnclosure.scan(...), which writes back valid, the enclosed containers (capped at
+ * MAX_CONTAINERS, mirroring a home's bed cap; StockpileEnclosure.MAX_STORAGE reads this constant)
+ * and a Status the right-click terminal surfaces (UNMARKED / NOT_ENCLOSED / NO_GATE / NO_ROOF /
+ * TOO_LARGE / NO_CONTAINERS / VALID / TOO_MANY, where TOO_MANY still serves only the first
+ * MAX_CONTAINERS). The enclosed inventories ARE the settlement's town storage: StockpileService
+ * resolves these positions to live IItemHandlers on demand. Per-stockpile worker toggles
+ * (allowWorkerDeposit / allowWorkerTake, default open) govern only autonomous workers -- the player
+ * can always hand-move via the screen; showForTrading (default CLOSED, opt-in) exposes contents to
+ * settlement-to-settlement trade. Status is persisted by ordinal in NBT (save/load), so append new
+ * values only and never reorder.
  */
 public final class Stockpile {
-    /** Max container blocks aggregated into one stockpile. Single source of truth (mirrors a
-     *  home's bed cap); {@code StockpileEnclosure.MAX_STORAGE} reads this. */
     public static final int MAX_CONTAINERS = 8;
 
-    /** Lifecycle/validity state, surfaced in the terminal header. Appended-only so saved ordinals
-     *  never shift. */
     public enum Status {
-        UNMARKED,        // placed in unclaimed territory, or no enclosure scanned yet
-        NOT_ENCLOSED,    // a solid block breaks the fence ring
-        NO_GATE,         // no fence gate in the perimeter (citizens couldn't walk in)
-        NO_ROOF,         // an interior tile is open to the sky
-        TOO_LARGE,       // enclosure escaped / exceeds the span cap
-        NO_CONTAINERS,   // valid shell, but no storage blocks inside
+        UNMARKED,
+        NOT_ENCLOSED,
+        NO_GATE,
+        NO_ROOF,
+        TOO_LARGE,
+        NO_CONTAINERS,
         VALID,
-        TOO_MANY;        // more than MAX_CONTAINERS containers inside (only the first 8 are served)
+        TOO_MANY;
 
         public static Status fromOrdinalOrDefault(int ord) {
             Status[] v = values();
@@ -52,19 +48,9 @@ public final class Stockpile {
     private final BlockPos pos;
     private boolean valid;
     private Status status;
-    /** The enclosed container block positions, capped at {@link #MAX_CONTAINERS}. Positions are the
-     *  persisted source of truth; live inventories are resolved on demand by {@code StockpileService}
-     *  and the worker drop-off bridge. */
     private final List<BlockPos> containers;
-    /** Per-stockpile worker access toggles (default open). The settlement storage pool reads these:
-     *  a worker may DEPOSIT its yield into this stockpile only when {@link #allowWorkerDeposit}, and
-     *  TAKE inputs/seeds/tools from it only when {@link #allowWorkerTake}. Set from the rack terminal;
-     *  governs autonomous workers only (the player can always hand-move via the screen). */
     private boolean allowWorkerDeposit = true;
     private boolean allowWorkerTake = true;
-    /** Whether this stockpile's contents are offered in settlement-to-settlement trade (the pool a
-     *  trade partner sees and deals draw from / deliver into). Default CLOSED — trading is opt-in
-     *  per stockpile so the town's whole store is never exposed by accident. */
     private boolean showForTrading = false;
 
     public Stockpile(UUID id, BlockPos pos) {
@@ -91,7 +77,6 @@ public final class Stockpile {
     public void setAllowWorkerTake(boolean v) { this.allowWorkerTake = v; }
     public void setShowForTrading(boolean v) { this.showForTrading = v; }
 
-    /** Replaces the enclosed-container list with {@code next} (already capped by the scanner). */
     public void setContainers(List<BlockPos> next) {
         containers.clear();
         for (BlockPos p : next) containers.add(p.immutable());

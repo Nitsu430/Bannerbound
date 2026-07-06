@@ -14,11 +14,12 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: the Stockpile terminal's state for the open menu {@code containerId} — the
+ * Server -> client: the Stockpile terminal's state for the open menu {@code containerId} - the
  * enclosure {@code statusOrdinal} ({@code Stockpile.Status}) and {@code containerCount} for the
  * header, plus the summed {@code entries} (totals can exceed a stack, so they can't ride on vanilla
  * slot sync). Sent each tick the menu is open; the client {@code StockpileScreen} filters/scrolls
- * the list and shows the status header locally.
+ * the list and shows the status header locally. The codec is hand-rolled because
+ * StreamCodec.composite caps at 6 fields and this payload carries 8.
  */
 @ApiStatus.Internal
 public record StockpileContentsPayload(int containerId, int statusOrdinal, int containerCount,
@@ -29,8 +30,6 @@ public record StockpileContentsPayload(int containerId, int statusOrdinal, int c
         new CustomPacketPayload.Type<>(
             ResourceLocation.fromNamespaceAndPath(BannerboundCore.MODID, "stockpile_contents"));
 
-    // Hand-rolled: StreamCodec.composite caps at 6 fields and this carries 8 (header + two worker
-    // toggles + the summed list).
     private static final StreamCodec<RegistryFriendlyByteBuf, List<StockEntry>> ENTRIES_CODEC =
         StockEntry.STREAM_CODEC.apply(ByteBufCodecs.list());
 

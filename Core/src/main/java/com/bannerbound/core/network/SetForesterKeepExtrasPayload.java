@@ -10,8 +10,8 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: toggle whether a forester citizen also stores the canopy's saplings / apples / sticks
- *  ({@code keep == true}) or keeps only logs ({@code keep == false}). Set from the Job tab. */
+/** C->S: toggle whether a forester citizen also stores the canopy's saplings / apples / sticks
+ *  (keep == true) or keeps only logs (keep == false). Set from the Job tab. */
 @ApiStatus.Internal
 public record SetForesterKeepExtrasPayload(int entityId, boolean keep) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<SetForesterKeepExtrasPayload> TYPE =

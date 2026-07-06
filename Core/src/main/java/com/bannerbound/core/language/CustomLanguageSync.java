@@ -11,7 +11,15 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
 
-/** Server-side sync and refresh hooks for the custom language gamerule. */
+/**
+ * Server-side sync and refresh hooks for the per-settlement custom language.
+ *
+ * <p>The feature is gated by the USE_CUSTOM_LANGUAGE gamerule. sendTo/broadcast push a
+ * LanguageStatePayload (active flag, the player's settlement language seed, and the datapack
+ * concept overrides from LanguageConceptOverrideLoader.encodeForSync) so clients regenerate
+ * item/name words locally. onRuleChanged re-renders already-loaded citizen display names and then
+ * rebroadcasts; call it whenever the gamerule flips.
+ */
 public final class CustomLanguageSync {
     private CustomLanguageSync() {
     }

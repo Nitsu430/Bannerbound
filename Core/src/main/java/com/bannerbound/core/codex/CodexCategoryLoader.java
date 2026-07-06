@@ -17,7 +17,11 @@ import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.GsonHelper;
 import net.minecraft.util.profiling.ProfilerFiller;
 
-/** Loads Chronicle categories from data/<namespace>/codex_categories. */
+/**
+ * Reload listener that loads Chronicle categories from data/<namespace>/codex_categories JSON into
+ * a static volatile map (rebuilt whole on every datapack reload; parse failures are logged and
+ * skipped). Static accessors expose the immutable snapshot; sorted() orders by order then title.
+ */
 public final class CodexCategoryLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "codex_categories";
     private static final Gson GSON = new Gson();

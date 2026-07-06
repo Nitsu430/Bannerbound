@@ -5,7 +5,7 @@ import java.util.Map;
 
 /**
  * The summed passive contribution of a faith's whole pantheon to one settlement
- * (FAITH_PLAN Part 3). Transient + recomputed — never persisted; the live pantheon is
+ * (FAITH_PLAN Part 3). Transient + recomputed - never persisted; the live pantheon is
  * authoritative. The economy reads the per-stat getters; recompute replaces it wholesale.
  */
 public final class FaithEffectBundle {
@@ -27,7 +27,6 @@ public final class FaithEffectBundle {
         return values.isEmpty();
     }
 
-    // Convenience getters for the read-sites.
     public double food() {
         return get(FaithEffectType.FOOD_PER_SECOND);
     }

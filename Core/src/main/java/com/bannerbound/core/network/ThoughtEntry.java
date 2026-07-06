@@ -9,18 +9,16 @@ import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 
 /**
- * One row in the Thoughts tab. Built server-side from a per-citizen {@code Thought}: the
- * {@code label} component already has any social-partner name substituted in, the
- * {@code modifier} is the signed happiness delta.
+ * One row in the Thoughts tab, built server-side from a per-citizen Thought: the label
+ * component already has any social-partner name substituted in, and modifier is the signed
+ * happiness delta. Sent inside {@link OpenCitizenScreenPayload}; never persisted.
  *
- * <p><b>Live time-left.</b> {@code expireGameTime} is the absolute world tick at which the
- * thought will expire (or {@code -1} for infinite thoughts). The client subtracts it from
- * {@code level.getGameTime()} on every render frame to compute the live remaining ticks — so
- * the time bar shrinks in real time while the screen is open without re-fetching the entity.
- * {@code totalDurationTicks} is the original full duration the thought was rolled with, used
- * as the bar's denominator. Both fields are {@code -1} for infinite thoughts (no bar drawn).
- *
- * <p>Sent inside {@link OpenCitizenScreenPayload}; never persisted.
+ * <p>Live time-left: expireGameTime is the absolute world tick at which the thought expires
+ * (-1 for infinite thoughts). The client subtracts it from level.getGameTime() every render
+ * frame to compute remaining ticks, so the time bar shrinks in real time while the screen is
+ * open without re-fetching the entity. totalDurationTicks is the original full duration, used
+ * as the bar's denominator; both fields are -1 for infinite thoughts (no bar drawn).
+ * categoryEnum() decodes the synced category ordinal, clamping out-of-range values to SOCIETY.
  */
 @ApiStatus.Internal
 public record ThoughtEntry(Component label, int modifier, long expireGameTime, int totalDurationTicks,
@@ -42,7 +40,6 @@ public record ThoughtEntry(Component label, int modifier, long expireGameTime, i
         )
     );
 
-    /** The happiness pillar this thought feeds, decoded from the synced ordinal. */
     public com.bannerbound.core.social.HappinessCategory categoryEnum() {
         com.bannerbound.core.social.HappinessCategory[] v = com.bannerbound.core.social.HappinessCategory.values();
         return v[category >= 0 && category < v.length ? category : com.bannerbound.core.social.HappinessCategory.SOCIETY.ordinal()];

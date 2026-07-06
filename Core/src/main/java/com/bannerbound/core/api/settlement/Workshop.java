@@ -15,48 +15,51 @@ import net.minecraft.nbt.NbtUtils;
 import net.minecraft.nbt.Tag;
 
 /**
- * A Workshop — a player-selected, enclosed crafting building worked by crafter citizens (see
- * {@code CRAFTER_PLAN.md}). The box geometry lives in {@code BlockSelectionRegistry} (kind
- * WORKSHOP, keyed by {@link #id()}), exactly like homes; this record holds everything else:
- * identity, custom name, derived type, validation status + caches, assigned workers and the
- * min-stock map. Stored in {@code Settlement.workshops}, persisted with the settlement NBT.
+ * A Workshop: a player-selected, enclosed crafting building worked by crafter citizens (see
+ * CRAFTER_PLAN.md). The box geometry lives in BlockSelectionRegistry (kind WORKSHOP, keyed by id()),
+ * exactly like homes; this record holds everything else: identity, custom name (empty = show the
+ * derived type; a rename sticks even when the type changes), the type derived from the contained
+ * work blocks on every validation, validation Status + cached work/storage block lists, assigned
+ * workers, and the min-stock map. Stored in Settlement.workshops and persisted with the settlement
+ * NBT. There is NO anchor block -- the Workshop Orders rod binds by id and validation runs on commit
+ * / menu open / when a crafter looks for work, never from a block entity.
  *
- * <p>Workshops have NO anchor block — the Workshop Orders rod binds by id and validation runs on
- * commit / menu open / when a crafter looks for work (not from a block entity).
+ * <p>Status is the validation outcome surfaced verbatim in the menu. Workshops deliberately do NOT
+ * require enclosure (open-air smithy-porch builds are legitimate); they require REACHABILITY --
+ * citizens must be able to path to a work block AND to storage (doors/gates/non-colliding blocks
+ * pass; floating or walled-off fails). NOT_ENCLOSED is legacy, kept only so saved ordinals stay
+ * stable; Status is persisted by ordinal, so append new values and never reorder.
+ *
+ * <p>Three order layers: the player's orders queue OUTRANKS the min-stock governor (a queued item
+ * crafts even when not configured / not in deficit, and a queued item whose ingredients are missing
+ * is skipped rather than blocking the queue). autoOrders are chain-derived (a fletchery needing
+ * plant string auto-orders it from general crafts), kept separate so the chain can revoke its own
+ * orders without ever touching the player's, and crafted AFTER player orders; autoOrderSources
+ * records the requesting workshop. fulfillOrder matches ANY craft of the item -- a min-stock
+ * fallback craft of the same output fulfils the order just as well.
+ *
+ * <p>positions locks each worker to one station-family type id so experience accumulates in a single
+ * profession bucket instead of smearing across whichever station is free. itemsProduced is a
+ * persisted lifetime stat; outputRate is a transient EMA (factor OUTPUT_RATE_ALPHA, ~10s at 1Hz,
+ * matching Settlement) rebuilt by tickStats. Appeal caches (workplace appeal -> happier, faster
+ * learners) and lastValidatedTick refresh on the blocks-walk validation cadence, which is throttled
+ * because the reachability BFS is too heavy to run every crafter think-tick.
  */
 public final class Workshop {
 
-    /** Validation outcome, surfaced verbatim in the workshop menu (specific, never silent).
-     *  Workshops deliberately do NOT require enclosure (unlike houses) — open-air smithy-porch
-     *  builds are legitimate workplaces. What they require instead is REACHABILITY: citizens must
-     *  be able to walk to a work block and to storage (doors/gates/non-colliding blocks pass;
-     *  floating or walled-off fails). Persisted by ordinal — append new values, never reorder. */
     public enum Status {
-        /** ≥1 reachable work block, ≥1 reachable storage block. */
         VALID,
-        /** No boxes committed yet (freshly created, shouldn't normally persist). */
         UNMARKED,
-        /** Marked solids are not one connected shell. */
         DISCONNECTED,
-        /** Legacy (enclosure requirement dropped) — kept so saved ordinals stay stable. */
         NOT_ENCLOSED,
-        /** No registered work block inside the union. */
         NO_WORK_BLOCK,
-        /** No {@code #bannerbound:workshop_storage} block inside the union. */
         NO_STORAGE,
-        /** Work block(s) exist but citizens can't path to any of them. */
         WORK_BLOCK_UNREACHABLE,
-        /** Storage exists but citizens can't path to any of it. */
         STORAGE_UNREACHABLE,
-        /** A work block's standing spots exist but lack headroom — the roof is too low. */
         NO_HEADROOM,
-        /** A type-specific rule needs a furnace, kiln, or other heat source inside. */
         MISSING_HEAT_SOURCE,
-        /** A type-specific rule needs a crafting surface inside. */
         MISSING_CRAFTING_SURFACE,
-        /** A type-specific rule needs a required tool stored inside (e.g. a saw for carpentry). */
         MISSING_TOOL,
-        /** A type-specific rule needs a clay tank inside to cure (the tannery). */
         MISSING_CURING_LIQUID;
 
         public static Status fromOrdinalOrDefault(int ord) {
@@ -66,54 +69,24 @@ public final class Workshop {
     }
 
     private final UUID id;
-    /** Player-chosen name; empty = display the derived type instead. A rename sticks even when
-     *  the derived type changes. */
     private String customName = "";
-    /** Derived from the contained work blocks on every validation (a registered typeId,
-     *  {@link WorkBlockRegistry#TYPE_MIXED} or {@link WorkBlockRegistry#TYPE_NONE}). */
     private String derivedTypeId = WorkBlockRegistry.TYPE_NONE;
     private Status status = Status.UNMARKED;
-    /** Cached work-block positions from the last validation (capacity = size). */
     private final List<BlockPos> workBlocks = new ArrayList<>();
-    /** Cached storage-block positions from the last validation. */
     private final List<BlockPos> storageBlocks = new ArrayList<>();
-    /** Citizens assigned to work here (≤ capacity). */
     private final List<UUID> workers = new ArrayList<>();
-    /** Min-stock rows: item registry id → settlement-wide minimum (Phase 3 consumes this). */
     private final Map<String, Integer> minStock = new LinkedHashMap<>();
-    /** Explicit order queue: item registry id → remaining count, in queue order (insertion-ordered;
-     *  queuing more of an already-queued item merges into its existing slot). Orders OUTRANK the
-     *  min-stock governor and ignore it — a queued item crafts even when not configured / not in
-     *  deficit. An order whose ingredients are missing is skipped, never blocking the queue. */
     private final Map<String, Integer> orders = new LinkedHashMap<>();
-    /** DERIVED orders the production chain queued here (a fletchery needed plant string none
-     *  existed of, so the general-crafts stone gets an auto order). Kept separate from the
-     *  player's {@link #orders} so the chain can revoke its own orders when the need that
-     *  created them disappears, without ever touching what the player queued. Crafted AFTER
-     *  player orders. {@link #autoOrderSources} remembers WHY (the requesting workshop). */
     private final Map<String, Integer> autoOrders = new LinkedHashMap<>();
-    /** item registry id → requesting workshop UUID string (the "why" of each auto order). */
     private final Map<String, String> autoOrderSources = new LinkedHashMap<>();
-    /** Per-worker station position: citizen UUID → the workshop type id of the station family
-     *  they work EXCLUSIVELY (self-assigned on first claim in a mixed workshop). One worker =
-     *  one profession, so experience accumulates in a single bucket instead of smearing across
-     *  whatever station happens to be free. */
     private final Map<UUID, String> positions = new LinkedHashMap<>();
-    /** Game tick of the last full validation (transient — the reachability BFS is too heavy to
-     *  run on every crafter think-tick; {@code Workshops.validateCached} throttles on this). */
     private transient long lastValidatedTick = Long.MIN_VALUE;
-    /** Cached appeal score of the box union (workplace appeal: pretty workshops make happier,
-     *  faster-learning workers). Refreshed on every validation — same blocks-walk cadence the
-     *  status caches already pay for. */
     private double cachedAppealScore;
-    /** Cached beauty tier matching {@link #cachedAppealScore}. Null until first scored. */
     private ChunkBeauty cachedAppealBeauty;
-    /** Lifetime count of output ITEMS this workshop has crafted (persisted statistic for the Stats tab). */
     private long itemsProduced = 0L;
-    /** Smoothed output RATE (items/sec) + last cumulative snapshot. Transient — rebuilt by {@link #tickStats}. */
     private transient double outputRate = 0.0;
     private transient long lastProducedSnapshot = 0L;
-    private static final double OUTPUT_RATE_ALPHA = 0.1; // EMA smoothing (~10s at 1 Hz), matches Settlement
+    private static final double OUTPUT_RATE_ALPHA = 0.1;
 
     public long lastValidatedTick() {
         return lastValidatedTick;
@@ -135,7 +108,6 @@ public final class Workshop {
         return customName;
     }
 
-    /** Sets the player-chosen name ({@code ""} resets to the derived-type display). */
     public void setCustomName(String name) {
         this.customName = name == null ? "" : name;
     }
@@ -156,7 +128,6 @@ public final class Workshop {
         return storageBlocks;
     }
 
-    /** Max assigned workers — one per work block. */
     public int capacity() {
         return workBlocks.size();
     }
@@ -169,25 +140,18 @@ public final class Workshop {
         return minStock;
     }
 
-    /** The explicit order queue (live view): item registry id → remaining, in queue order. */
     public Map<String, Integer> orders() {
         return orders;
     }
 
-    /** The chain-derived order queue (live view): item registry id → remaining. */
     public Map<String, Integer> autoOrders() {
         return autoOrders;
     }
 
-    /** The "why" of each auto order: item registry id → requesting workshop UUID string. */
     public Map<String, String> autoOrderSources() {
         return autoOrderSources;
     }
 
-    /** Counts one finished craft of {@code itemId} against the queues — player orders first,
-     *  then chain-derived auto orders; rows drop at zero. Returns true iff an order was consumed
-     *  (caller marks data dirty). Deliberately matches ANY craft of the item — a min-stock
-     *  fallback craft of the same output fulfils the order just as well. */
     public boolean fulfillOrder(String itemId) {
         return fulfillOrder(itemId, 1);
     }
@@ -220,19 +184,14 @@ public final class Workshop {
         return fulfilled;
     }
 
-    /** Credit {@code count} crafted output items toward this workshop's lifetime throughput stat.
-     *  Called at every craft completion (order or min-stock alike). Cumulative; never decreases. */
     public void recordCraftOutput(int count) {
         if (count > 0) itemsProduced += count;
     }
 
-    /** Lifetime output items crafted here. */
     public long itemsProduced() { return itemsProduced; }
 
-    /** Smoothed output rate (items/sec) right now (0 if idle). */
     public double outputRatePerSecond() { return outputRate; }
 
-    /** Total queued work outstanding (player orders + chain auto-orders). */
     public int pendingOrders() {
         int total = 0;
         for (int n : orders.values()) total += n;
@@ -240,15 +199,12 @@ public final class Workshop {
         return total;
     }
 
-    /** Once-a-second EMA update of the output rate from the cumulative counter. Derived stat, not persisted. */
     public void tickStats() {
         double inst = Math.max(0.0, itemsProduced - lastProducedSnapshot);
         outputRate += OUTPUT_RATE_ALPHA * (inst - outputRate);
         lastProducedSnapshot = itemsProduced;
     }
 
-    /** Per-worker station position (see {@link #positions}): the work-block type id this citizen
-     *  is locked to, or null when they haven't self-assigned yet. */
     public String positionOf(UUID citizenId) {
         return positions.get(citizenId);
     }
@@ -261,7 +217,6 @@ public final class Workshop {
         positions.remove(citizenId);
     }
 
-    /** Drops positions of citizens no longer on the worker roster (call after reconciling). */
     public void prunePositions() {
         positions.keySet().retainAll(workers);
     }
@@ -270,7 +225,6 @@ public final class Workshop {
         return cachedAppealScore;
     }
 
-    /** Beauty tier of the last appeal scoring, or null if never scored (e.g. unmarked). */
     public ChunkBeauty cachedAppealBeauty() {
         return cachedAppealBeauty;
     }
@@ -280,7 +234,6 @@ public final class Workshop {
         this.cachedAppealBeauty = beauty;
     }
 
-    /** Applies a validation result (status + fresh caches + re-derived type). */
     public void applyValidation(Status newStatus, List<BlockPos> newWorkBlocks,
                                 List<BlockPos> newStorageBlocks, String newDerivedTypeId) {
         this.status = newStatus;
@@ -290,8 +243,6 @@ public final class Workshop {
         this.storageBlocks.addAll(newStorageBlocks);
         this.derivedTypeId = newDerivedTypeId;
     }
-
-    // ─── NBT ────────────────────────────────────────────────────────────────────────────────────
 
     public CompoundTag save() {
         CompoundTag tag = new CompoundTag();
@@ -311,13 +262,11 @@ public final class Workshop {
             for (Map.Entry<String, Integer> e : minStock.entrySet()) ms.putInt(e.getKey(), e.getValue());
             tag.put("MinStock", ms);
         }
-        // Appeal cache persisted (like Home's) so post-load reads don't wait for a revalidation.
         tag.putDouble("Appeal", cachedAppealScore);
         if (cachedAppealBeauty != null) tag.putInt("AppealTier", cachedAppealBeauty.ordinal());
         if (itemsProduced > 0L) tag.putLong("ItemsProduced", itemsProduced);
         if (!orders.isEmpty()) {
-            // LinkedHashMap iteration order IS the queue order; a ListTag of compounds keeps it
-            // (a CompoundTag like MinStock's would alphabetise on reload).
+            // ListTag of compounds preserves queue order; a CompoundTag (like MinStock) would alphabetise on reload.
             ListTag orderList = new ListTag();
             for (Map.Entry<String, Integer> e : orders.entrySet()) {
                 CompoundTag row = new CompoundTag();
@@ -409,9 +358,7 @@ public final class Workshop {
         return w;
     }
 
-    // Positions stored as packed longs (BlockPos.asLong) — compact, and immune to the
-    // writeBlockPos tag-format drift that silently loaded the cached lists back EMPTY (the
-    // "capacity 1/0 after relog" bug: IntArrayTag elements read with TAG_COMPOUND = no rows).
+    // Packed longs (BlockPos.asLong), not writeBlockPos tags: avoids the tag-format drift that loaded lists back EMPTY (the "capacity 1/0 after relog" bug).
     private static net.minecraft.nbt.LongArrayTag savePosList(List<BlockPos> list) {
         long[] packed = new long[list.size()];
         for (int i = 0; i < list.size(); i++) packed[i] = list.get(i).asLong();

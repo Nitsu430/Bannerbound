@@ -16,15 +16,14 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client snapshot of a settlement's palette state, consumed by {@code ClientPaletteState}
- * and rendered by the town hall's Palettes tab. Twin of {@link PolicyStateSyncPayload} (same
+ * Server -> client snapshot of a settlement's palette state, consumed by ClientPaletteState and
+ * rendered by the town hall's Palettes tab. Twin of PolicyStateSyncPayload (same
  * available/active/slot/pending/vote/suggestion shape) with one addition: because palettes are
- * data-driven, the payload also carries the <b>definitions</b> (id, name, and an ordered block-id
- * + bonus list per palette) for every available/active palette, so the client can render each
- * palette's block icons and per-block bonus tooltip without its own copy of the datapack.
- *
- * <p>The {@code def*} lists are parallel: {@code defIds[i]} has name {@code defNames[i]}, blocks
- * {@code defBlockIds[i]} with matching bonuses {@code defBonuses[i]}.
+ * data-driven, the payload also carries the definitions (id, name, and an ordered block-id + bonus
+ * list per palette) for every available/active palette, so the client can render each palette's
+ * block icons and per-block bonus tooltip without its own copy of the datapack. The def* lists are
+ * parallel: defIds[i] has name defNames[i], blocks defBlockIds[i] with matching bonuses
+ * defBonuses[i].
  */
 @ApiStatus.Internal
 public record PaletteStateSyncPayload(
@@ -72,7 +71,6 @@ public record PaletteStateSyncPayload(
                 ByteBufCodecs.VAR_INT.encode(buf, voters.size());
                 for (UUID u : voters) UUIDUtil.STREAM_CODEC.encode(buf, u);
             }
-            // Definitions.
             ByteBufCodecs.VAR_INT.encode(buf, p.defIds().size());
             for (int i = 0; i < p.defIds().size(); i++) {
                 ByteBufCodecs.STRING_UTF8.encode(buf, p.defIds().get(i));

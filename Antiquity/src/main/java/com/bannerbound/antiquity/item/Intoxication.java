@@ -22,41 +22,42 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Player drunkenness from grog (GROG_PLAN.md Phase 3.5). Every sip applies the grog's per-sip effects
- * (e.g. berry grog → regeneration) and bumps an intoxication level by the grog's {@code strength};
- * sips within a 30-second window <em>stack</em> (Sea-of-Thieves-style), so chugging gets you hammered.
- * The level decays one step per 30s of abstinence, and drives escalating tiers — the swimming drunk
- * shader, a stumble (slowness), then (client) inverted controls. Drink past {@link #MAX} and you
- * <b>black out</b> (curare-style: out cold + input locked, then you come to groggy). Sleeping it off
- * while still hammered triggers a <b>hangover</b> (see {@link #startHangover}). Server-authoritative;
- * the level + the pass-out/hangover deadlines are synced for the client visuals.
+ * Player drunkenness from grog (GROG_PLAN.md Phase 3.5). Every sip ({@link #sip}) restores food,
+ * applies the grog's per-sip effects (e.g. berry grog -> regeneration), and bumps an intoxication
+ * level by the grog's strength; sips within the {@link #WINDOW_TICKS} (30s) window STACK
+ * (Sea-of-Thieves-style) so chugging gets you hammered, and the level decays one step per window of
+ * abstinence. Escalating tiers: the swimming drunk shader, a stumble (slowness at L4, worse at L6),
+ * then inverted controls - the visuals and the high-tier control inversion are CLIENT-side off the
+ * synced level (no vanilla Nausea); the server applies only the stumble. From {@link #VOMIT_MIN}
+ * you randomly retch (chance/second scales ~6% at L5 -> ~18% at L7): green bile that costs HUNGER
+ * (never health) and splatters {@link #VOMIT_OVERLAY_TICKS} of goo on the screen of anyone caught
+ * in the {@link #VOMIT_RANGE}/{@link #VOMIT_CONE} face cone ({@link #splatter} is reused by the
+ * {@code /bannerbound vomit_overlay} test command). Drink past {@link #MAX} and you BLACK OUT
+ * (curare-style: out cold for {@link #PASS_OUT_TICKS} with input locked, then you come to at
+ * {@link #RECOVER_LEVEL}, still drunk). Waking at or above {@link #HANGOVER_THRESHOLD} clears the
+ * drink but starts a {@link #HANGOVER_TICKS} hangover ({@link #startHangover}, called from the
+ * wake-up event): groggy slowness/weakness, a client vignette/muffle, and the {@link #craftQuality}
+ * penalty - hungover hands always craft CRUDE; otherwise the rolled hand-craft tier (knapping /
+ * fletching / hammer) is steady when tipsy, drops 1 tier when drunk (L3-4), 2 when very drunk
+ * (L5-6), and bottoms at CRUDE once hammered (L7+). Server-authoritative: the level and the
+ * pass-out/hangover deadlines live in synced player data attachments; {@link #serverTick} runs the
+ * hangover, then the black-out, then decay + tier effects, throttled per player.
  */
 public final class Intoxication {
-    /** Hard cap — hitting it blacks you out. */
     public static final int MAX = 8;
-    /** Stacking / decay window — a sip within this of the last stacks; 30s of none sobers one level. */
     public static final int WINDOW_TICKS = 600;
-    /** How long a black-out keeps you out cold (slower, curare-ish: you slump and lie there a while). */
     public static final int PASS_OUT_TICKS = 220;
-    /** The level you come to at after a black-out — still drunk, just off the edge. */
     public static final int RECOVER_LEVEL = 3;
-    /** Hangover duration on waking up hammered (30s). */
     public static final int HANGOVER_TICKS = 600;
-    /** Wake up at or above this intoxication and you get a hangover instead of a free sober-up. */
     public static final int HANGOVER_THRESHOLD = 4;
-    /** Vomiting (hunger loss) starts at this intoxication. */
     public static final int VOMIT_MIN = 5;
-    /** How long green vomit goo stays on a face you retched into (10s, fades out). */
     public static final int VOMIT_OVERLAY_TICKS = 200;
-    /** Reach + cone for catching a vomit in the face (dot ≥ this within {@link #VOMIT_RANGE}). */
     public static final double VOMIT_RANGE = 3.5;
     public static final double VOMIT_CONE = 0.86;
 
     private Intoxication() {
     }
 
-    /** A sip: restore food, apply the grog's effects, and add {@code strength} intoxication (stacking
-     *  inside the {@link #WINDOW_TICKS} window). Server-side. */
     public static void sip(Player player, List<MobEffectInstance> effects, int strength, int foodValue) {
         Level level = player.level();
         if (level.isClientSide) return;
@@ -67,22 +68,18 @@ public final class Intoxication {
         int lvl = player.getData(BannerboundAntiquity.INTOXICATION_LEVEL.get());
         long last = player.getData(BannerboundAntiquity.INTOXICATION_LAST_SIP.get());
         int add = Math.max(1, strength);
-        lvl = (now - last <= WINDOW_TICKS) ? lvl + add : add; // stack within the window, else fresh start
+        lvl = (now - last <= WINDOW_TICKS) ? lvl + add : add;
         player.setData(BannerboundAntiquity.INTOXICATION_LEVEL.get(), Math.min(lvl, MAX));
         player.setData(BannerboundAntiquity.INTOXICATION_LAST_SIP.get(), now);
     }
 
-    /** Per-player server tick (call throttled): runs the hangover, then the black-out, then ordinary
-     *  intoxication decay + tier effects. */
     public static void serverTick(Player player) {
         Level level = player.level();
         if (level.isClientSide) return;
-        // Preserve the buzz through sleep — otherwise a night-skip would sober you below the hangover
-        // threshold before you wake, and you'd dodge the morning after. (You can't be passed out asleep.)
+        // No decay while asleep: a night-skip would sober past HANGOVER_THRESHOLD before waking and dodge the hangover.
         if (player.isSleeping()) return;
         long now = level.getGameTime();
 
-        // ── Hangover: groggy slowness while it lasts (visuals + crude-craft are elsewhere); clears itself. ──
         long hangover = player.getData(BannerboundAntiquity.HANGOVER_UNTIL.get());
         if (hangover > 0) {
             if (now < hangover) {
@@ -93,16 +90,14 @@ public final class Intoxication {
             }
         }
 
-        // ── Black-out: out cold, then come to groggy. ──
         long passOut = player.getData(BannerboundAntiquity.PASS_OUT_UNTIL.get());
         if (passOut > 0) {
             if (now < passOut) {
                 player.addEffect(new MobEffectInstance(MobEffects.BLINDNESS, 30, 0, false, false, false));
                 player.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 30, 9, false, false, false));
-                player.addEffect(new MobEffectInstance(MobEffects.JUMP, 30, 128, false, false, false)); // -jump
-                return; // out cold — no decay, no other effects
+                player.addEffect(new MobEffectInstance(MobEffects.JUMP, 30, 128, false, false, false)); // amplifier 128 makes jump strength negative -> no jumping
+                return;
             }
-            // Coming to: drop off the edge but still drunk.
             player.setData(BannerboundAntiquity.PASS_OUT_UNTIL.get(), 0L);
             player.setData(BannerboundAntiquity.INTOXICATION_LEVEL.get(), RECOVER_LEVEL);
             player.setData(BannerboundAntiquity.INTOXICATION_LAST_SIP.get(), now);
@@ -111,22 +106,19 @@ public final class Intoxication {
         int lvl = player.getData(BannerboundAntiquity.INTOXICATION_LEVEL.get());
         if (lvl <= 0) return;
 
-        // Drink past the cap → black out.
         if (lvl >= MAX) {
             player.setData(BannerboundAntiquity.PASS_OUT_UNTIL.get(), now + PASS_OUT_TICKS);
             level.playSound(null, player.getX(), player.getY(), player.getZ(),
-                SoundEvents.PLAYER_LEVELUP, SoundSource.PLAYERS, 0.4F, 0.5F); // a woozy down-pitched thud
+                SoundEvents.PLAYER_LEVELUP, SoundSource.PLAYERS, 0.4F, 0.5F);
             return;
         }
 
         if (now - player.getData(BannerboundAntiquity.INTOXICATION_LAST_SIP.get()) >= WINDOW_TICKS) {
-            lvl = Math.max(0, lvl - 1); // 30s without a sip → sober one level
+            lvl = Math.max(0, lvl - 1);
             player.setData(BannerboundAntiquity.INTOXICATION_LEVEL.get(), lvl);
             player.setData(BannerboundAntiquity.INTOXICATION_LAST_SIP.get(), now);
             if (lvl <= 0) return;
         }
-        // Escalating tiers. Visuals (the swimming drunk shader) + the high-tier control inversion are
-        // CLIENT-side off the synced level — no vanilla Nausea. The server only applies the stumble.
         if (lvl >= 4) {
             player.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 40, 0, false, false, false));
         }
@@ -134,15 +126,12 @@ public final class Intoxication {
             player.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 40, 1, false, false, false));
         }
 
-        // Very drunk → you randomly throw up: green bile + a retch, and it costs HUNGER (not health).
-        // Chance per second climbs with the level (~6% at L5 → ~18% at L7).
         if (lvl >= VOMIT_MIN && player instanceof ServerPlayer sp && level instanceof ServerLevel sl
                 && sp.getRandom().nextFloat() < 0.06F * (lvl - (VOMIT_MIN - 1))) {
             vomit(sp, sl);
         }
     }
 
-    /** A heave of green bile from the mouth + a retch — drains hunger, never health. Server-side. */
     private static void vomit(ServerPlayer player, ServerLevel level) {
         Vec3 look = player.getLookAngle();
         Vec3 mouth = player.getEyePosition().add(look.scale(0.3)).subtract(0.0, 0.15, 0.0);
@@ -154,11 +143,11 @@ public final class Intoxication {
         food.setSaturation(Math.min(food.getSaturationLevel(), food.getFoodLevel()));
 
         SoundEvent belch = BannerboundAntiquity.WOLFSBANE_BELCH.get();
-        player.playNotifySound(belch, SoundSource.PLAYERS, 0.9F, 1.1F);        // first-person, just them
-        level.playSound(player, player.getX(), player.getY(), player.getZ(),  // everyone else nearby
+        player.playNotifySound(belch, SoundSource.PLAYERS, 0.9F, 1.1F);
+        // playSound(player, ...) EXCLUDES that player; the notify above covers first-person.
+        level.playSound(player, player.getX(), player.getY(), player.getZ(),
             belch, SoundSource.PLAYERS, 0.7F, 1.1F);
 
-        // Vomit in someone's face → green goo all over their screen (Sea-of-Thieves style).
         Vec3 eye = player.getEyePosition();
         for (Player other : level.players()) {
             if (other == player || !other.isAlive()) {
@@ -171,8 +160,6 @@ public final class Intoxication {
         }
     }
 
-    /** Splatter green vomit goo on {@code target}'s screen for {@link #VOMIT_OVERLAY_TICKS} (fades out).
-     *  Server-side; reused by the {@code /bannerbound vomit_overlay} test command. */
     public static void splatter(Player target) {
         Level level = target.level();
         if (level.isClientSide) return;
@@ -180,40 +167,31 @@ public final class Intoxication {
             level.getGameTime() + VOMIT_OVERLAY_TICKS);
     }
 
-    /** Sleeping it off while still hammered: clear the drink instantly, but pay with a {@link
-     *  #HANGOVER_TICKS} hangover (groggy slowness + a pounding vignette + muffled sound + crude crafts).
-     *  Called from the wake-up event; no-op if you went to bed only mildly tipsy. Server-side. */
     public static void startHangover(Player player) {
         Level level = player.level();
         if (level.isClientSide) return;
         if (player.getData(BannerboundAntiquity.INTOXICATION_LEVEL.get()) < HANGOVER_THRESHOLD) return;
-        player.setData(BannerboundAntiquity.INTOXICATION_LEVEL.get(), 0);   // the drink is gone…
+        player.setData(BannerboundAntiquity.INTOXICATION_LEVEL.get(), 0);
         player.setData(BannerboundAntiquity.PASS_OUT_UNTIL.get(), 0L);
-        player.setData(BannerboundAntiquity.HANGOVER_UNTIL.get(),            // …but now you suffer
+        player.setData(BannerboundAntiquity.HANGOVER_UNTIL.get(),
             level.getGameTime() + HANGOVER_TICKS);
     }
 
-    /** Current intoxication level (0 = sober), for the client drunk visuals / inverted controls. */
     public static int level(Player player) {
         return player.getData(BannerboundAntiquity.INTOXICATION_LEVEL.get());
     }
 
-    /** True while {@code player} is hungover (drives the crude-craft penalty + client vignette/muffle). */
     public static boolean isHungover(Player player) {
         return player.level().getGameTime() < player.getData(BannerboundAntiquity.HANGOVER_UNTIL.get());
     }
 
-    /** Drink-impaired craftsmanship: drunk (or hungover) hands botch the work. Wrap the player's rolled
-     *  hand-craft quality with this at each site (knapping / fletching / hammer). Hungover → always
-     *  {@link QualityTier#CRUDE}; otherwise the rolled tier drops by intoxication — steady when tipsy,
-     *  −1 tier when drunk (L3–4), −2 when very drunk (L5–6), bottoming out at CRUDE once hammered (L7+). */
     public static QualityTier craftQuality(Player player, QualityTier rolled) {
         if (isHungover(player)) {
             return QualityTier.CRUDE;
         }
         int lvl = level(player);
         if (lvl < 3) {
-            return rolled; // sober / tipsy: steady enough
+            return rolled;
         }
         int drop = lvl >= 7 ? QualityTier.values().length : (lvl >= 5 ? 2 : 1);
         int idx = Math.max(QualityTier.CRUDE.ordinal(), rolled.ordinal() - drop);

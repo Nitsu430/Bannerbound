@@ -9,7 +9,8 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Client-side hold for the latest settlement food-warning level (see
- * {@link SettlementFoodWarningPayload}). Read by {@code SettlementFoodWarningHudLayer}.
+ * {@link SettlementFoodWarningPayload}); read by {@code SettlementFoodWarningHudLayer}.
+ * {@code clear()} wipes it on disconnect so a stale banner doesn't carry into the next world.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -22,6 +23,5 @@ public final class ClientFoodWarningState {
 
     public static int level() { return level; }
 
-    /** Wipe on disconnect so a stale banner doesn't carry into the next world. */
     public static void clear() { level = SettlementFoodWarningPayload.LEVEL_OK; }
 }

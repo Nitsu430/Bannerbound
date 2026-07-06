@@ -22,38 +22,43 @@ import net.minecraft.server.level.ServerPlayer;
 
 /**
  * Council clickable chat-votes: lightweight, transient yes/no votes announced in chat with
- * clickable <b>[Yes] [No]</b> (each runs {@code /bannerbound vote <id> yes|no}), mirrored live in
- * the Town Hall "Votes" tab. Used for the council actions that don't warrant a full screen flow —
- * exiling a citizen and issuing a registration tablet.
+ * clickable [Yes] [No] buttons (each runs /bannerbound vote &lt;id&gt; yes|no), mirrored live in
+ * the Town Hall "Votes" tab (broadcastVotesState pushes a fresh snapshot on every state change).
+ * Covers council actions that don't warrant a full screen flow; on pass, perform() dispatches to
+ * ServerPayloadHandler (exile / tablet), TradeManager (ACCEPT_TRADE), and for the diplomacy kinds
+ * to CityStateWarManager when ChatVote.cityState marks the target as a city-state id, else
+ * DiplomacyManager.
  *
- * <p>Resolution: the initiator auto-votes Yes; the vote passes the moment Yes reaches a strict
- * majority of the settlement's <b>online</b> members ({@code floor(n/2)+1}), fails early the moment
- * that majority becomes unreachable (enough No votes), and expires (fails) after 90 seconds.
- * Members may change their vote until it resolves. All state is transient — a restart drops
- * in-flight votes and players simply re-initiate.
+ * <p>Resolution: the initiator auto-votes Yes, so the tryResolve call at the end of start() makes
+ * a solo "council" pass instantly. A vote passes the moment Yes reaches a strict majority of the
+ * settlement's ONLINE members (floor(n/2)+1), fails early once that majority becomes unreachable,
+ * and expires (fails) after 90 seconds - except ACCEPT_TRADE, a "minor" vote at 60 seconds. The
+ * expiry sweep runs once a second, driven from ImmigrationManager.tickAll. Voters may switch
+ * sides until resolution (casting moves them between the mutually exclusive yes/no sets), and
+ * only online members' votes count toward the tally. finish() removes the vote from ACTIVE
+ * before acting, so the click path and the expiry sweep can never both perform the action.
+ *
+ * <p>ChatVote.targetCitizen is overloaded by kind: the citizen UUID for EXILE, the target
+ * settlement or city-state id for diplomacy/trade kinds, null for TABLET and TOGGLE_RALLY.
+ * targetName is baked at start so result/expiry messages never need the entity loaded. All state
+ * is transient - a restart drops in-flight votes and players simply re-initiate.
  */
 @ApiStatus.Internal
 public final class ChatVoteManager {
     public enum Kind { EXILE, TABLET, DECLARE_WAR, OFFER_PEACE, TOGGLE_RALLY, RAZE_CAPTURED, ACCEPT_TRADE }
 
     private static final long VOTE_DURATION_MS = 90_000L;
-    /** Trade acceptance is a MINOR vote — big enough to ask the council, not war-grade. */
     private static final long MINOR_VOTE_DURATION_MS = 60_000L;
     private static final AtomicInteger NEXT_ID = new AtomicInteger(1);
     private static final Map<Integer, ChatVote> ACTIVE = new ConcurrentHashMap<>();
 
-    /** One in-flight chat vote. Yes/No sets are mutually exclusive (casting moves the voter). */
     public static final class ChatVote {
         public final int id;
         public final UUID settlementId;
         public final Kind kind;
         public final UUID initiator;
-        /** EXILE: citizen UUID; diplomacy votes: target settlement UUID; TABLET/RALLY: null. */
         @Nullable public final UUID targetCitizen;
-        /** Display name baked at start (citizen name, or "" for TABLET) so resolution/expiry
-         *  messages don't need the entity loaded. */
         public final String targetName;
-        /** True when {@link #targetCitizen} is a CITY-STATE id (war/peace resolves via CityStateWarManager). */
         public final boolean cityState;
         public final long expiresAtMs;
         public final Set<UUID> yes = ConcurrentHashMap.newKeySet();
@@ -75,7 +80,6 @@ public final class ChatVoteManager {
             return Math.max(0L, (expiresAtMs - System.currentTimeMillis()) / 1000L);
         }
 
-        /** 1 = yes, -1 = no, 0 = hasn't voted. */
         public int voteOf(UUID player) {
             if (yes.contains(player)) return 1;
             if (no.contains(player)) return -1;
@@ -86,7 +90,6 @@ public final class ChatVoteManager {
     private ChatVoteManager() {
     }
 
-    /** True if a vote of this kind (and, for EXILE, this citizen) is already running here. */
     public static boolean hasActive(UUID settlementId, Kind kind, @Nullable UUID targetCitizen) {
         for (ChatVote v : ACTIVE.values()) {
             if (v.settlementId.equals(settlementId) && v.kind == kind
@@ -97,7 +100,6 @@ public final class ChatVoteManager {
         return false;
     }
 
-    /** All in-flight votes for a settlement (Votes-tab snapshot), oldest first. */
     public static List<ChatVote> activeVotesFor(UUID settlementId) {
         List<ChatVote> out = new ArrayList<>();
         for (ChatVote v : ACTIVE.values()) {
@@ -107,18 +109,11 @@ public final class ChatVoteManager {
         return out;
     }
 
-    /**
-     * Starts a vote and announces it to every online member with clickable [Yes]/[No]. The
-     * initiator auto-votes Yes (a solo "council" therefore resolves instantly). Refuses (with an
-     * action-bar message) when an identical vote is already running.
-     */
     public static void start(MinecraftServer server, Settlement s, Kind kind,
             ServerPlayer initiator, @Nullable UUID targetCitizen, String targetName) {
         start(server, s, kind, initiator, targetCitizen, targetName, false);
     }
 
-    /** {@code cityState} = true when {@code targetCitizen} is a city-state id (war/peace on a
-     *  city-state resolves through {@code CityStateWarManager} instead of {@link DiplomacyManager}). */
     public static void start(MinecraftServer server, Settlement s, Kind kind,
             ServerPlayer initiator, @Nullable UUID targetCitizen, String targetName, boolean cityState) {
         if (hasActive(s.id(), kind, targetCitizen)) {
@@ -150,7 +145,6 @@ public final class ChatVoteManager {
                     Component.translatable("bannerbound.vote.no_hover"))));
         Component msg = header.append(" ").append(yesBtn).append(" ").append(noBtn);
         broadcastToMembers(server, s, msg);
-        // A 1-member council passes immediately off the initiator's auto-Yes.
         tryResolve(server, vote);
         broadcastVotesState(server, s.id());
     }
@@ -178,8 +172,6 @@ public final class ChatVoteManager {
         };
     }
 
-    /** Records a vote (clicked in chat or the Votes tab) and resolves if decided. Voters may
-     *  switch sides until resolution. Non-members and stale ids are ignored quietly. */
     public static void castVote(MinecraftServer server, ServerPlayer voter, int voteId, boolean yesVote) {
         ChatVote vote = ACTIVE.get(voteId);
         if (vote == null) return;
@@ -198,7 +190,6 @@ public final class ChatVoteManager {
         broadcastVotesState(server, vote.settlementId);
     }
 
-    /** Once-a-second sweep (driven from {@link ImmigrationManager#tickAll}): expire overdue votes. */
     public static void tick(MinecraftServer server) {
         if (ACTIVE.isEmpty()) return;
         long now = System.currentTimeMillis();
@@ -210,8 +201,6 @@ public final class ChatVoteManager {
         }
     }
 
-    /** Majority math over the CURRENT online member count: pass at {@code floor(n/2)+1} Yes; fail
-     *  early once that many Yes is unreachable. */
     private static void tryResolve(MinecraftServer server, ChatVote vote) {
         if (!ACTIVE.containsKey(vote.id)) return;
         Settlement s = SettlementData.get(server.overworld()).getById(vote.settlementId);
@@ -220,9 +209,9 @@ public final class ChatVoteManager {
         for (UUID m : s.members()) {
             if (server.getPlayerList().getPlayer(m) != null) online++;
         }
-        if (online <= 0) return;   // nobody online to judge — leave it to the expiry sweep
+        if (online <= 0) return;
         int needed = online / 2 + 1;
-        // Count only ONLINE votes so a logged-off Yes doesn't carry a vote it can no longer attend.
+        // Tally ONLINE votes only: a logged-off Yes must not carry a vote it can no longer attend.
         int yesOnline = 0;
         int noOnline = 0;
         for (UUID u : vote.yes) if (server.getPlayerList().getPlayer(u) != null) yesOnline++;
@@ -240,7 +229,7 @@ public final class ChatVoteManager {
 
     private static void finish(MinecraftServer server, Settlement s, ChatVote vote,
             boolean passed, String resultKey) {
-        if (ACTIVE.remove(vote.id) == null) return;   // already resolved on another path
+        if (ACTIVE.remove(vote.id) == null) return;
         broadcastToMembers(server, s, Component.translatable(resultKey,
                 describe(s, vote))
             .withStyle(passed ? ChatFormatting.GREEN : ChatFormatting.GRAY));
@@ -250,7 +239,6 @@ public final class ChatVoteManager {
         broadcastVotesState(server, vote.settlementId);
     }
 
-    /** Short description of what the vote was about, for the result line. */
     private static Component describe(Settlement s, ChatVote vote) {
         return switch (vote.kind) {
             case EXILE -> Component.translatable("bannerbound.vote.describe.exile", vote.targetName);
@@ -300,7 +288,6 @@ public final class ChatVoteManager {
         }
     }
 
-    /** Push the Votes-tab snapshot to every online member (open town halls update live). */
     private static void broadcastVotesState(MinecraftServer server, UUID settlementId) {
         Settlement s = SettlementData.get(server.overworld()).getById(settlementId);
         if (s != null) SettlementManager.broadcastChatVotesState(server, s);

@@ -16,11 +16,21 @@ import net.minecraft.world.level.BlockGetter;
 
 /**
  * Tektopia-style enclosure validator. Starting from the air blocks adjacent to a marker block
- * (e.g., a Town Hall), flood-fills through air, requires every visited air block to have a non-air
- * block above it within the height cap (a "roof"), and stops at non-air blocks (walls/floor).
+ * (e.g. a Town Hall), flood-fills through air, requires every visited air block to have a non-air
+ * "roof" block above it within MAX_Y, and stops at non-air blocks (walls/floor). Caps total volume
+ * so an open structure can't run away across the world.
  *
- * <p>Caps the total volume so an open structure can't run away across the world. The flood will
- * tend to hit either the no-roof check or the volume cap if the structure has a gap or no roof.
+ * <p>Two tiers: ROOF_ONLY (ancient-era workstations) just scans straight up from the marker and
+ * succeeds on the first non-air block within MAX_Y - no flood, no walls, empty interior set (the
+ * one-per-building check is skipped for this tier). ENCLOSED (later-era workstations) runs the full
+ * flood-fill + roof scan. The 2-arg validate() defaults to ENCLOSED so existing call sites
+ * (ImmigrationManager.revalidateWorkstationBuildings) keep working unchanged.
+ *
+ * <p>ENCLOSED runs in two passes and the ORDER matters: pass 1 floods and only checks the bounding
+ * box / volume cap, so a wall gap or missing roof lets the flood escape outdoors and blow the cap -
+ * this deliberately makes TOO_LARGE mean "not enclosed". Pass 2 (per-cell roof scan) is therefore
+ * only reached once the flood stayed bounded, so a NO_ROOF failure there is a genuine roof gap, not
+ * a leak through the walls.
  */
 @ApiStatus.Internal
 public final class BuildingValidator {
@@ -38,10 +48,6 @@ public final class BuildingValidator {
         TOO_LARGE
     }
 
-    /**
-     * How strict the building check is. Ancient-era workstations only need a roof block somewhere
-     * above them; later-era workstations need a full enclosed interior with walls + roof.
-     */
     public enum BuildingTier {
         ROOF_ONLY,
         ENCLOSED
@@ -57,21 +63,10 @@ public final class BuildingValidator {
         }
     }
 
-    /** Default ENCLOSED validation — preserved so the existing call sites in
-     *  {@code ImmigrationManager.revalidateWorkstationBuildings} keep working without changes. */
     public static Result validate(BlockGetter level, BlockPos markerPos) {
         return validate(level, markerPos, BuildingTier.ENCLOSED);
     }
 
-    /**
-     * Run the validator at the given tier.
-     * <ul>
-     *   <li>{@link BuildingTier#ROOF_ONLY}: scan straight up from {@code markerPos}; success on
-     *       the first non-air block found within {@link #MAX_Y} blocks. No flood fill, no walls.
-     *       Returns an empty interior set (the one-per-building check is skipped for this tier).</li>
-     *   <li>{@link BuildingTier#ENCLOSED}: full flood-fill + roof scan, as before.</li>
-     * </ul>
-     */
     public static Result validate(BlockGetter level, BlockPos markerPos, BuildingTier tier) {
         if (tier == BuildingTier.ROOF_ONLY) {
             BlockPos.MutableBlockPos scan = new BlockPos.MutableBlockPos();
@@ -104,10 +99,6 @@ public final class BuildingValidator {
             return Result.fail(FailReason.NO_INTERIOR, markerPos);
         }
 
-        // Pass 1: flood-fill, check only the bounding box. If the flood escapes via a wall gap
-        // (or missing roof), it'll keep expanding outdoors until it breaks the size cap. This
-        // makes "TOO_LARGE" mean "not enclosed" and frees us to report a meaningful NO_ROOF
-        // only when the structure is genuinely closed off.
         int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
         int minZ = Integer.MAX_VALUE, maxZ = Integer.MIN_VALUE;
@@ -135,9 +126,6 @@ public final class BuildingValidator {
             }
         }
 
-        // Pass 2: every interior block must have a non-air ceiling within MAX_Y above it.
-        // Only reachable when the flood stayed within the cap, so any failure here is a
-        // genuine roof gap rather than a wall gap.
         BlockPos.MutableBlockPos scan = new BlockPos.MutableBlockPos();
         for (BlockPos pos : visited) {
             boolean hasRoof = false;

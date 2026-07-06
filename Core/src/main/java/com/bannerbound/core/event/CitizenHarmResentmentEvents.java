@@ -16,29 +16,28 @@ import net.neoforged.neoforge.event.entity.living.LivingIncomingDamageEvent;
 import net.neoforged.neoforge.event.entity.living.LivingDeathEvent;
 
 /**
- * Step 11 — resentment-from-harm wiring. Two hooks:
- * <ul>
- *   <li>When a {@link Player} damages a {@link CitizenEntity}, that citizen's resentment
- *       toward the attacker climbs by {@link #RESENTMENT_PER_HIT}. Independent of leader
- *       status — a Council member who slaps a citizen accrues resentment just as fast as
- *       a passing wanderer would.</li>
- *   <li>When a {@link Player} kills a {@link CitizenEntity}, every <i>other</i> citizen in
- *       the same settlement gains {@link #RESENTMENT_PER_WITNESS_KILL} resentment toward
- *       the killer. The dying citizen's own resentment is moot (entity removed).</li>
- * </ul>
+ * Resentment-from-harm wiring: two server-side hooks that translate player violence against
+ * citizens into the resentment values that feed the compliance/mood system.
  *
- * <p>This sits separately from {@link CitizenLifecycleEvents} so the death-roster cleanup
- * and the resentment broadcast stay independently testable — neither blocks the other.
+ * A player hitting a citizen adds RESENTMENT_PER_HIT to that citizen's resentment toward the
+ * attacker; a player killing a citizen adds RESENTMENT_PER_WITNESS_KILL to every OTHER loaded
+ * settlement citizen (the dead one is moot). Leader status is irrelevant - a Council member
+ * accrues resentment as fast as a wanderer. Only direct player -> citizen damage counts;
+ * fall/mob damage is "the world hurt them", not a social act, so it is ignored.
+ *
+ * Constants are tuned against the compliance-drop threshold (20): a few hits cross it but a
+ * single bump does not, while one kill reliably pushes witnesses past it (a death is the kind
+ * of event a tribe remembers). Kept separate from {@link CitizenLifecycleEvents} so death-roster
+ * cleanup and the resentment broadcast stay independently testable.
+ *
+ * Gotcha: Settlement's Citizen roster is a snapshot of UUID/name records, not live entities.
+ * The resentment map lives on CitizenEntity, so the kill hook iterates loaded entities via
+ * SettlementManager.allCitizensOf rather than the roster.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
 public final class CitizenHarmResentmentEvents {
-    /** Per-hit resentment gain on the struck citizen. Tuned for "a few hits cross the
-     *  compliance-drop threshold (20) but a single bump doesn't." */
     public static final int RESENTMENT_PER_HIT = 10;
-    /** Per-witness gain on every other settlement citizen when one of theirs is killed.
-     *  Larger than per-hit because a death is the kind of event a tribe remembers; a single
-     *  killing reliably pushes witnesses past the compliance-drop threshold. */
     public static final int RESENTMENT_PER_WITNESS_KILL = 40;
 
     private CitizenHarmResentmentEvents() {
@@ -49,9 +48,6 @@ public final class CitizenHarmResentmentEvents {
         if (!(event.getEntity() instanceof CitizenEntity citizen)) return;
         Entity attackerEnt = event.getSource() == null ? null : event.getSource().getEntity();
         if (!(attackerEnt instanceof Player attacker)) return;
-        // Don't penalise the player's own citizens for fall damage / mob attacks etc. — only
-        // direct player → citizen swings. Per design: hitting a citizen is a social act, not
-        // an "the world hurt them" situation.
         citizen.addResentment(attacker.getUUID(), RESENTMENT_PER_HIT);
     }
 
@@ -66,10 +62,6 @@ public final class CitizenHarmResentmentEvents {
         SettlementData data = SettlementData.get(level.getServer().overworld());
         Settlement settlement = data.getById(killed.getSettlementId());
         if (settlement == null) return;
-        // Bump resentment on every still-living settlement citizen toward the killer.
-        // Settlement's Citizen roster is a snapshot of UUID/name records, not live entities;
-        // the actual resentment map lives on the CitizenEntity, so iterate the loaded
-        // entities through the shared SettlementManager.allCitizensOf helper.
         for (CitizenEntity other
                 : com.bannerbound.core.api.settlement.SettlementManager.allCitizensOf(level, settlement)) {
             if (other == killed) continue;

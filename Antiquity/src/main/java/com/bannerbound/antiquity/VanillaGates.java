@@ -28,28 +28,34 @@ import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 
 /**
- * Merged vanilla-content gate event handlers (storage, villager trading, wandering trader spawns).
+ * Merged vanilla-content gate handlers: three server-side event hooks that strip vanilla storage,
+ * villager trading, and wandering-trader spawns out of the Antiquity expansion. Every hook is a no-op
+ * unless vanilla content is stripped (VanillaContentState.isEnabled() is false -- always so under
+ * Antiquity); read that state, never the raw config.
+ *
+ * <p>Storage gate (onRightClickBlock): opening vanilla chests and barrels is locked behind research so
+ * an early settlement leans on baskets / the stockpile (unlocked by storage_logistics) and can't crack
+ * open structure loot chests for free. Barrel -> bannerbound.unlock.barrel (barrel_making, Antiquity
+ * era); chest / trapped chest -> bannerbound.unlock.chest (joinery, Medieval, iron-gated). The check is
+ * per-settlement and unsettled players are gated too; with no server context we fail open. Only the
+ * GUI-open gesture is blocked -- the block stays breakable/placeable, and sneaking is left alone so a
+ * held block can be placed against a chest.
+ *
+ * <p>Villager trading (onEntityInteract): permanently disabled -- villages are AI city-states traded
+ * with via the Town Hall diplomacy tab (after the Bartering research), not by clicking individual
+ * villagers (CITY_STATES plan section 1G). The bare trade interaction is cancelled and the villager
+ * gives its "can't trade" reaction (unhappy head-shake + VILLAGER_NO sound); we never mutate the
+ * villager type (mod compatibility) and leave name-tag naming alone.
+ *
+ * <p>Wandering traders (onEntityJoin): the trader and its trader llamas are cancelled at
+ * EntityJoinLevelEvent rather than a spawn event, because the wandering trader is placed by a
+ * CustomSpawner off the normal mob-spawn path; the join hook also evicts any already-saved trader on
+ * world reload.
  */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID)
 @ApiStatus.Internal
 public final class VanillaGates {
 
-    /*
-     * Gates opening vanilla chests and barrels behind research, so an early settlement relies on
-     * baskets / the stockpile (unlocked by {@code storage_logistics}) and can't crack open structure
-     * loot chests for free. Only active when vanilla content is stripped
-     * ({@link VanillaContentState#isEnabled()} is false — always so under Antiquity).
-     *
-     * <ul>
-     *   <li>Barrel → {@code bannerbound.unlock.barrel} (the {@code barrel_making} research, Antiquity era).</li>
-     *   <li>Chest / trapped chest → {@code bannerbound.unlock.chest} (the {@code joinery} research,
-     *       Medieval, iron-gated).</li>
-     * </ul>
-     *
-     * <p>Mirrors {@code VanillaGates}: per-settlement flag check, unsettled players are gated too.
-     * The block stays breakable/placeable — only the GUI-open gesture is blocked. Sneaking is left
-     * alone so a held block can be placed against a chest.
-     */
     private static final String FLAG_BARREL = "bannerbound.unlock.barrel";
     private static final String FLAG_CHEST = "bannerbound.unlock.chest";
 
@@ -60,7 +66,7 @@ public final class VanillaGates {
     public static void onRightClickBlock(PlayerInteractEvent.RightClickBlock event) {
         if (VanillaContentState.isEnabled()) return;
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
-        if (player.isShiftKeyDown()) return; // sneaking never opens the GUI; allow place-against
+        if (player.isShiftKeyDown()) return;
 
         Block block = event.getLevel().getBlockState(event.getPos()).getBlock();
         final String flag;
@@ -88,43 +94,22 @@ public final class VanillaGates {
         return s != null && ResearchManager.hasFlag(s, flag);
     }
 
-    /*
-     * Vanilla villager trading is permanently disabled in the Antiquity expansion — villages are now AI
-     * city-states, traded with via the Town Hall diplomacy tab (after the Bartering research), not by
-     * clicking individual villagers (see the CITY_STATES plan §1G). Right-clicking a villager cancels the
-     * vanilla trade GUI and gives the villager's "can't trade" reaction (the unhappy head-shake + "no"
-     * sound), like clicking a nitwit.
-     *
-     * <p>Only active when vanilla content is stripped ({@link VanillaContentState#isEnabled()} false —
-     * always so under Antiquity). We never touch the villager itself (mod compatibility); we only block
-     * the interaction. Name tags / other item interactions are left alone.
-     */
     @SubscribeEvent
     public static void onEntityInteract(PlayerInteractEvent.EntityInteract event) {
         if (VanillaContentState.isEnabled()) return;
         if (!(event.getTarget() instanceof Villager villager)) return;
-        // Leave name-tag naming alone; only the bare trade interaction is blocked.
         if (event.getItemStack().is(Items.NAME_TAG)) return;
 
         event.setCanceled(true);
         event.setCancellationResult(InteractionResult.sidedSuccess(event.getLevel().isClientSide()));
         if (!event.getLevel().isClientSide()) {
             Player player = event.getEntity();
-            villager.setUnhappyCounter(40); // the vanilla "can't trade" head-shake / angry puff
+            villager.setUnhappyCounter(40); // 40 ticks = vanilla "can't trade" head-shake duration
             player.level().playSound(null, villager.getX(), villager.getY(), villager.getZ(),
                 SoundEvents.VILLAGER_NO, SoundSource.NEUTRAL, 1.0F, 1.0F);
         }
     }
 
-    /*
-     * Wandering traders (and their trader llamas) no longer appear in the Antiquity expansion — vanilla
-     * trading is replaced by the city-state diplomacy/trade system (see the CITY_STATES plan §1G).
-     *
-     * <p>Cancels them at {@link EntityJoinLevelEvent} rather than a spawn event, because the wandering
-     * trader is placed by a {@code CustomSpawner} (not the normal mob-spawn path), and this also evicts
-     * any already-saved trader on world reload — mirroring {@code VanillaGates}'s join hook. Only
-     * active when vanilla content is stripped ({@link VanillaContentState#isEnabled()} false).
-     */
     @SubscribeEvent
     public static void onEntityJoin(EntityJoinLevelEvent event) {
         if (VanillaContentState.isEnabled()) return;

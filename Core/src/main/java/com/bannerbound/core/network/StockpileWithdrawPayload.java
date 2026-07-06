@@ -12,7 +12,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Client → server: withdraw from the open Stockpile terminal. {@code template} identifies the item
+ * Client -> server: withdraw from the open Stockpile terminal. {@code template} identifies the item
  * (count 1, components matched); {@code half} = right-click/shift (half a stack) vs left-click (a
  * full stack). Handled by {@code StockpileMenu.withdraw}.
  */

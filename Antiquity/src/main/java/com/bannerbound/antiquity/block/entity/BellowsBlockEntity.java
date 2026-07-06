@@ -14,12 +14,12 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Holds the Bellows Block's "Push" animation timer. A jump sets {@link #animTicks} to {@link
- * #PUSH_TICKS}; the renderer plays {@link com.bannerbound.antiquity.client.BellowsAnimations#PUSH}
- * over that window, and it ticks back to 0.
+ * Holds the Bellows Block's "Push" animation timer. triggerPush (called when a player lands on the
+ * block) sets animTicks to PUSH_TICKS and syncs to clients; the renderer plays
+ * BellowsAnimations.PUSH over that window while tick() counts it back down to 0. PUSH_TICKS is 20 =
+ * the animation's 1-second length.
  */
 public class BellowsBlockEntity extends BlockEntity {
-    /** One push lasts the animation's 1-second length (20 ticks). */
     public static final int PUSH_TICKS = 20;
 
     private int animTicks = 0;
@@ -32,7 +32,6 @@ public class BellowsBlockEntity extends BlockEntity {
         return animTicks;
     }
 
-    /** Start (or restart) the push animation — called when a player lands on the block. */
     public void triggerPush() {
         animTicks = PUSH_TICKS;
         if (level != null && !level.isClientSide) {

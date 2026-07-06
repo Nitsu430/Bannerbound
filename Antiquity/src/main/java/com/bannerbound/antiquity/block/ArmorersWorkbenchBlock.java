@@ -26,17 +26,22 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Armorer's Workbench — the player-designed-armor station (ARMOR_PLAN.md). A 2-cell multiblock laid
- * out exactly like the Carpenter's Table (a MASTER cell that renders the full 32px model extending one
- * block toward {@code FACING}, plus a SECONDARY cell that renders nothing and forwards interactions),
- * but with no block entity — the bench is a static JSON model and the design lives entirely in the
- * screen for now. <b>Shift + right-click</b> either half opens the {@link ArmorerScreen} design GUI.
+ * Armorer's Workbench -- the player-designed-armor station (ARMOR_PLAN.md). A 2-cell multiblock laid
+ * out exactly like the Carpenter's Table: the MAIN=true master cell renders the full 32px model
+ * extending one block toward FACING (away from the placer), the MAIN=false secondary cell renders
+ * nothing and forwards interactions to the master (masterPos anchors the GUI to the master cell).
+ * There is no block entity -- the bench is a static JSON model and the armor design lives entirely
+ * in the screen for now. Shift + right-click (empty hand) on either half opens the ArmorerScreen
+ * design GUI via OpenArmorerPayload; a plain right-click deliberately PASSes, reserved for future
+ * on-bench interactions. Placement is refused unless the secondary cell can be replaced, and
+ * breaking either half tears down the other in onRemove. The shape is a tabletop slab (y 12-15px,
+ * rotation-invariant so no per-facing variants); because that is not a full cube, vanilla would
+ * classify the cell walkable and NPCs would path onto it and snag, so isPathfindable returns false
+ * to make every pathfinder route around it.
  */
 public class ArmorersWorkbenchBlock extends HorizontalDirectionalBlock {
     public static final MapCodec<ArmorersWorkbenchBlock> CODEC = simpleCodec(ArmorersWorkbenchBlock::new);
-    /** True for the master cell (renders the model); false for the secondary cell. */
     public static final BooleanProperty MAIN = BooleanProperty.create("main");
-    /** Tabletop slab (y 12–15px), shared by both cells — rotation-invariant, so no per-facing shape. */
     public static final VoxelShape SHAPE = Block.box(0.0, 12.0, 0.0, 16.0, 15.0, 16.0);
 
     public ArmorersWorkbenchBlock(BlockBehaviour.Properties properties) {
@@ -56,7 +61,7 @@ public class ArmorersWorkbenchBlock extends HorizontalDirectionalBlock {
 
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
-        Direction facing = context.getHorizontalDirection(); // the bench extends away from the player
+        Direction facing = context.getHorizontalDirection();
         BlockPos secondary = context.getClickedPos().relative(facing);
         if (!context.getLevel().getBlockState(secondary).canBeReplaced(context)) return null;
         return defaultBlockState().setValue(FACING, facing).setValue(MAIN, true);
@@ -76,17 +81,12 @@ public class ArmorersWorkbenchBlock extends HorizontalDirectionalBlock {
         return SHAPE;
     }
 
-    /**
-     * The collision box isn't a full block, so vanilla classifies the cell as walkable and NPCs path
-     * onto it and snag. Mark it un-pathfindable so every pathfinder routes around it.
-     */
     @Override
     protected boolean isPathfindable(BlockState state,
                                      net.minecraft.world.level.pathfinder.PathComputationType type) {
         return false;
     }
 
-    /** The master cell of this multiblock (the cell whose pos the screen is anchored to). */
     private static BlockPos masterPos(BlockPos pos, BlockState state) {
         return state.getValue(MAIN) ? pos : pos.relative(state.getValue(FACING).getOpposite());
     }
@@ -94,8 +94,6 @@ public class ArmorersWorkbenchBlock extends HorizontalDirectionalBlock {
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos,
                                                Player player, BlockHitResult hit) {
-        // Shift + right-click (empty hand) opens the design screen; a plain right-click is left free
-        // for future on-bench interactions.
         if (!player.isSecondaryUseActive()) {
             return InteractionResult.PASS;
         }
@@ -110,8 +108,7 @@ public class ArmorersWorkbenchBlock extends HorizontalDirectionalBlock {
         if (!oldState.is(newState.getBlock())) {
             Direction facing = oldState.getValue(FACING);
             boolean main = oldState.getValue(MAIN);
-            // Tear down the other half. The bounce terminates: by the time this fires, this cell is
-            // already air, so the other cell's onRemove sees air here and stops.
+            // Recursion terminates: this cell is already air when the other half's onRemove runs.
             BlockPos other = main ? pos.relative(facing) : pos.relative(facing.getOpposite());
             if (level.getBlockState(other).is(this)) {
                 level.removeBlock(other, false);

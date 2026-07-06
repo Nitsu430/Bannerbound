@@ -16,8 +16,9 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Pantheon-mode HUD strip (FAITH_PLAN Part 3): chain size, the key legend, and — once
- * Star Charts is researched — the hovered star's type/domain. Hidden outside the mode.
+ * Pantheon-mode HUD strip (FAITH_PLAN Part 3): chain size, the key legend, and -- once Star Charts
+ * is researched -- the hovered star's type/domain readout (type knowledge is Star-Charts gated).
+ * Hidden outside Pantheon mode.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -46,7 +47,6 @@ public final class PantheonHudLayer implements LayeredDraw.Layer {
         graphics.drawCenteredString(mc.font, title, cx, y, 0xFFFFFFFF);
         graphics.drawCenteredString(mc.font, legend, cx, y + 12, 0xFFCCCCCC);
 
-        // Hovered star readout — type knowledge is Star Charts gated (FAITH_PLAN).
         int hovered = PantheonMode.hoveredStarId();
         SkyField sky = ClientSkyState.field();
         if (hovered >= 0 && sky != null && ClientFaithTreeState.isCompleted(STAR_CHARTS_NODE)) {

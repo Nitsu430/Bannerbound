@@ -10,8 +10,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: open the Citizens screen for the requesting player's settlement. The server
- * looks up the player's settlement and replies with {@link SettlementCitizensListPayload}.
+ * Client -> server: open the Citizens screen for the requesting player's settlement. The server
+ * looks up the player's settlement and replies with SettlementCitizensListPayload.
  */
 @ApiStatus.Internal
 public record RequestSettlementCitizensPayload() implements CustomPacketPayload {

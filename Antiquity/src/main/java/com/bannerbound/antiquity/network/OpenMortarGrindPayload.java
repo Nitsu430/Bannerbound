@@ -13,7 +13,7 @@ import net.minecraft.resources.ResourceLocation;
 
 /** Server to client: open the press-and-grind mortar minigame. {@code reps} is how many press +
  *  grind beats finish the batch; {@code batch} is how many ingredients are loaded (for display).
- *  Non-skill, like the pottery wheel — there's no accuracy scoring. */
+ *  Non-skill, like the pottery wheel - there's no accuracy scoring. */
 @ApiStatus.Internal
 public record OpenMortarGrindPayload(BlockPos pos, int reps, int batch)
         implements CustomPacketPayload {

@@ -6,15 +6,15 @@ import net.minecraft.client.gui.GuiGraphics;
 
 /**
  * Small radial-arc drawing helpers (extracted from the research-tree blueprint arcs) for the
- * happiness pillar gauges and any other ring UI. Integer pixel rasterisation, no anti-aliasing —
- * matches Minecraft's pixelated style. Screen space: +Y is down, so {@code -π/2} is straight up and
- * positive sweep goes clockwise.
+ * happiness pillar gauges and any other ring UI. Integer pixel rasterisation, no anti-aliasing,
+ * to match Minecraft's pixelated style. Screen space: +Y is down, so -pi/2 is straight up and
+ * positive sweep goes clockwise. drawArc renders drawFrac of a sweepRad arc from startRad one
+ * pixel wide; drawRing stacks that as concentric arcs from r inward for a thickness-pixel ring.
  */
 @ApiStatus.Internal
 public final class Arcs {
     private Arcs() {}
 
-    /** One pixel-wide arc: {@code drawFrac} of a {@code sweepRad} arc from {@code startRad}. */
     public static void drawArc(GuiGraphics graphics, int cx, int cy, int r,
                                double startRad, double sweepRad, float drawFrac, int color) {
         int segs = Math.max(8, (int) (Math.abs(sweepRad) / (Math.PI * 2) * Math.max(12, r * 3)));
@@ -28,7 +28,6 @@ public final class Arcs {
         }
     }
 
-    /** A {@code thickness}-pixel ring: concentric arcs from {@code r} inward. */
     public static void drawRing(GuiGraphics graphics, int cx, int cy, int r, int thickness,
                                 double startRad, double sweepRad, float drawFrac, int color) {
         for (int t = 0; t < Math.max(1, thickness); t++) {

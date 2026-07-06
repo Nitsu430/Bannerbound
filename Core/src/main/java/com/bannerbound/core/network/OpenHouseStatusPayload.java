@@ -16,13 +16,13 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: open the House status panel. Carries a snapshot of the home's status
- * (resolved to a translated string), bed count, current appeal score + beauty tier (name + signed
- * tier index for colouring), the enclosed interior volume (the crowdedness / space-per-bed source),
- * and each resident's styled display name component.
- *
- * <p>The Component-typed fields piggy-back on {@link ComponentSerialization#STREAM_CODEC} for
- * settlement-tint preservation, same trick as {@link OpenCitizenScreenPayload}.
+ * S->C: open the House status panel. Carries a snapshot of the home's status (resolved to a
+ * translated string), bed count, current appeal score + beauty tier (name + signed tier index for
+ * colouring), the enclosed interior volume (the crowdedness / space-per-bed source), and each
+ * resident's styled display name component. The Component-typed fields piggy-back on
+ * ComponentSerialization.STREAM_CODEC for settlement-tint preservation, same trick as
+ * OpenCitizenScreenPayload. Each DemandView is one active home demand for the panel checklist: its
+ * tag suffix (mapped to a lang label) plus met state.
  */
 @ApiStatus.Internal
 public record OpenHouseStatusPayload(
@@ -40,7 +40,6 @@ public record OpenHouseStatusPayload(
     List<Component> residentNames,
     List<UUID> residentIds
 ) implements CustomPacketPayload {
-    /** One active home demand for the panel checklist: its tag suffix (→ lang label) + met state. */
     public record DemandView(String suffix, boolean met) {}
 
     public static final CustomPacketPayload.Type<OpenHouseStatusPayload> TYPE =

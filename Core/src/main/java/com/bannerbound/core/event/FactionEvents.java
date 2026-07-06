@@ -45,14 +45,34 @@ import net.neoforged.neoforge.event.level.BlockEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The "vanilla world cares about bannerbounds" glue layer. Subscribed to every event that
- * needs bannerbound-aware behavior: login (claim sync), block place/break (chunk protection +
- * town hall placement), living damage (friendly fire + claim protection), projectile impacts,
- * and the campfire-as-town-hall flow (place unlit → settle popup → light on settle, shift+RC
- * to promote, break to clear).
- * <p>
- * If you're adding a new "vanilla action should be bannerbound-aware" interaction (e.g. crops
- * only grow in claimed land), this is the home for the event handler.
+ * The "vanilla world respects faction claims" glue layer: every handler that makes an ordinary
+ * Minecraft action bannerbound-aware. Registered on the mod event bus, all handlers server-side. If
+ * you are adding a new "vanilla action should respect claims" interaction (e.g. crops only grow in
+ * claimed land), this is where the event handler belongs.
+ *
+ * Login (onPlayerLoggedIn) fans out the one-time client sync: claim map, custom language, the faith
+ * sky (seed + celestialSpeed, from which the client regenerates the whole star field / solar system),
+ * faith + diplomacy + pantheon + journal + crisis + codex state, and a mirror of the block-selection
+ * registry so a Foreman's Rod renders existing selections without waiting for the next mutation
+ * broadcast. It also re-pushes any seed-picker prompts that queued while the player was offline;
+ * AwaitingSeedRegistry.drainFor is idempotent (it removes drained entries so a re-login cannot
+ * double-send), and stale entries whose selection was deleted offline are silently dropped.
+ *
+ * Chunk protection: onBlockPlace / onBlockBreak / onLivingDamage / onProjectileImpact cancel actions
+ * against another settlement's claimed chunks (with op bypass and cross-faction "discovery"
+ * bookkeeping); onLivingDamage additionally blocks same-settlement friendly fire. onBlockPlaceBeauty /
+ * onBlockBreakBeauty feed a chunk's diminishing-returns beauty queue and MUST run at LOWEST priority
+ * so they observe the protection handlers' cancel and never record a cancelled action.
+ *
+ * Town-hall-via-campfire flow: a campfire placed on unclaimed land is forced UNLIT, which is exactly
+ * what arms it as a town-hall candidate (unless the server is at max factions, in which case founding
+ * is impossible so it stays a normal lit campfire). Right-clicking an unlit candidate opens the settle
+ * popup; shift+right-click on a lit campfire in your own territory promotes it to town hall; a plain
+ * right-click on your existing town hall opens the management screen -- but only after
+ * FactionBanner.requireRaised gates it (no raised banner = no command), and that same gate sweeps a
+ * silently-lost banner and fires the full alarm. Breaking the town hall clears townHallPos and
+ * notifies members; the town hall is protected by its OWNING settlement independent of chunk claim
+ * (only a member or an op may break it).
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -65,10 +85,7 @@ public final class FactionEvents {
         if (event.getEntity() instanceof ServerPlayer player) {
             SettlementManager.sendClaimsTo(player);
             com.bannerbound.core.language.CustomLanguageSync.sendTo(player);
-            // The faith sky: seed + celestialSpeed, from which the client generates the
-            // entire star field + solar system (FAITH_PLAN.md Part 3). Sent once per login.
             com.bannerbound.core.api.faith.SkyStateSync.sendTo(player);
-            // Faith state (devotion, name, choice window) for the town hall surfaces.
             MinecraftServer loginServer = player.getServer();
             if (loginServer != null) {
                 com.bannerbound.core.api.settlement.Settlement faithSettlement =
@@ -84,27 +101,16 @@ public final class FactionEvents {
                             .withStyle(ChatFormatting.RED));
                     }
                 }
-                // Pantheon for the believer sky + Pantheon mode exclusions (empty list
-                // for the faithless, clearing any stale client state).
                 com.bannerbound.core.api.faith.FaithManager.sendConstellationsTo(loginServer, player);
                 com.bannerbound.core.journal.JournalManager.sendTo(player);
                 com.bannerbound.core.crisis.CrisisManager.sendStateTo(player);
                 com.bannerbound.core.codex.CodexManager.reconcile(player, false);
             }
-            // Seed the joining player's mirror of the block-selection registry so a Foreman's
-            // Rod in their hand can immediately render existing selections without waiting for
-            // the next mutation-triggered broadcast.
             com.bannerbound.core.world.SelectionBroadcaster.sendTo(player);
-            // Drain any seed-picker prompts that fired while this player was offline. Each
-            // pending entry → one OpenSeedPickerPayload pushed in order. The screens will queue
-            // up; the player works through them by picking or skipping.
             drainPendingSeedPrompts(player);
         }
     }
 
-    /** Re-pushes any seed-picker prompts that queued up for {@code player} while they were
-     *  offline. Idempotent: {@link com.bannerbound.core.api.farmer.AwaitingSeedRegistry#drainFor}
-     *  removes the entries so re-login won't double-send. */
     private static void drainPendingSeedPrompts(ServerPlayer player) {
         MinecraftServer server = player.getServer();
         if (server == null) return;
@@ -115,7 +121,6 @@ public final class FactionEvents {
             com.bannerbound.core.api.farmer.AwaitingSeedRegistry.drainFor(player.getUUID());
         for (UUID rodId : pending) {
             com.bannerbound.core.api.world.BlockSelection sel = registry.get(rodId);
-            // Stale entries (selection was deleted while offline) are silently dropped.
             if (sel == null || sel.completed()) continue;
             if (!"farmer".equals(sel.workstationType())) continue;
             if (!sel.seedItemId().isEmpty()) continue;
@@ -199,13 +204,9 @@ public final class FactionEvents {
         }
     }
 
-    /**
-     * Chunk-beauty bookkeeping for block placement. Runs at LOWEST priority so it sees whether
-     * the protection handler above cancelled the placement — a cancelled place is not recorded.
-     * The placed block joins its chunk's diminishing-returns queue in placement order.
-     */
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onBlockPlaceBeauty(BlockEvent.EntityPlaceEvent event) {
+        // LOWEST priority + this guard: a place the protection handler cancelled must not be recorded.
         if (event.isCanceled()) {
             return;
         }
@@ -215,7 +216,6 @@ public final class FactionEvents {
         }
     }
 
-    /** Chunk-beauty bookkeeping for block breaking — see {@link #onBlockPlaceBeauty}. */
     @SubscribeEvent(priority = EventPriority.LOWEST)
     public static void onBlockBreakBeauty(BlockEvent.BreakEvent event) {
         if (event.isCanceled()) {
@@ -250,7 +250,6 @@ public final class FactionEvents {
             return;
         }
 
-        // Friendly fire: same-settlement players cannot damage each other.
         if (victim instanceof ServerPlayer victimPlayer) {
             Settlement attackerSettlement = data.getByPlayer(attacker.getUUID());
             Settlement victimSettlement = data.getByPlayer(victimPlayer.getUUID());
@@ -265,7 +264,6 @@ public final class FactionEvents {
             return;
         }
 
-        // Protection: cannot damage anything inside another settlement's claimed chunk.
         ChunkPos victimChunk = new ChunkPos(victim.blockPosition());
         if (ChunkProtection.isProtected(data, victimChunk, attacker.getUUID())) {
             event.setCanceled(true);
@@ -309,11 +307,6 @@ public final class FactionEvents {
         }
     }
 
-    /**
-     * Campfires placed in unclaimed chunks default to unlit. The unlit state is what makes them
-     * "ready to be a town hall" — right-clicking one opens the settle popup. Campfires placed in
-     * claimed chunks behave as normal vanilla campfires (lit on placement).
-     */
     @SubscribeEvent
     public static void onCampfirePlace(BlockEvent.EntityPlaceEvent event) {
         BlockState placed = event.getPlacedBlock();
@@ -335,8 +328,6 @@ public final class FactionEvents {
         if (data.getByChunk(new ChunkPos(pos).toLong()) != null) {
             return;
         }
-        // Server full (every color taken): no settlement can be founded, so don't arm this
-        // campfire as a town-hall candidate — leave it a normal lit campfire.
         if (SettlementManager.isAtMaxFactions(data)) {
             return;
         }
@@ -344,13 +335,6 @@ public final class FactionEvents {
         level.setBlock(pos, placed.setValue(CampfireBlock.LIT, false), 3);
     }
 
-    /**
-     * Right-clicking campfires drives the whole town-hall flow:
-     *   - Unlit in unclaimed land → open the settle popup, this campfire becomes the pending town hall.
-     *   - Lit, your settlement's territory, this IS your town hall → open management screen.
-     *   - Shift+right-click, your settlement's territory, settlement has no town hall → promote.
-     *   - Anything else → fall through to vanilla campfire behavior.
-     */
     @SubscribeEvent
     public static void onCampfireRightClick(PlayerInteractEvent.RightClickBlock event) {
         Level level = event.getLevel();
@@ -386,9 +370,6 @@ public final class FactionEvents {
                 event.setCanceled(true);
                 return;
             }
-            // Server full: this campfire was placed (and armed unlit) before the last color was
-            // claimed. It can't found anything now, so light it — demoting it to a normal
-            // campfire — and tell the player why instead of opening a dead-end founding menu.
             if (SettlementManager.isAtMaxFactions(data)) {
                 level.setBlock(pos, state.setValue(CampfireBlock.LIT, true), 3);
                 player.sendSystemMessage(Component.translatable("bannerbound.settle.error.max_factions")
@@ -443,28 +424,19 @@ public final class FactionEvents {
                     event.setCanceled(true);
                     return;
                 }
-                // No faction banner raised → no command: the town hall menu refuses to open
-                // (and via this gate, every screen reached from it). requireRaised also sweeps
-                // a stale registration (banner destroyed by explosion etc. fires no break
-                // event), so a silently-lost banner is discovered — with the full alarm — here.
                 if (!com.bannerbound.core.api.settlement.FactionBanner.requireRaised(
                         (ServerLevel) level, player, playerSettlement)) {
                     event.setCanceled(true);
                     return;
                 }
-                // Push the latest population/economy snapshot first so the screen renders with
-                // up-to-date numbers on the very first frame.
                 PacketDistributor.sendToPlayer(player,
                     com.bannerbound.core.api.settlement.ImmigrationManager.buildPayload(
                         player.serverLevel(), playerSettlement));
-                // Per-player government-vote state: 0 = none, 1 = council, 2 = chiefdom.
                 com.bannerbound.core.api.settlement.Settlement.Government myVote =
                     playerSettlement.governmentVotes().get(player.getUUID());
                 int myVoteOrdinal = myVote == null ? 0 : myVote.ordinal();
                 int onlineMembers = com.bannerbound.core.api.settlement.SettlementManager
                     .countOnlineMembers(player.getServer(), playerSettlement);
-                // Chief-election snapshot: candidates (members), names, current vote counts,
-                // and this player's own pick. Empty when not in the election window.
                 boolean chiefElectionActive = playerSettlement.chiefdomElectionWindowOpen();
                 java.util.ArrayList<java.util.UUID> chiefCandidates = new java.util.ArrayList<>();
                 java.util.ArrayList<String> chiefCandidateNames = new java.util.ArrayList<>();
@@ -491,26 +463,18 @@ public final class FactionEvents {
                 java.util.UUID myChiefNom = playerSettlement.chiefNominations().get(player.getUUID());
                 if (myChiefNom == null) myChiefNom = new java.util.UUID(0L, 0L);
 
-                // Step 7 — Chief identification: true iff Chiefdom AND this player is the
-                // seated chief. Drives the client-side gate on Disband / Expand Territory.
                 boolean playerIsChief =
                     playerSettlement.governmentType()
                         == com.bannerbound.core.api.settlement.Settlement.Government.CHIEFDOM
                     && player.getUUID().equals(playerSettlement.chiefPlayerId());
-                // Step 15 — Regent identification: stand-in chief authority. Routine
-                // actions allowed; weighty actions still blocked.
                 boolean playerIsRegent =
                     playerSettlement.governmentType()
                         == com.bannerbound.core.api.settlement.Settlement.Government.CHIEFDOM
                     && player.getUUID().equals(playerSettlement.regentPlayerId());
-                // Step-Down cooldown: absolute tick this chief may resign (seat tick + term).
-                // -1 when not the chief or a pre-feature chief with no anchor (no cooldown).
                 long chiefStepDownReadyTick = (playerIsChief && playerSettlement.chiefSinceTick() >= 0)
                     ? playerSettlement.chiefSinceTick()
                         + com.bannerbound.core.api.settlement.SettlementManager.CHIEF_STEP_DOWN_COOLDOWN_TICKS
                     : -1L;
-                // Leave cooldown: absolute tick this member may walk out (set on join/found). 0 once
-                // it's elapsed (or never applied). Drives the Leave button's live mm:ss countdown.
                 long leaveReadyTick = com.bannerbound.core.api.settlement.SettlementData
                     .get(player.serverLevel()).leaveCooldownUntil(player.getUUID());
 
@@ -552,19 +516,13 @@ public final class FactionEvents {
                     chiefStepDownReadyTick,
                     leaveReadyTick,
                     playerSettlement.identityRgbList()));
-                // Push the policy snapshot too so the Policies tab has data the moment it's
-                // opened. Settlement-wide broadcast is fine here (low frequency, town-hall open).
                 if (player.getServer() != null) {
                     com.bannerbound.core.api.settlement.SettlementManager
                         .broadcastPolicyState(player.getServer(), playerSettlement);
                     com.bannerbound.core.api.settlement.SettlementManager
                         .broadcastPaletteState(player.getServer(), playerSettlement);
-                    // Labor snapshot so the Labor tab has data the moment it opens.
                     com.bannerbound.core.api.settlement.SettlementManager
                         .sendLaborStateTo(player);
-                    // Votes + Suggestions snapshots, same reason (cheap when empty). The research
-                    // suggestion sync rides along so a relogged chief's Suggestions tab isn't
-                    // missing rows that were suggested before they joined.
                     com.bannerbound.core.api.settlement.SettlementManager.sendChatVotesStateTo(
                         player.getServer(), player,
                         com.bannerbound.core.api.settlement.ChatVoteManager
@@ -574,9 +532,6 @@ public final class FactionEvents {
                     com.bannerbound.core.api.settlement.SettlementManager
                         .broadcastSuggestionState(player.getServer(), playerSettlement);
                     com.bannerbound.core.api.settlement.DiplomacyManager.sendDiplomacyState(player);
-                    // Settlement unrest warnings (homelessness / strikes / coup) so the Town Hall
-                    // Main tab can show them. Single source of truth — SettlementManager computes,
-                    // we just relay each already-styled Component to this player.
                     PacketDistributor.sendToPlayer(player,
                         new com.bannerbound.core.network.SettlementWarningsPayload(
                             com.bannerbound.core.api.settlement.SettlementManager
@@ -587,13 +542,9 @@ public final class FactionEvents {
         }
     }
 
-    /**
-     * If the town hall campfire is broken, clear the settlement's townHallPos and notify members.
-     * Members can then shift+right-click another lit campfire in their territory to promote it.
-     */
     @SubscribeEvent
     public static void onCampfireBreak(BlockEvent.BreakEvent event) {
-        // A break already cancelled by chunk protection (above) must NOT clear the town hall.
+        // A break already cancelled by chunk protection must NOT clear the town hall.
         if (event.isCanceled()) {
             return;
         }
@@ -609,8 +560,6 @@ public final class FactionEvents {
         BlockPos pos = event.getPos();
         for (Settlement s : data.all()) {
             if (pos.equals(s.townHallPos())) {
-                // The town hall is protected by its OWNING settlement, independent of whether the
-                // chunk is claimed: only a member (or an op) may break it. Everyone else is blocked.
                 if (event.getPlayer() instanceof ServerPlayer breaker
                         && !s.members().contains(breaker.getUUID())
                         && !ChunkProtection.shouldBypass(breaker)) {

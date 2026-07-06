@@ -1,6 +1,6 @@
 package com.bannerbound.core.language;
 
-/** Contextual forms of the same generated word. */
+/** The contextual registers a generated word can take; RegisterForms holds one value per register. */
 public enum LanguageRegister {
     SPOKEN,
     WRITTEN,

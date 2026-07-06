@@ -11,11 +11,16 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * The boar charge: a scared, herd-elected pig pauses (~0.1 s wind-up), eyes the player, then dashes
- * forward — committed but slightly homing so it's dodgeable — and on impact deals damage and then
- * flees. Only the pig holding a live {@code BOAR_CHARGE_CLAIM} (see {@link HuntingFear#electBoarCharger})
- * charges; the rest of the herd flees. Registered at priority 1 BEFORE the flee goals so the charger
- * wins MOVE/LOOK; once it's done it drops the claim and falls through to fleeing.
+ * The boar charge: a scared, herd-elected pig pauses (~0.1 s wind-up) squaring up on the player,
+ * then dashes head-first, committed but slightly homing (BOAR_CHARGE_REDIRECT blends the direction
+ * toward the target each tick, so a standing target is hit but a dodge works), and on impact deals
+ * damage. Only the pig holding a live {@code BOAR_CHARGE_CLAIM} (see
+ * {@link HuntingFear#electBoarCharger}) charges, and never while ridden; the rest of the herd flees.
+ * Registered at priority 1 BEFORE the flee goals so the charger wins MOVE/LOOK; stop() re-scares the
+ * pig and drops the claim, so the next tick it falls through to fleeing. The charge drives movement
+ * via raw setDeltaMovement rather than the navigator, so the body-rotation controller never turns
+ * the pig toward its motion: faceDir() snaps body + head yaw manually, otherwise the boar lunges
+ * sideways/rear-first ("butt-slam").
  */
 public class BoarChargeGoal extends Goal {
     private enum Phase { WINDUP, CHARGE, DONE }
@@ -43,7 +48,7 @@ public class BoarChargeGoal extends Goal {
             return false;
         }
         if (pig.getControllingPassenger() != null) {
-            return false; // don't fight a rider
+            return false;
         }
         this.target = findTarget();
         return this.target != null;
@@ -72,17 +77,16 @@ public class BoarChargeGoal extends Goal {
         switch (phase) {
             case WINDUP -> {
                 pig.getNavigation().stop();
-                faceDir(horizontalToward(target)); // turn to square up on the player before lunging
+                faceDir(horizontalToward(target));
                 if (--windupLeft <= 0) {
                     this.chargeDir = horizontalToward(target);
                     this.phase = Phase.CHARGE;
                 }
             }
             case CHARGE -> {
-                // Slightly track the player so a standing target is hit but a dodge works.
                 double k = Config.BOAR_CHARGE_REDIRECT.get();
                 this.chargeDir = chargeDir.scale(1.0 - k).add(horizontalToward(target).scale(k)).normalize();
-                faceDir(chargeDir); // body leads the charge — head-first, not a sideways butt-slam
+                faceDir(chargeDir);
                 double speed = Config.BOAR_CHARGE_SPEED.get();
                 pig.setDeltaMovement(chargeDir.x * speed, pig.getDeltaMovement().y, chargeDir.z * speed);
                 pig.hasImpulse = true;
@@ -92,7 +96,7 @@ public class BoarChargeGoal extends Goal {
                     this.dealtHit = true;
                     this.phase = Phase.DONE;
                 } else if (--chargeLeft <= 0) {
-                    this.phase = Phase.DONE; // missed
+                    this.phase = Phase.DONE;
                 }
             }
             default -> { }
@@ -103,23 +107,17 @@ public class BoarChargeGoal extends Goal {
     public void stop() {
         this.phase = Phase.DONE;
         this.target = null;
-        // After charging, the pig is spooked-but-no-longer-the-charger → next tick it flees.
         HuntingFear.scare(pig, Config.SCARED_DURATION_TICKS.get());
         HuntingFear.clearChargeClaim(pig);
         pig.getNavigation().stop();
     }
 
-    /**
-     * Snap the pig's body (and head) yaw to a horizontal direction. The charge drives movement via
-     * {@code setDeltaMovement} rather than the navigator, so the body-rotation controller never turns
-     * the pig to face where it's going — without this it lunges sideways/rear-first ("butt-slam").
-     * Setting the {@code *O} (previous-tick) fields too avoids a one-tick interpolation snap.
-     */
     private void faceDir(Vec3 dir) {
         if (dir.lengthSqr() < 1.0e-6) {
             return;
         }
         float yaw = (float) (Mth.atan2(dir.z, dir.x) * (180.0 / Math.PI)) - 90.0F;
+        // Also set the *O previous-tick fields or the yaw change interpolates as a one-tick visual snap.
         pig.setYRot(yaw);
         pig.yBodyRot = yaw;
         pig.yBodyRotO = yaw;

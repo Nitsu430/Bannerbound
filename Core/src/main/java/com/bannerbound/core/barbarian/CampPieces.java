@@ -11,11 +11,11 @@ import net.minecraft.server.MinecraftServer;
 
 /**
  * Discovers the authored camp building pieces for each {@link CampType} by scanning the datapack
- * folder {@code data/<ns>/structures/<type>/*.nbt} (any namespace — addons can contribute), and
+ * folder {@code data/<ns>/structure/<type>/*.nbt} (any namespace - addons can contribute), and
  * classifies each by filename into a {@link Role}. Results are cached per type and rebuilt on
  * {@code /reload}.
  *
- * <p>Returned ids are {@code StructureTemplateManager} ids (the path with the {@code structures/}
+ * <p>Returned ids are {@code StructureTemplateManager} ids (the path with the {@code structure/}
  * prefix and {@code .nbt} suffix stripped), so {@code level.getStructureManager().get(id)} resolves.
  */
 public final class CampPieces {
@@ -29,8 +29,6 @@ public final class CampPieces {
     private CampPieces() {
     }
 
-    /** All pieces authored for a type. Until a type has its own builds, every type reuses the TRIBE
-     *  set (the first authored). Empty only if even TRIBE has none (→ caller's procedural fallback). */
     public static List<Piece> forType(MinecraftServer server, CampType type) {
         List<Piece> own = CACHE.computeIfAbsent(type, t -> scan(server, t));
         if (own.isEmpty() && type != CampType.TRIBE) {
@@ -47,20 +45,18 @@ public final class CampPieces {
         return out;
     }
 
-    /** Drop the cache so newly-added .nbt files are picked up after a {@code /reload}. */
     public static void clearCache() {
         CACHE.clear();
     }
 
     private static List<Piece> scan(MinecraftServer server, CampType type) {
-        // 1.21 folder is "structure" (SINGULAR) — vanilla ships data/minecraft/structure/…, and
-        // StructureTemplateManager.get() resolves ids against that folder.
+        // 1.21 datapack folder is "structure" (singular), not "structures"
         String dir = "structure/" + type.name().toLowerCase(Locale.ROOT);
         List<Piece> out = new ArrayList<>();
         Map<ResourceLocation, ?> found =
             server.getResourceManager().listResources(dir, loc -> loc.getPath().endsWith(".nbt"));
         for (ResourceLocation full : found.keySet()) {
-            String path = full.getPath(); // structure/<type>/<name>.nbt
+            String path = full.getPath();
             String id = path.substring("structure/".length(), path.length() - ".nbt".length());
             out.add(new Piece(ResourceLocation.fromNamespaceAndPath(full.getNamespace(), id),
                 roleOf(path)));

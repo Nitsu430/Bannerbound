@@ -8,9 +8,10 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Client mirror of this player's settlement wall blueprint (pos → expected state), fed by
- * {@code WallBlueprintSyncPayload} and read every frame by {@link WallGhostRenderer}. Replaced
- * wholesale on each sync; an empty sync clears it (plan cancelled / left settlement).
+ * Client mirror of this player's settlement wall blueprint (pos -> expected state), fed by
+ * WallBlueprintSyncPayload and read every frame by WallGhostRenderer. The volatile map is replaced
+ * wholesale on each sync; an empty sync clears it (plan cancelled / left settlement). Air states are
+ * dropped on set so the ghost renderer only iterates real placements.
  */
 @ApiStatus.Internal
 public final class ClientWallBlueprint {

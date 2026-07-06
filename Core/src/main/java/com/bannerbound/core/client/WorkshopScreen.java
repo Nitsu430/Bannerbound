@@ -25,45 +25,47 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The Workshop menu (opened by shift-right-clicking inside a workshop with the Workshop Orders
- * rod): rename field, status/type/capacity header, the assigned-worker rows and a SCROLLABLE
- * candidate list (unemployed first; mouse wheel scrolls) with each citizen's current job icon.
- * Min-stock rows arrive with Phase 3 (see CRAFTER_PLAN.md).
+ * Client-only Workshop menu, opened by shift-right-clicking inside a workshop with the Workshop
+ * Orders rod. Two bookmark tabs (TownHall style, above the panel's top edge): Workers (the roster)
+ * and Stock (min-stock plus order-queue rows). Switching tabs resets the scroll window.
+ *
+ * <p>Names and icons are painted in the backdrop; only the buttons are real widgets. The candidate
+ * list is unemployed-first (stable within each group) and the mouse wheel scrolls it. The Workers
+ * tab shows a per-worker station-chooser button only when the workshop holds more than one station
+ * family (nothing to choose otherwise). The Stock tab's min-stock and order-queue steps go by 1, or
+ * by 8 with shift held; player orders render gold while the chain's derived auto orders ride along
+ * as a display-only gray "+n" (the +/- buttons edit player orders, never the auto ones). The
+ * capacity row shows workplace appeal right-aligned: the decorating carrot, since a prettier
+ * workshop means happier workers who learn their craft faster.
+ *
+ * <p>typeKnown mirrors the server-side assign gate: an unresearched craft reads as "Unknown
+ * Workshop" everywhere (type line and rename placeholder) and its Assign buttons are disabled with
+ * an explanatory tooltip, so a station pre-placed on old ruins can't be operated (silently) before
+ * the research is earned. The server re-sends the whole menu after every edit (rename / assign /
+ * min-stock +/-); carryUiStateFrom copies tab, scroll and the typed-but-unsaved name from the prior
+ * instance so, e.g., a Stock-tab click doesn't bounce the player back to Workers.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class WorkshopScreen extends PolishedScreen {
     private static final int PANEL_W = 300;
     private static final int PANEL_H = 290;
-    /** Candidate rows visible at once; the wheel scrolls the window. */
     private static final int VISIBLE_ROWS = 5;
     private static final int ROW_H = 18;
 
     private final OpenWorkshopMenuPayload data;
-    /** Whether the settlement has researched this workshop's craft. When false the type reads as
-     *  "Unknown Workshop" and the Assign buttons are disabled — a station pre-placed on old ruins
-     *  can't be operated before the research is earned (mirrors the server-side assign gate). */
     private final boolean typeKnown;
-    /** Candidate indices, unemployed first (stable within each group). */
     private final List<Integer> sortedCandidates = new ArrayList<>();
     private EditBox nameField;
-    /** First visible row of the ACTIVE tab's list; mouse wheel adjusts + rebuilds. */
     private int scroll;
-    /** Active tab: 0 = Workers (roster), 1 = Stock (min-stock rows). */
     private int tab;
-    /** Y where the worker rows start (computed in init, used by the backdrop labels). */
     private int rosterTop;
-    /** Preserves the rename field across scroll rebuilds. */
     private String pendingName;
 
-    /** True when this screen shows the given workshop (used to carry UI state across refreshes). */
     public boolean showsWorkshop(String workshopId) {
         return data.workshopId().equals(workshopId);
     }
 
-    /** Carries tab/scroll/typed-name from the previous screen instance when the server re-sends
-     *  the menu after an edit (rename, assign, min-stock ±) — so a Stock-tab click doesn't bounce
-     *  the player back to the Workers tab. */
     public void carryUiStateFrom(WorkshopScreen previous) {
         this.tab = previous.tab;
         this.scroll = previous.scroll;
@@ -88,8 +90,7 @@ public class WorkshopScreen extends PolishedScreen {
     }
 
     private int panelY() {
-        // Panel + bookmark-tab strip center together as one block (TownHall pattern), keeping
-        // the tabs that protrude above the top edge on-screen.
+        // Panel + bookmark-tab strip center as one block so tabs protruding above the top stay on-screen.
         return (this.height - PANEL_H + BookmarkTab.HEIGHT) / 2;
     }
 
@@ -97,7 +98,6 @@ public class WorkshopScreen extends PolishedScreen {
     protected void init() {
         int x = panelX();
         int y = panelY();
-        // Rename field, prefilled with the custom name (placeholder shows the derived type).
         this.nameField = new EditBox(this.font, x + 12, y + 36, PANEL_W - 80, 20,
             Component.translatable("bannerbound.workshop.name_label"));
         this.nameField.setMaxLength(WorkshopMenu.MAX_NAME_LENGTH);
@@ -114,8 +114,6 @@ public class WorkshopScreen extends PolishedScreen {
             .accent(primaryAccent())
             .build());
 
-        // Tabs: Workers (roster) / Stock (min-stock rows). Switching resets the scroll window.
-        // Bookmark tabs above the panel's top edge — the house tab style.
         BookmarkTab.addRow(this::addRenderableWidget, x, PANEL_W, y,
             java.util.List.of(
                 Component.translatable("bannerbound.workshop.tab_workers"),
@@ -138,12 +136,8 @@ public class WorkshopScreen extends PolishedScreen {
             .build());
     }
 
-    /** Worker roster buttons: assigned rows (Unassign) then the scrolled candidate window
-     *  (Assign). Names + icons are drawn in the backdrop; only the buttons are widgets. */
     private void initWorkersTab(int x) {
         int rowY = rosterTop;
-        // The per-worker station chooser only appears when the workshop holds MORE than one station
-        // family — a single-station workshop has nothing to choose between.
         boolean multiStation = data.stationTypeIds().size() > 1;
         for (int i = 0; i < data.workerIds().size(); i++) {
             final String id = data.workerIds().get(i);
@@ -168,7 +162,7 @@ public class WorkshopScreen extends PolishedScreen {
                 .build());
             rowY += ROW_H;
         }
-        rowY += 12; // candidates header line
+        rowY += 12;
         boolean hasRoom = data.workerIds().size() < data.capacity();
         int end = Math.min(sortedCandidates.size(), scroll + VISIBLE_ROWS);
         for (int row = scroll; row < end; row++) {
@@ -179,8 +173,6 @@ public class WorkshopScreen extends PolishedScreen {
                         new AssignWorkshopWorkerPayload(data.workshopId(), id, true)))
                 .bounds(x + PANEL_W - 72, rowY - 2, 60, 16)
                 .accent(primaryAccent());
-            // Unknown craft → the assign is disabled with a tooltip saying why (the server refuses
-            // it anyway; this is the visible reason so a ruins-placed station isn't a silent mystery).
             if (!typeKnown) {
                 assignBtn.tooltip(net.minecraft.client.gui.components.Tooltip.create(
                     Component.translatable("bannerbound.workshop.assign_locked_tip")));
@@ -192,11 +184,8 @@ public class WorkshopScreen extends PolishedScreen {
         }
     }
 
-    /** Stock rows: per craftable output, a min-stock −/+ pair (left group) and an order-queue
-     *  −/+ pair (right group); shift-click steps by 8. The icon, name, configured minimum, live
-     *  settlement count and queued count are drawn in the backdrop. */
     private void initStockTab(int x) {
-        int rowY = rosterTop + 12; // header line first
+        int rowY = rosterTop + 12;
         int end = Math.min(data.minStockItemIds().size(), scroll + VISIBLE_ROWS);
         for (int row = scroll; row < end; row++) {
             final int itemId = data.minStockItemIds().get(row);
@@ -234,7 +223,6 @@ public class WorkshopScreen extends PolishedScreen {
         }
     }
 
-    /** Mouse wheel over the panel scrolls the active tab's list. */
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
         if (super.mouseScrolled(mouseX, mouseY, scrollX, scrollY)) return true;
@@ -257,7 +245,6 @@ public class WorkshopScreen extends PolishedScreen {
         g.drawCenteredString(this.font, this.title, this.width / 2, y + 8, GuiPalette.TITLE);
         drawIdentityDivider(g, x + 8, y + 20, PANEL_W - 16, identityAccents);
 
-        // Status + reason (specific, color-coded, word-wrapped), then type/capacity lines.
         Workshop.Status status = Workshop.Status.fromOrdinalOrDefault(data.statusOrdinal());
         boolean valid = status == Workshop.Status.VALID;
         Component statusLine = Component.translatable("bannerbound.workshop.status_label")
@@ -277,8 +264,6 @@ public class WorkshopScreen extends PolishedScreen {
         Component capacityLine = Component.translatable("bannerbound.workshop.capacity_label",
             data.workerIds().size(), data.capacity());
         g.drawString(this.font, capacityLine, x + 12, lineY, 0xFFFFFFFF);
-        // Workplace appeal, right-aligned on the capacity row: the carrot for decorating —
-        // a prettier workshop means happier workers who learn their craft faster.
         if (data.appealOrdinal() >= 0) {
             com.bannerbound.core.api.settlement.ChunkBeauty beauty =
                 com.bannerbound.core.api.settlement.ChunkBeauty.byNetworkId(data.appealOrdinal());
@@ -301,14 +286,12 @@ public class WorkshopScreen extends PolishedScreen {
 
     private void drawWorkersTab(GuiGraphics g, int x) {
         int rowY = rosterTop;
-        // When the station-chooser button is shown, clip worker names so they don't run under it.
         int nameClip = data.stationTypeIds().size() > 1 ? PANEL_W - 206 : 0;
         for (int i = 0; i < data.workerNames().size(); i++) {
             drawCitizenRow(g, x, rowY, data.workerNames().get(i), data.workerJobIcons().get(i),
                 null, nameClip);
             rowY += ROW_H;
         }
-        // Candidates header with a "shown / total" scroll hint.
         Component header = Component.translatable("bannerbound.workshop.candidates_header");
         if (sortedCandidates.size() > VISIBLE_ROWS) {
             header = header.copy().append(Component.literal(
@@ -333,19 +316,13 @@ public class WorkshopScreen extends PolishedScreen {
         }
     }
 
-    /** Stock rows: item icon + name + "(have)" (green when satisfied, red when in deficit),
-     *  then the Min column (settlement-wide minimum) and the Orders column (queued count),
-     *  each centered between its −/+ pair laid out in init(). */
     private void drawStockTab(GuiGraphics g, int x) {
         int rowY = rosterTop;
-        // The scroll-range hint lives BELOW the list (drawn after the rows) — appended to the
-        // header it ran under the Min/Orders column captions.
         Component header = Component.translatable("bannerbound.workshop.stock_header");
         g.drawString(this.font, header.copy().withStyle(ChatFormatting.GRAY),
             x + 12, rowY, 0xFFAAAAAA, false);
         int minCenter = x + PANEL_W - 116;
         int orderCenter = x + PANEL_W - 44;
-        // Column captions over the two −/+ groups.
         g.drawCenteredString(this.font,
             Component.translatable("bannerbound.workshop.col_min").getString(),
             minCenter, rowY, 0xFFAAAAAA);
@@ -362,8 +339,6 @@ public class WorkshopScreen extends PolishedScreen {
             if (item != Items.AIR) {
                 g.renderItem(new ItemStack(item), x + 12, rowY - 4);
             }
-            // Name + census share the (narrower) left column — clip so long names can't run
-            // under the Min buttons.
             Component nameLine = Component.empty()
                 .append(item.getDescription())
                 .append(Component.literal(" (" + have + ")")
@@ -372,8 +347,6 @@ public class WorkshopScreen extends PolishedScreen {
             g.drawString(this.font, clipped, x + 32, rowY, 0xFFFFFFFF, false);
             String minText = min <= 0 ? "—" : Integer.toString(min);
             g.drawCenteredString(this.font, minText, minCenter, rowY, 0xFFFFFFFF);
-            // Player orders gold; the chain's derived auto orders ride along as a gray "+n"
-            // (display-only — the ± buttons edit player orders, the chain manages its own).
             int auto = row < data.autoOrderCounts().size() ? data.autoOrderCounts().get(row) : 0;
             String orderText = (queued <= 0 && auto <= 0) ? "—"
                 : queued > 0 && auto > 0 ? queued + "+" + auto
@@ -392,8 +365,6 @@ public class WorkshopScreen extends PolishedScreen {
         }
     }
 
-    /** A slim scrollbar along the panel's right edge — the visible cue that the list scrolls
-     *  (mouse wheel). Thumb size/position track the {@link #scroll} window. */
     private void drawScrollbar(GuiGraphics g, int x, int top, int height, int total) {
         if (total <= VISIBLE_ROWS) return;
         int trackX = x + PANEL_W - 8;
@@ -404,8 +375,6 @@ public class WorkshopScreen extends PolishedScreen {
         g.fill(trackX, thumbY, trackX + 3, thumbY + thumbH, 0xFF8B8B8B);
     }
 
-    /** One roster row: 16px job-icon item (barrier-free blank when 0), name, optional status tag.
-     *  {@code maxTextWidth > 0} clips the text so it can't run under a row's right-side buttons. */
     private void drawCitizenRow(GuiGraphics g, int x, int rowY, String name, int iconItemId,
                                 Component tag, int maxTextWidth) {
         int textX = x + 12;
@@ -428,16 +397,12 @@ public class WorkshopScreen extends PolishedScreen {
     }
 
     private Component typeName() {
-        // An unresearched craft never reveals its real type — it reads as "Unknown Workshop"
-        // everywhere typeName() is shown (the type line and the rename field's placeholder hint).
         if (!typeKnown) {
             return Component.translatable("bannerbound.workshop.type_unknown");
         }
         return Component.translatable(WorkBlockRegistry.displayKey(data.derivedTypeId()));
     }
 
-    /** Display label for a worker's pinned station: the station family's name, or "Any" for the
-     *  empty (auto-pick) pin. Shown on the station-chooser button. */
     private Component stationLabel(String typeId) {
         if (typeId == null || typeId.isEmpty()) {
             return Component.translatable("bannerbound.workshop.station_any");
@@ -445,11 +410,9 @@ public class WorkshopScreen extends PolishedScreen {
         return Component.translatable(WorkBlockRegistry.displayKey(typeId));
     }
 
-    /** The next station pin in the cycle [station families…, Any]. An unknown current value (e.g.
-     *  a family that just left the workshop) is treated as Any so the click still advances. */
     private String nextStation(String current) {
         List<String> opts = new ArrayList<>(data.stationTypeIds());
-        opts.add(""); // "Any" — clear the pin
+        opts.add("");
         int idx = opts.indexOf(current == null ? "" : current);
         if (idx < 0) idx = opts.size() - 1;
         return opts.get((idx + 1) % opts.size());

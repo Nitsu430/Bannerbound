@@ -19,11 +19,14 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.EntityHitResult;
 
 /**
- * A thrown blowdart. Flies like an arrow but deals almost no impact damage — its job is to deliver a
- * {@link PoisonType} on a hit (the real threat is the poison, not the prick). Always consumed (never
- * recoverable) like the no-pickup hunting arrows. The carried poison decides which coating it applies,
- * so all poisons reuse this one projectile; it's SYNCED so the client renderer's tinted tip and the
- * coloured in-flight trail match the actual poison (not the default).
+ * A thrown blowdart. Flies like an arrow but deals almost no impact damage; its job is to deliver a
+ * {@link PoisonType} on hit (the real threat is the poison, not the prick, and the owner is passed
+ * to Poisons.applyPoison so the eventual poison kill credits the shooter). Always consumed, never
+ * recoverable (Pickup.DISALLOWED, discarded on impact) like the no-pickup hunting arrows. One
+ * projectile serves every poison: the carried type decides the coating, and it is mirrored into
+ * SYNCED entity data because the {@code poison} field is only populated server-side -- the client
+ * renderer's tinted tip and the tinted particle trail (client-only in tick(); steady in flight, slow
+ * drip once stuck, like a tipped arrow) must read {@link #getPoison()} from that synced data.
  */
 public class BlowdartProjectile extends AbstractArrow {
     private static final EntityDataAccessor<String> DATA_POISON =
@@ -39,8 +42,8 @@ public class BlowdartProjectile extends AbstractArrow {
         super(BannerboundAntiquity.BLOWDART_PROJECTILE.get(), shooter, level,
             new ItemStack(BannerboundAntiquity.WOLFSBANE_DART.get()), null);
         this.poison = poison;
-        this.entityData.set(DATA_POISON, poison.id()); // sync to clients for the tip colour + trail
-        this.pickup = Pickup.DISALLOWED; // darts are spent on use, never picked back up
+        this.entityData.set(DATA_POISON, poison.id());
+        this.pickup = Pickup.DISALLOWED;
         this.setBaseDamage(1.0);
     }
 
@@ -55,8 +58,6 @@ public class BlowdartProjectile extends AbstractArrow {
         return getDartItem();
     }
 
-    /** Trails coloured particles in flight (and a slow drip once stuck) the way a tipped arrow does,
-     *  using the carried poison's tint so the dart reads as that poison mid-air. Client-side only. */
     @Override
     public void tick() {
         super.tick();
@@ -83,17 +84,13 @@ public class BlowdartProjectile extends AbstractArrow {
         }
     }
 
-    /** The poison this dart carries — read from the SYNCED data so the client renderer/trail get the
-     *  right poison (the {@code poison} field is only populated server-side). */
     public PoisonType getPoison() {
         PoisonType t = PoisonType.fromId(this.entityData.get(DATA_POISON));
         return t == null ? PoisonType.WOLFSBANE : t;
     }
 
-    /** The dart item this projectile represents — drives the in-flight renderer (per poison). Uses
-     *  {@code ==} (not a switch) because AbstractArrow's super-constructor calls this BEFORE the
-     *  {@code poison} field is assigned, and a switch on a null enum NPEs on {@code ordinal()}. */
     public ItemStack getDartItem() {
+        // AbstractArrow's super-ctor calls this BEFORE 'poison' is assigned; == tolerates null, a switch NPEs.
         return new ItemStack(poison == PoisonType.BELLADONNA
             ? BannerboundAntiquity.NIGHTSHADE_DART.get()
             : poison == PoisonType.CURARE
@@ -110,7 +107,7 @@ public class BlowdartProjectile extends AbstractArrow {
         DamageSource source = this.damageSources().arrow(this, owner == null ? this : owner);
         target.hurt(source, (float) this.getBaseDamage());
         if (!this.level().isClientSide && target instanceof LivingEntity living && living.isAlive()) {
-            Poisons.applyPoison(living, poison, owner); // recorded so the eventual poison kill credits the shooter
+            Poisons.applyPoison(living, poison, owner);
         }
         this.discard();
     }

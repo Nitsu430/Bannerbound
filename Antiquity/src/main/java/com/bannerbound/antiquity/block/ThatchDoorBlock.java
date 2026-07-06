@@ -11,19 +11,17 @@ import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * A thatch curtain "door" that does NOT swing: right-clicking just toggles it between
- * <b>closed</b> (a solid straw panel you can't walk through) and <b>open</b> (passable — no
- * collision). It reuses vanilla {@link DoorBlock} for the two-tall placement, breaking, redstone
- * and the {@code OPEN} toggle; only the shape is overridden so "open" removes collision instead of
- * sliding a leaf aside. The blockstate swaps the closed/open texture rather than rotating a hinge.
- *
- * <p>The collision panel is a thin slab on the facing-side edge, matching the visible model
- * (which is a 16×32×2 panel modelled on the north edge and rotated by facing in the blockstate).
+ * A thatch curtain "door" that does NOT swing: right-clicking just toggles it between closed (a
+ * solid straw panel you can't walk through) and open (passable - no collision). It reuses vanilla
+ * {@link DoorBlock} for the two-tall placement, breaking, redstone and the OPEN toggle; only the
+ * shape is overridden so "open" removes collision instead of sliding a leaf aside, and the
+ * blockstate swaps the closed/open texture rather than rotating a hinge. The collision panel is a
+ * thin 2px slab on the facing-side edge, matching the visible model (a 16x32x2 panel modelled on
+ * the north edge and rotated by facing in the blockstate). Outline/selection is always the panel
+ * even when open, so an open door can still be targeted to close it.
  */
 public class ThatchDoorBlock extends DoorBlock {
 
-    // Thin 2px collision slabs matching exactly where the visible panel sits for each facing
-    // (the blockstate rotates the north-edge model by facing to match vanilla door placement).
     private static final VoxelShape NORTH_EDGE = Block.box(0, 0, 0, 16, 16, 2);
     private static final VoxelShape SOUTH_EDGE = Block.box(0, 0, 14, 16, 16, 16);
     private static final VoxelShape WEST_EDGE  = Block.box(0, 0, 0, 2, 16, 16);
@@ -34,22 +32,21 @@ public class ThatchDoorBlock extends DoorBlock {
     }
 
     private static VoxelShape panel(BlockState state) {
+        // Inverted on purpose: the blockstate's y-rotation of the north-edge model puts a SOUTH-facing panel on the north edge.
         return switch (state.getValue(FACING)) {
-            case SOUTH -> NORTH_EDGE; // y=0    → panel on north edge
-            case NORTH -> SOUTH_EDGE; // y=180  → panel on south edge
-            case EAST  -> WEST_EDGE;  // y=270  → panel on west edge
-            case WEST  -> EAST_EDGE;  // y=90   → panel on east edge
+            case SOUTH -> NORTH_EDGE;
+            case NORTH -> SOUTH_EDGE;
+            case EAST  -> WEST_EDGE;
+            case WEST  -> EAST_EDGE;
             default    -> NORTH_EDGE;
         };
     }
 
-    /** Outline/selection is always the panel, so you can still target an open door to close it. */
     @Override
     public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
         return panel(state);
     }
 
-    /** Open → walk-through (no collision); closed → solid panel. */
     @Override
     public VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
         return state.getValue(OPEN) ? Shapes.empty() : panel(state);

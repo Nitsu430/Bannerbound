@@ -23,8 +23,11 @@ import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
 /**
  * Draws the {@code /bannerbound chunktype <radius>} debug overlay: a billboarded resource icon + name
- * floating over the centre of each non-empty chunk in {@link ChunkTypeOverlayState}, at the chunk's
- * surface height, until the TTL expires. Mirrors {@link SeedMarkerRenderer}'s icon-billboard approach.
+ * floating over the centre of each non-empty chunk in {@link ChunkTypeOverlayState}, at WORLD_SURFACE
+ * height, until the TTL expires. Fires on RenderLevelStageEvent AFTER_TRANSLUCENT_BLOCKS and billboards
+ * each icon/label to camera yaw+pitch at fullbright. Ordinal 0 = NONE, so it is skipped. TIN has no
+ * item yet, so it borrows an iron nugget as a placeholder. Mirrors SeedMarkerRenderer's icon-billboard
+ * approach. Render thread only.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
@@ -63,7 +66,7 @@ public final class ChunkTypeOverlayRenderer {
                 int idx = (dz + r) * side + (dx + r);
                 if (idx < 0 || idx >= ord.length) continue;
                 int o = ord[idx];
-                if (o <= 0 || o >= vals.length) continue; // 0 = NONE → skip
+                if (o <= 0 || o >= vals.length) continue;
                 ChunkResource type = vals[o];
 
                 int wx = (cx0 + dx) * 16 + 8;
@@ -89,14 +92,13 @@ public final class ChunkTypeOverlayRenderer {
         buffer.endBatch();
     }
 
-    /** Billboarded text label centred at the given camera-relative offset. */
     private static void drawLabel(PoseStack pose, MultiBufferSource buffer, Font font, String text,
                                   double dx, double dy, double dz, float yaw, float pitch, int color) {
         pose.pushPose();
         pose.translate(dx, dy, dz);
         pose.mulPose(com.mojang.math.Axis.YP.rotationDegrees(-yaw));
         pose.mulPose(com.mojang.math.Axis.XP.rotationDegrees(pitch));
-        pose.scale(-0.025f, -0.025f, 0.025f); // font renders +Y down + tiny world-space scale
+        pose.scale(-0.025f, -0.025f, 0.025f); // negative Y: font draws +Y-down; 0.025f = world-space text scale
         org.joml.Matrix4f m = pose.last().pose();
         float x = -font.width(text) / 2f;
         font.drawInBatch(text, x, 0f, color, false, m, buffer, Font.DisplayMode.SEE_THROUGH, 0, FULLBRIGHT);
@@ -112,7 +114,7 @@ public final class ChunkTypeOverlayRenderer {
             case SHEEP -> new ItemStack(Items.WHITE_WOOL);
             case FISH -> new ItemStack(Items.COD);
             case COPPER -> new ItemStack(Items.COPPER_INGOT);
-            case TIN -> new ItemStack(Items.IRON_NUGGET);   // placeholder until a tin item exists
+            case TIN -> new ItemStack(Items.IRON_NUGGET);
             case MARBLE -> new ItemStack(Items.QUARTZ);
             case IRON -> new ItemStack(Items.RAW_IRON);
             case WHEAT -> new ItemStack(Items.WHEAT);

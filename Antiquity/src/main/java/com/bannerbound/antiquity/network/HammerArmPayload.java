@@ -14,7 +14,7 @@ import net.minecraft.resources.ResourceLocation;
 import java.util.UUID;
 
 /**
- * Server → tracking clients: a player started ({@code active=true}) or stopped a cold-hammer session.
+ * Server -> tracking clients: a player started ({@code active=true}) or stopped a cold-hammer session.
  * Clients flag the player in {@code HammerArmState} so the third-person model raises the hammer arm.
  */
 @ApiStatus.Internal

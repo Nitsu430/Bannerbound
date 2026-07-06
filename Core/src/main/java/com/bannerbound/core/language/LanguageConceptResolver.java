@@ -9,7 +9,16 @@ import java.util.Set;
 
 import net.minecraft.resources.ResourceLocation;
 
-/** Normalizes registry ids, job ids, and fallback English labels into language concepts. */
+/**
+ * Token classifier that turns a registry id, job id, or English label (plus optional tag ids) into a
+ * LanguageConcept. It splits the source into singularized tokens and matches them against curated
+ * word sets (wood species/kinds, stone types/kinds, metals, minerals, material/tool/food kinds) to
+ * pick a family, modifier, and kind, so related things ("oak log", "birch plank") share a semantic
+ * root and therefore share a generated word family. Every result is then passed through
+ * LanguageConceptOverrideLoader so datapacks can override it. JOB_BASES and the fallback-name /
+ * surname switches supply the profession words and the English fallbacks used when the custom
+ * language is off.
+ */
 public final class LanguageConceptResolver {
     private static final Map<String, String> JOB_BASES = Map.ofEntries(
         Map.entry("foresters_log", "wood"),

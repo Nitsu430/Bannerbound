@@ -24,17 +24,24 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Renders the Carpenter's Table's dynamic <b>items</b> (the low deposited log pile, the spinning picker
- * result + browse arrows, and the saw-minigame animation). Everything is drawn at the master block's
- * centre (x/z = 0.5) — the blockstate rotation pivot, which stays on the tabletop for any facing and
- * matches the ghost click hitbox. All <b>text</b> (counts, names, the queue) is drawn separately by
+ * Renders the Carpenter's Table's dynamic items: the low decorative log pile (counts live on the
+ * tabletop readout, so the pile stays compact), the spinning translucent picker result with browse
+ * arrows, and the saw-minigame animation. Everything is drawn at the master block's centre
+ * (x/z = 0.5) - the blockstate rotation pivot, which stays on the tabletop for any facing and
+ * matches the ghost click hitbox. All text (counts, names, the queue) is drawn separately by
  * {@link StationReadoutEvents} via a level-stage pass, because glyphs added inside a block-entity
- * renderer don't get flushed reliably.
+ * renderer don't get flushed reliably. While CarpentrySawState is active the saw scene takes over
+ * the tabletop and faces the player via a yaw computed geometrically from the camera->block vector
+ * (atan2(dx, dz)) - captured player-yaw sign conventions kept landing 180 degrees off; this works
+ * because the BER pose is world-axis-aligned, and the minigame freezes the view so the yaw is
+ * effectively fixed. getRenderBoundingBox is grown up and outward because the picker/chips/saw
+ * float well above the block and the model spans a second block toward its facing, so the default
+ * 1x1 per-block cull box popped the floating content out of view at steep or oblique angles.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class WoodworkingTableRenderer implements BlockEntityRenderer<WoodworkingTableBlockEntity> {
-    /** The model's tabletop top face sits at roughly 15px = 0.94. */
+    // The model's tabletop top face sits at ~15px (= 0.94); items rest just above it.
     static final double TOP_Y = 0.96;
     static final double CELL = 0.16;
     static final int MAX_PILE_LAYERS = 2;
@@ -52,13 +59,12 @@ public class WoodworkingTableRenderer implements BlockEntityRenderer<Woodworking
                        MultiBufferSource buffers, int light, int overlay) {
         if (CarpentrySawState.activeFor(be.getBlockPos())) {
             renderSaw(be, pose, buffers, light);
-            return; // the saw animation takes over the tabletop while it runs
+            return;
         }
         renderPile(be, partialTick, pose, buffers, light);
         renderGhost(be, partialTick, pose, buffers);
     }
 
-    /** Low deposited logs. Counts live on the tabletop readout, so this stays decorative and compact. */
     private void renderPile(WoodworkingTableBlockEntity be, float partialTick, PoseStack pose,
                             MultiBufferSource buffers, int light) {
         List<ItemStack> contents = be.getLogs();
@@ -95,8 +101,6 @@ public class WoodworkingTableRenderer implements BlockEntityRenderer<Woodworking
         }
     }
 
-    /** The picker: the selected output floats + spins above the master block (the ghost click hitbox
-     *  spot), with browse arrows when there are multiple offers. */
     private void renderGhost(WoodworkingTableBlockEntity be, float partialTick, PoseStack pose,
                              MultiBufferSource buffers) {
         ItemStack ghost = be.getGhostResult();
@@ -108,15 +112,12 @@ public class WoodworkingTableRenderer implements BlockEntityRenderer<Woodworking
         pose.translate(0.5, y + Math.sin(t * 0.1F) * 0.04F, 0.5);
         pose.mulPose(Axis.YP.rotationDegrees(t * 3.0F));
         pose.scale(0.34F, 0.34F, 0.34F);
-        // Translucent, like the other workstations' recipe ghosts (and now matching the readout chips).
         itemRenderer.renderStatic(ghost, ItemDisplayContext.NONE, LightTexture.FULL_BRIGHT,
             OverlayTexture.NO_OVERLAY, pose, GhostItemRenderer.wrap(buffers, 155), be.getLevel(), 0);
         pose.popPose();
         GhostArrowRenderer.render(be, pose, buffers);
     }
 
-    /** The in-world saw animation. The scene faces the player, with the log fed left-to-right and the
-     *  saw stroking across the tabletop depth. */
     private void renderSaw(WoodworkingTableBlockEntity be, PoseStack pose, MultiBufferSource buffers, int light) {
         float progress = CarpentrySawState.progress;
         float pulse = CarpentrySawState.pulseAmount();
@@ -126,24 +127,19 @@ public class WoodworkingTableRenderer implements BlockEntityRenderer<Woodworking
 
         pose.pushPose();
         pose.translate(0.5, TOP_Y + 0.16, 0.5);
-        // Turn the scene's front (+Z) to point straight at the camera. Computed geometrically from the
-        // camera→block vector (NOT a captured yaw, whose sign conventions kept landing 180° off): the
-        // BER pose is world-axis-aligned, so a world-space Y rotation of atan2(dx, dz) aims +Z at the
-        // viewer. The minigame freezes the view, so this is effectively fixed yet always faces the player.
+        // sceneYaw is derived from the camera->block vector, never a captured player yaw (see class doc).
         pose.mulPose(Axis.YP.rotationDegrees(CarpentrySawState.sceneYaw));
 
-        // The log: a normal block scaled down, fed left→right through the saw as it's cut.
         double slideX = -0.36 + progress * 0.62;
         pose.pushPose();
         pose.translate(slideX, 0.0, 0.0);
         pose.scale(0.68F, 0.68F, 0.68F);
-        pose.mulPose(Axis.ZP.rotationDegrees(90.0F)); // lay it on its side (end-grain to the ends)
+        pose.mulPose(Axis.ZP.rotationDegrees(90.0F));
         itemRenderer.renderStatic(log, ItemDisplayContext.NONE, light, OverlayTexture.NO_OVERLAY,
             pose, buffers, be.getLevel(), 0);
         pose.popPose();
         renderSawdust(be, pose, buffers, progress, pulse, light);
 
-// The saw rotation
         pose.pushPose();
         pose.translate(0.0, 0.18 - pulse * 0.035, 0.24 - CarpentrySawState.sawY * 0.36);
         pose.scale(0.8F + pulse * 0.05F, 0.8F + pulse * 0.05F, 0.8F + pulse * 0.05F);
@@ -157,7 +153,6 @@ public class WoodworkingTableRenderer implements BlockEntityRenderer<Woodworking
         pose.popPose();
     }
 
-    /** Small physical shaving chips around the cut point so progress reads on the table itself. */
     private void renderSawdust(WoodworkingTableBlockEntity be, PoseStack pose, MultiBufferSource buffers,
                                float progress, float pulse, int light) {
         ItemStack shaving = new ItemStack(net.minecraft.world.level.block.Blocks.OAK_PLANKS);
@@ -176,10 +171,6 @@ public class WoodworkingTableRenderer implements BlockEntityRenderer<Woodworking
         }
     }
 
-    /** The picker, build-list chips, and saw scene all float well above the block, and the model itself
-     *  extends a second block toward its facing. The default per-block cull box is just the 1×1 master
-     *  cell, so from steep/oblique angles (looking up, or the base block off-screen) the floating content
-     *  popped out of view. Grow the box up + outward so it stays drawn while any of it is on-screen. */
     @Override
     public AABB getRenderBoundingBox(WoodworkingTableBlockEntity be) {
         BlockPos pos = be.getBlockPos();

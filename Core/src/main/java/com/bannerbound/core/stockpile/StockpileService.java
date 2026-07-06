@@ -18,19 +18,23 @@ import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.items.IItemHandler;
 
 /**
- * Read/withdraw access to a settlement's "town inventory" — the storage containers inside its
- * valid Stockpile Rack enclosures.
- * <p>
- * Workers that consume inputs (the farmer's seeds, the forester's saplings) pull from here when
- * their own workstation has run dry. The Stocker continually drains workstation inventories into
- * the stockpiles, so the stockpile — not the workstation — is the real reserve.
+ * Read/withdraw access to a settlement's "town inventory": the storage containers inside its valid
+ * Stockpile Rack enclosures. Workers that consume inputs (the farmer's seeds, the forester's
+ * saplings) pull from here when their own workstation has run dry -- the Stocker continually drains
+ * workstation inventories into the stockpiles, so the stockpile, not the workstation, is the real
+ * reserve. summarize() returns an insertion-ordered item->total view backing the barter screen's
+ * storage panels and storage-aware barbarian demands. validate() re-scans the enclosure around a
+ * Stockpile's block and writes validity/status/container positions (<= Stockpile.MAX_CONTAINERS)
+ * back onto the record, mapping StockpileEnclosure.FailReason onto the player-facing
+ * Stockpile.Status; it is driven by the Stockpile Block's validation ticker. Handler resolution
+ * skips positions that are unloaded or no longer containers, degrading gracefully (counts and
+ * withdrawals just see less).
  */
 @ApiStatus.Internal
 public final class StockpileService {
     private StockpileService() {
     }
 
-    /** Total count of {@code item} across the settlement's valid stockpiles. */
     public static int count(ServerLevel level, Settlement settlement, Item item) {
         int total = 0;
         for (IItemHandler handler : storageHandlers(level, settlement)) {
@@ -42,8 +46,6 @@ public final class StockpileService {
         return total;
     }
 
-    /** A summed view of the whole town inventory: item → total count across every valid stockpile.
-     *  Backs the barter screen's storage panels and storage-aware barbarian demands. Insertion-ordered. */
     public static java.util.LinkedHashMap<Item, Integer> summarize(ServerLevel level, Settlement settlement) {
         java.util.LinkedHashMap<Item, Integer> out = new java.util.LinkedHashMap<>();
         for (IItemHandler handler : storageHandlers(level, settlement)) {
@@ -56,8 +58,6 @@ public final class StockpileService {
         return out;
     }
 
-    /** Withdraws up to {@code max} of {@code item} from the settlement's valid stockpiles.
-     *  Returns the count actually withdrawn. */
     public static int withdraw(ServerLevel level, Settlement settlement, Item item, int max) {
         if (max <= 0) return 0;
         int taken = 0;
@@ -71,12 +71,6 @@ public final class StockpileService {
         return taken;
     }
 
-    /**
-     * Re-scans the enclosure around {@code sp}'s block and writes the result back onto the record:
-     * validity, status, and the (≤ {@link Stockpile#MAX_CONTAINERS}) enclosed container positions.
-     * Called from the Stockpile Block's validation ticker. Maps the low-level
-     * {@link StockpileEnclosure.FailReason} onto the player-facing {@link Stockpile.Status}.
-     */
     public static void validate(ServerLevel level, Stockpile sp) {
         StockpileEnclosure.Result r = StockpileEnclosure.scan(level, sp.pos());
         if (!r.valid()) {
@@ -101,22 +95,15 @@ public final class StockpileService {
         }
     }
 
-    /**
-     * Item handlers of the settlement's town-inventory storage: every container block enclosed by a
-     * <b>valid</b> Stockpile (fence/wall + roof). Positions come from each {@link Stockpile}'s
-     * validation scan; here they're resolved to live {@code IItemHandler}s, skipping any that are
-     * unloaded or no longer containers (degrades gracefully — counts/withdrawals just see less).
-     */
     private static List<IItemHandler> storageHandlers(ServerLevel level, Settlement settlement) {
         List<IItemHandler> out = new ArrayList<>();
         for (Stockpile sp : settlement.stockpiles().values()) {
             if (!sp.valid()) continue;
             for (BlockPos cpos : sp.containers()) {
-                // The chest capability resolves each half of a double chest to the COMBINED
-                // inventory — one handler per pair or every count/withdraw sees it twice.
+                // Skip the secondary half: a double chest's capability is the COMBINED inventory, else every count/withdraw sees it twice.
                 if (DropOffContainers.isSecondaryChestHalf(level, cpos)) continue;
                 IItemHandler h = level.getCapability(Capabilities.ItemHandler.BLOCK, cpos, null);
-                // Antiquity baskets back a vanilla Container but register no capability — wrap them.
+                // Antiquity baskets back a vanilla Container but register no capability -- wrap them.
                 if (h == null && level.getBlockEntity(cpos) instanceof net.minecraft.world.Container c) {
                     h = new net.neoforged.neoforge.items.wrapper.InvWrapper(c);
                 }

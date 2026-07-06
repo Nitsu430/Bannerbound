@@ -10,7 +10,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server. The "Establish outpost here" confirm from the banner screen: turn the faction
+ * Client -> server. The "Establish outpost here" confirm from the banner screen: turn the faction
  * banner standing at {@code bannerPos} into an outpost (working claim) on its chunk. The server
  * re-validates everything (membership, research, range, cap, chunk availability) in
  * {@code Outpost.tryEstablish} and replies with a fresh outpost screen.

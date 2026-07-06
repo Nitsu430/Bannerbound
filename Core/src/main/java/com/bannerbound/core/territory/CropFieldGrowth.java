@@ -23,26 +23,25 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
 /**
- * The crop-outpost counterpart to {@link MinerVeinRegen}: a slow heartbeat that <b>ripens</b> a
+ * The crop-outpost counterpart to MinerVeinRegen: a slow level-tick heartbeat that ripens a
  * banner-owned crop-outpost field in waves, so a managed crop outpost has the same readable
- * harvest cadence as an ore deposit's vein refresh (and isn't bottlenecked by slow dry-farmland
- * vanilla growth). Only fields with a committed {@link FarmerWorkGoal#OUTPOST_SELECTION_TYPE}
- * marker ripen, and only while loaded — an unloaded outpost simply pauses.
- *
- * <p>Each wave brings every planted-but-immature crop on the field's farmland to full maturity (a
- * state swap, like the vein refresh); the farmer harvests them, replants from the hauled-in seed,
- * and the next wave ripens the new planting. Player home farms are untouched — they grow at vanilla
- * speed and earn the crop-chunk yield bonus instead.
+ * harvest cadence as an ore deposit's vein refresh (and is not bottlenecked by slow dry-farmland
+ * vanilla growth). Only fields with a committed FarmerWorkGoal.OUTPOST_SELECTION_TYPE marker
+ * ripen, and only while their chunk is loaded -- an unloaded outpost simply pauses. Each wave
+ * brings every planted-but-immature crop standing on the field's farmland to full maturity (a
+ * state swap, like the vein refresh); the farmer harvests, replants from hauled-in seed, and the
+ * next wave ripens the new planting. Player home farms are untouched -- they grow at vanilla
+ * speed and earn the crop-chunk yield bonus instead. Wave due-times live in a transient in-memory
+ * map keyed by packed marker anchor -- never persisted by design (a restart merely re-times the
+ * waves) -- and the map is dropped wholesale once no outpost markers remain.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
 public final class CropFieldGrowth {
-    /** How often the registry is swept for due markers. */
     private static final int SWEEP_INTERVAL_TICKS = 100;
-    /** Ripening cadence — matched to the ore vein refresh (three times per Minecraft day). */
+    // 8000 ticks = 3 waves per Minecraft day, deliberately matched to MinerVeinRegen's refresh cadence.
     private static final int REGEN_WAVE_INTERVAL_TICKS = 8_000;
 
-    /** Marker anchor (packed) → game time its next ripen wave is due. Transient by design. */
     private static final Map<Long, Long> NEXT_DUE = new ConcurrentHashMap<>();
 
     private CropFieldGrowth() {
@@ -64,14 +63,13 @@ public final class CropFieldGrowth {
             long key = anchor.asLong();
             Long due = NEXT_DUE.get(key);
             if (due != null && now < due) continue;
-            if (!sl.hasChunk(anchor.getX() >> 4, anchor.getZ() >> 4)) continue;   // paused while unloaded
+            if (!sl.hasChunk(anchor.getX() >> 4, anchor.getZ() >> 4)) continue;
             ripenWave(sl, sel);
             NEXT_DUE.put(key, now + REGEN_WAVE_INTERVAL_TICKS);
         }
-        if (!anyMarker && !NEXT_DUE.isEmpty()) NEXT_DUE.clear();   // all markers gone → drop state
+        if (!anyMarker && !NEXT_DUE.isEmpty()) NEXT_DUE.clear();
     }
 
-    /** Brings every immature crop standing on the field's farmland to full maturity. */
     private static void ripenWave(ServerLevel sl, BlockSelection sel) {
         int ripened = 0;
         BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos();

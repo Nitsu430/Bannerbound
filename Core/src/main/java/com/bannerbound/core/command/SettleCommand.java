@@ -18,6 +18,12 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 
+/**
+ * Registers the op-only /settle command, which opens the settlement-founding screen for a player
+ * who has none yet. Rejects players who already lead a settlement or when the world is at its max
+ * faction count, then assesses the site and sends OpenSettleScreenPayload so the client shows the
+ * founding UI pre-populated with any site warnings.
+ */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
 public final class SettleCommand {

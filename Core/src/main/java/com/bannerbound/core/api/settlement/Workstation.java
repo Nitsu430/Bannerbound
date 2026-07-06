@@ -7,24 +7,22 @@ import net.minecraft.nbt.CompoundTag;
 
 /**
  * A workstation registered on a settlement: a placed workstation block (Forester's Log etc.) plus
- * the citizen assigned to work it. Inventory lives on the block entity — this record is the
- * "assignment" half so we can enumerate workstations for the assignment-picker GUIs even when
- * their chunks aren't loaded.
+ * the citizen assigned to work it. Inventory lives on the block entity -- this record is the
+ * "assignment" half, so workstations can be enumerated for the assignment-picker GUIs even when
+ * their chunks aren't loaded. buildingValid caches a BuildingValidator result re-evaluated
+ * periodically by ImmigrationManager. active is a player toggle that pauses a station (its gatherer
+ * goals yield; the worker patrols + regens stamina) without losing the assignment. useFertilizer is
+ * farmer-only opt-in bone-mealing (sourced from the granary or a stockpile), honoured ONLY when the
+ * settlement has researched Fertilization -- the work goal re-checks the flag and the network
+ * handler refuses to set it true without the research. All three round-trip through NBT with
+ * opt-out/opt-in defaults chosen so older saves keep working.
  */
 public final class Workstation {
     private final BlockPos pos;
     private final String type;
     private UUID assignedCitizenId;
-    /** Cached BuildingValidator result. Re-evaluated periodically by ImmigrationManager. */
     private boolean buildingValid;
-    /** Player-controlled toggle. When false, all gatherer goals using this workstation yield —
-     *  the assigned worker behaves as if unemployed (patrols + regens stamina) without losing
-     *  the assignment. Lets the player pause a station without unassigning + reassigning. */
     private boolean active;
-    /** Farmer-only: when true, the assigned farmer applies bone meal to immature crops inside
-     *  its selections (sourced from the granary or a settlement stockpile). Opt-in, and only
-     *  honoured when the settlement has researched Fertilization — the work goal re-checks the
-     *  research flag, and the network handler refuses to set it true without the research. */
     private boolean useFertilizer;
 
     public Workstation(BlockPos pos, String type, UUID assignedCitizenId) {
@@ -74,9 +72,8 @@ public final class Workstation {
         if (tag.contains("BuildingValid")) {
             ws.setBuildingValid(tag.getBoolean("BuildingValid"));
         }
-        // Older saves default to active. The toggle is opt-out, not opt-in.
+        // Absent Active key = active (opt-out toggle); absent UseFertilizer = off (opt-in) - keep these save defaults.
         ws.setActive(!tag.contains("Active") || tag.getBoolean("Active"));
-        // Fertilizing is opt-in; absent key (older saves, non-farmer stations) defaults to off.
         ws.setUseFertilizer(tag.getBoolean("UseFertilizer"));
         return ws;
     }

@@ -1,0 +1,8 @@
+{
+  "ingredients": [
+    { "item": "minecraft:stripped_dark_oak_log", "count": 2 },
+    { "item": "minecraft:leather", "count": 1 },
+    { "item": "minecraft:stick", "count": 2 }
+  ],
+  "result": { "id": "bannerboundantiquity:bellows_block", "count": 1 }
+}

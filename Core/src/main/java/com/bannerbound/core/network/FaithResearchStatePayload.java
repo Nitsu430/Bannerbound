@@ -11,12 +11,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: the player's FAITH-tree research state. Per-FAITH shared (FAITH_PLAN Part 2.5) —
- * every member settlement of the faith receives the same snapshot. Broadcast once per
- * second while a node is filling, on every change, and on login.
- *
- * @param devotionPerSecond the faith's TOTAL rate (all member settlements summed) — what
- *                          actually fills the active node.
+ * S->C: the player's FAITH-tree research state. Per-FAITH shared (FAITH_PLAN Part 2.5) -- every
+ * member settlement of the faith receives the same snapshot. Broadcast once per second while a node
+ * is filling, on every change, and on login. devotionPerSecond is the faith's TOTAL rate (all member
+ * settlements summed), which is what actually fills the active node.
  */
 public record FaithResearchStatePayload(
         List<String> completed,

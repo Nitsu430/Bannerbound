@@ -8,11 +8,14 @@ import org.jetbrains.annotations.ApiStatus;
  * The trade-courier BLOCKER goal: runs the entire time a citizen is adopted by a
  * {@code TraderSimManager} journey ({@link CitizenEntity#isOnTradeJourney()}) and does nothing but
  * hold MOVE+LOOK. Registered at priority 0 ahead of the combat/flee goals, so while it runs every
- * other movement goal — work, patrol, sleep, conversation, panic, combat — is starved by the
+ * other movement goal - work, patrol, sleep, conversation, panic, combat - is starved by the
  * strict-less-than preemption rule. The sim drives the citizen externally via
- * {@code getNavigation().moveTo(...)}, which ticks in {@code Mob.serverAiStep} independent of
- * goals; flagless helpers (fence-gate opening) still run. The courier deliberately does not fight
- * back — a caravan is killable cargo, not a combatant.
+ * {@code getNavigation().moveTo(...)}, which ticks in {@code Mob.serverAiStep} independent of goals;
+ * flagless helpers (fence-gate opening) still run. The courier deliberately does not fight back - a
+ * caravan is killable cargo, not a combatant. A stale journey (server restart, or the deal resolved
+ * while the citizen was unloaded) is detected in {@link #canUse()} and cleared, releasing the citizen
+ * back to its own AI instead of freezing it forever under a flag nobody will clear; {@link #stop()}
+ * drops any half-issued path so the resuming stocker AI starts clean.
  */
 @ApiStatus.Internal
 public final class TradeCourierGoal extends net.minecraft.world.entity.ai.goal.Goal {
@@ -26,8 +29,6 @@ public final class TradeCourierGoal extends net.minecraft.world.entity.ai.goal.G
     @Override
     public boolean canUse() {
         if (!citizen.isOnTradeJourney()) return false;
-        // Stale journey (server restart / deal resolved while unloaded): release the citizen back
-        // to its own AI instead of freezing it forever under a flag nobody will clear.
         if (com.bannerbound.core.trade.TradeCourierManager.isStaleJourney(citizen)) {
             com.bannerbound.core.trade.TradeCourierManager.clearStale(citizen);
             return false;
@@ -42,7 +43,6 @@ public final class TradeCourierGoal extends net.minecraft.world.entity.ai.goal.G
 
     @Override
     public void stop() {
-        // Journey over — drop any half-issued path so the resuming stocker AI starts clean.
         citizen.getNavigation().stop();
     }
 }

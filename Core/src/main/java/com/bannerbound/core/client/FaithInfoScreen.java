@@ -13,10 +13,15 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * The Faith tab skeleton (FAITH_PLAN.md Part 6, M1 form): a read-only snapshot of the
- * settlement's faith from {@link ClientFaithState} — name, path, member settlements,
- * devotion. Grows into the full Faith tab (pantheon, demands, Pantheon-mode button,
- * apostasy vote) in later milestones.
+ * The Faith tab (FAITH_PLAN.md Part 6): a mostly read-only snapshot of the settlement's faith
+ * pulled from {@link ClientFaithState} - name, path, member settlements, devotion - plus the
+ * apostasy button and, for Astrology faiths only, the pantheon roster and the "enter Pantheon"
+ * doorway to the sky. The panel height (panelH) grows to fit those extra Astrology rows.
+ * <p>
+ * Apostasy resolves server-side: a chief/owner abandons instantly, while COUNCIL members each
+ * click to add a yes-vote and the server broadcasts progress, resolving at half. The enter-
+ * Pantheon button is greyed until the star charts are researched and while the pantheon is at
+ * its research-driven cap; the tooltip says which. onClose returns to {@code parent} if set.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -30,7 +35,6 @@ public class FaithInfoScreen extends PolishedScreen {
         this.parent = parent;
     }
 
-    /** Astrology faiths get the Pantheon rows (enter mode + roster) — the panel grows. */
     private int panelH() {
         return ClientFaithState.pathOrdinal()
             == com.bannerbound.core.api.faith.FaithPath.ASTROLOGY.ordinal() ? 206 : 156;
@@ -47,8 +51,6 @@ public class FaithInfoScreen extends PolishedScreen {
             b -> this.onClose()
         ).bounds(btnX, y, 160, 20).build());
         y -= 24;
-        // Apostasy (FAITH_PLAN Part 1): chief/owner resolve instantly; COUNCIL members each
-        // click to add a yes-vote — the server broadcasts progress and resolves at half.
         addRenderableWidget(PolishButton.polished(
             Component.translatable("bannerbound.faith.abandon")
                 .withStyle(net.minecraft.ChatFormatting.RED),
@@ -61,7 +63,6 @@ public class FaithInfoScreen extends PolishedScreen {
         if (ClientFaithState.pathOrdinal()
                 == com.bannerbound.core.api.faith.FaithPath.ASTROLOGY.ordinal()) {
             y -= 24;
-            // The pantheon roster — gods drawn so far, with the Forget action.
             addRenderableWidget(PolishButton.polished(
                 Component.translatable("bannerbound.faith.pantheon_list"),
                 b -> {
@@ -71,9 +72,6 @@ public class FaithInfoScreen extends PolishedScreen {
                 }
             ).bounds(btnX, y, 160, 20).build());
             y -= 24;
-            // The doorway to the sky (FAITH_PLAN M2): close everything, look up.
-            // Greyed when the pantheon is full or the stars aren't charted yet — the
-            // tooltip says which.
             boolean charted = ClientFaithTreeState.isCompleted(
                 com.bannerbound.core.client.sky.PantheonMode.STAR_CHARTS_NODE);
             boolean full = com.bannerbound.core.client.sky.ClientConstellationState.count()
@@ -128,7 +126,6 @@ public class FaithInfoScreen extends PolishedScreen {
                 String.format("%.2f", ClientFaithState.devotionPerSecond())),
             panelX + PANEL_W / 2, panelY + 68, 0xFFE8E2D0);
 
-        // God slots — drawn gods vs research-driven cap (astrology only).
         if (ClientFaithState.pathOrdinal()
                 == com.bannerbound.core.api.faith.FaithPath.ASTROLOGY.ordinal()) {
             g.drawCenteredString(this.font,

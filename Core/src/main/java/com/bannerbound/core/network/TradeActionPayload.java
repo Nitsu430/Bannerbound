@@ -13,11 +13,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: a trade-screen action against settlement {@code targetId}. {@code action} =
- * {@code TradeManager.ACTION_*} (propose / counter / accept / reject / cancel); {@code dealId}
- * addresses the existing deal (empty for a fresh PROPOSE). {@code give}/{@code get} are
- * viewer-relative item lines (my side / their side), meaningful for PROPOSE and COUNTER only —
- * unit values are recomputed authoritatively server-side.
+ * Client -> server: a trade-screen action against settlement targetId. action =
+ * TradeManager.ACTION_* (propose / counter / accept / reject / cancel); dealId addresses the
+ * existing deal (empty for a fresh PROPOSE). give/get are viewer-relative item lines (my side /
+ * their side), meaningful for PROPOSE and COUNTER only - unit values are recomputed
+ * authoritatively server-side.
  */
 @ApiStatus.Internal
 public record TradeActionPayload(String targetId, String dealId, int action,

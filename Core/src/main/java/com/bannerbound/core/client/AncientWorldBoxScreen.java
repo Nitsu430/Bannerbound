@@ -13,23 +13,25 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * <b>Preview-only</b> Town Hall reskin in the WorldBox "carved stone slab" idiom — a study in
- * era-specific GUI for the Ancient era. The chrome (panel, troughs, buttons) is drawn from a
- * handful of 64×/32×/16× <em>nine-slice</em> sprites under {@code textures/gui/sprites/ancient/}
- * (see the matching {@code .png.mcmeta} files) rather than baked full-panel PNGs, so the same
- * olive-stone slab stretches to any size.
+ * Preview-only Town Hall reskin in the WorldBox "carved stone slab" idiom - a study in
+ * era-specific GUI for the Ancient era. Not wired into the live Town Hall: opened only by
+ * "/bannerbound gui ancient" so the look can be evaluated in isolation. Buttons are visual
+ * (click feedback only) except Cancel/Esc, which close.
  *
- * <p>This screen is <b>not</b> wired into the live Town Hall — it is opened only by
- * {@code /bannerbound gui ancient} so the look can be evaluated in isolation. Buttons are visual
- * (click feedback only) except <i>Cancel</i>/Esc which close. Numbers are read live from
- * {@link ClientPopulationState} when a settlement is loaded, otherwise sample values are shown so
- * the layout reads correctly anywhere.
+ * <p>The chrome (panel, troughs, buttons) is drawn from 64x/32x/16x nine-slice sprites under
+ * textures/gui/sprites/ancient/ (see the matching .png.mcmeta files) rather than baked full-panel
+ * PNGs, so the same olive-stone slab stretches to any size. Numbers read live from
+ * ClientPopulationState when a settlement is loaded, otherwise sample values are shown so the
+ * layout reads correctly anywhere; the sample settlement name is hardcoded because the live id is
+ * a raw UUID, not a display name.
+ *
+ * <p>Skips the vanilla blurred menu background (drawsDimmedBackground=false, which otherwise reads
+ * as a tiled blocky smear) and paints a clean flat dim in renderPolishedBackdrop instead.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class AncientWorldBoxScreen extends PolishedScreen {
 
-    // ── Nine-slice sprites ───────────────────────────────────────────────────────────────
     private static final ResourceLocation PANEL        = spr("panel");
     private static final ResourceLocation INSET        = spr("inset");
     private static final ResourceLocation BUTTON       = spr("button");
@@ -39,16 +41,14 @@ public class AncientWorldBoxScreen extends PolishedScreen {
     private static final ResourceLocation CULTURE_ICON =
         ResourceLocation.fromNamespaceAndPath("bannerbound", "textures/gui/culture_antiquity.png");
 
-    // ── WorldBox olive-stone palette (text inks) ─────────────────────────────────────────
-    private static final int GOLD      = 0xFFE6B24A;   // title / headings
-    private static final int CREAM     = 0xFFF0E8CC;   // button + tab labels
-    private static final int INK       = 0xFF2A331E;   // body text on the lit stone face
-    private static final int SUBTITLE  = 0xFFD8E0BE;   // era/rank subtitle (light, w/ shadow)
-    private static final int DANGER    = 0xFFD8602E;   // disband label
+    private static final int GOLD      = 0xFFE6B24A;
+    private static final int CREAM     = 0xFFF0E8CC;
+    private static final int INK       = 0xFF2A331E;
+    private static final int SUBTITLE  = 0xFFD8E0BE;
+    private static final int DANGER    = 0xFFD8602E;
     private static final int FOOD_HI   = 0xFFE6A445, FOOD_LO  = 0xFF9A5A23;
     private static final int CULT_HI   = 0xFFB874D0, CULT_LO  = 0xFF5A2C72;
 
-    // ── Geometry ─────────────────────────────────────────────────────────────────────────
     private static final int PANEL_W = 240, PANEL_H = 360;
     private static final int TAB_W = 100, TAB_H = 18;
     private static final int BTN_W = 192, BTN_H = 18;
@@ -72,7 +72,6 @@ public class AncientWorldBoxScreen extends PolishedScreen {
 
     public AncientWorldBoxScreen() {
         super(Component.translatable("bannerbound.townhall.menu.title"));
-        // Preview-only: a readable sample name (the live id is a raw UUID, not a display name).
         this.settlementName = "Stonehearth";
     }
 
@@ -95,10 +94,8 @@ public class AncientWorldBoxScreen extends PolishedScreen {
         addAction(bx, by + BTN_PITCH * 5, "Cancel",            false, false, this::onClose);
     }
 
-    private void clickFeedback() { /* preview: visual only */ }
+    private void clickFeedback() { }
 
-    /** Skip the vanilla blurred menu background (it reads as a tiled, blocky smear behind the
-     *  panel) — we paint a clean flat dim in {@link #renderPolishedBackdrop} instead. */
     @Override
     protected boolean drawsDimmedBackground() {
         return false;
@@ -112,26 +109,21 @@ public class AncientWorldBoxScreen extends PolishedScreen {
 
     @Override
     protected void renderPolishedBackdrop(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        // Clean flat dim over the live world (we skipped the vanilla blur in drawsDimmedBackground).
         g.fill(0, 0, this.width, this.height, 0xC0121512);
 
-        // The stone slab.
         g.blitSprite(PANEL, panelX, panelY, PANEL_W, PANEL_H);
 
         int cx = panelX + PANEL_W / 2;
 
-        // Title trough + settlement name (gold) + era subtitle.
         g.blitSprite(INSET, panelX + 18, panelY + 16, PANEL_W - 36, 34);
         drawScaled(g, settlementName, cx, panelY + 23, 1.6f, GOLD);
         centeredShadow(g, "Ancient Era · "
             + Component.translatable(ClientPopulationState.getTitleKey()).getString(),
             cx, panelY + 56, SUBTITLE);
 
-        // Folio tabs (raised slabs).
         drawTab(g, panelX + 19,  panelY + 92, "Main",     tab == TopTab.MAIN,     mouseX, mouseY);
         drawTab(g, panelX + 121, panelY + 92, "Statuses", tab == TopTab.STATUSES, mouseX, mouseY);
 
-        // Population + two resource gauges.
         int pop = sampleInt(ClientPopulationState.getPopulation(), 6);
         int popMax = sampleInt(ClientPopulationState.getPopulationMax(), 8);
         g.drawString(this.font, "Population · " + pop + " / " + popMax,
@@ -146,7 +138,6 @@ public class AncientWorldBoxScreen extends PolishedScreen {
             sampleD(ClientPopulationState.getCultureStored(), 14), cultCap,
             CULT_HI, CULT_HI, CULT_LO);
 
-        // Carved action buttons.
         for (ActionBtn b : actions) {
             boolean hover = !b.disabled() && mouseX >= b.x() && mouseX < b.x() + BTN_W
                          && mouseY >= b.y() && mouseY < b.y() + BTN_H;
@@ -168,10 +159,8 @@ public class AncientWorldBoxScreen extends PolishedScreen {
         int x = panelX + TROUGH_X;
         g.blit(icon, x, y - 2, 12, 12, 0f, 0f, 32, 32, 32, 32);
         g.drawString(this.font, label, x + 16, y, labelColor, false);
-        // Readout on the label row, right-aligned over the empty stone (never over the bar).
         String readout = value > 0 ? trim(value) + " / " + trim(max) : "—";
         g.drawString(this.font, readout, x + TROUGH_W - this.font.width(readout), y, INK, false);
-        // Recessed trough + painted pigment fill.
         int troughY = y + 12;
         g.blitSprite(INSET, x, troughY, TROUGH_W, 11);
         double pct = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
@@ -179,7 +168,6 @@ public class AncientWorldBoxScreen extends PolishedScreen {
         if (fillW > 0) g.fillGradient(x + 3, troughY + 3, x + 3 + fillW, troughY + 9, fillHi, fillLo);
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────────────────
     private void centeredShadow(GuiGraphics g, String text, int cx, int y, int textColor) {
         g.drawString(this.font, text, cx - this.font.width(text) / 2, y, textColor, true);
     }

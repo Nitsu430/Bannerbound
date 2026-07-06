@@ -18,13 +18,14 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.saveddata.SavedData;
 
 /**
- * Top-level {@link SavedData} for all barbarian camps — the parallel-to-{@code SettlementData}
- * lightweight store (camps are not Settlements; see BARBARIANS_PLAN §1). Attached to the
- * <b>overworld</b> data storage; call {@link #get(ServerLevel)} server-side. Mutators call
- * {@link #setDirty()}.
- *
- * <p>{@link #razedChunks} keeps cleared camp sites permanently camp-free so a defeated camp never
- * re-seeds. {@link #chunkToCamp} is the realize / no-overlap reverse index, rebuilt on load.
+ * Top-level SavedData for all barbarian camps: the lightweight store parallel to SettlementData
+ * (camps are not Settlements; see BARBARIANS_PLAN section 1). Attached to the OVERWORLD data storage
+ * only -- get(ServerLevel) routes through server.overworld() so camp state never forks per-dimension,
+ * and every mutator calls setDirty(). razedChunks keeps cleared sites permanently camp-free so a
+ * defeated camp never re-seeds; chunkToCamp is the realize / no-overlap reverse index, rebuilt on
+ * load. hasCampOrRazedWithin iterates live camps (bounded by the global cap) but switches its
+ * razed-site check from a full scan to a fixed (2N+1)^2 neighborhood probe once razedChunks outgrows
+ * that window, so the seeder's cost stays bounded no matter how many camps have ever been razed.
  */
 public class BarbarianData extends SavedData {
     private static final String DATA_NAME = "bannerbound_barbarians";
@@ -38,7 +39,6 @@ public class BarbarianData extends SavedData {
     }
 
     public static BarbarianData get(ServerLevel level) {
-        // Overworld only, like SettlementData — camp state must not fork per-dimension.
         return level.getServer().overworld().getDataStorage().computeIfAbsent(factory(), DATA_NAME);
     }
 
@@ -59,8 +59,6 @@ public class BarbarianData extends SavedData {
         return id == null ? null : camps.get(id);
     }
 
-    /** The camp whose banner sits at {@code pos}, or null. Checked first on a banner break so a
-     *  camp banner isn't mistaken for a settlement banner loss. */
     public BarbarianCamp bannerAt(BlockPos pos) {
         for (BarbarianCamp c : camps.values()) {
             if (!c.razed && c.bannerPos != null && c.bannerPos.equals(pos)) return c;
@@ -83,7 +81,6 @@ public class BarbarianData extends SavedData {
         setDirty();
     }
 
-    /** Permanently clears a camp: removes the record and marks its chunk razed (no re-seeding). */
     public void removeCamp(BarbarianCamp camp) {
         camps.remove(camp.id);
         long centerChunk = new ChunkPos(camp.center).toLong();
@@ -97,7 +94,6 @@ public class BarbarianData extends SavedData {
         return razedChunks.contains(packedChunkPos);
     }
 
-    /** Wipes all camp records and razed memory (op test reset; does NOT touch placed camp blocks). */
     public void clear() {
         camps.clear();
         chunkToCamp.clear();
@@ -105,17 +101,11 @@ public class BarbarianData extends SavedData {
         setDirty();
     }
 
-    /** True if a live camp center OR a razed site lies within {@code chebyshevChunks} of
-     *  {@code center} — used by the seeder to keep camps spread out and razed areas empty. */
     public boolean hasCampOrRazedWithin(ChunkPos center, int chebyshevChunks) {
-        // Live camps are bounded by the global cap, so iterate them directly.
         for (BarbarianCamp c : camps.values()) {
             ChunkPos cp = new ChunkPos(c.center);
             if (chebyshev(cp, center) <= chebyshevChunks) return true;
         }
-        // razedChunks grows over the life of a server. Iterate it only while it's smaller than the
-        // (2N+1)² neighborhood; past that, probe the fixed neighborhood instead so the cost stays
-        // bounded regardless of how many camps have ever been razed.
         int span = 2 * chebyshevChunks + 1;
         if (razedChunks.size() <= span * span) {
             for (long packed : razedChunks) {

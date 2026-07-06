@@ -12,6 +12,17 @@ import net.minecraft.world.item.Item;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
+/**
+ * Client-side cache of the server's global starting-items set (item ids as strings), synced from the
+ * server and used mainly as JEI's knowledge gate. Held in a volatile field with CopyOnWriteArrayList
+ * listeners so any thread can read/replace safely; replace() no-ops on an unchanged set and otherwise
+ * fires listeners (JEI rebuilds its hidden-item list).
+ *
+ * isLoaded() treats an empty set as "not synced yet" rather than "nothing unlocked": the global set is
+ * never legitimately empty (Antiquity ships 100+ items). JEI relies on this to avoid removing items
+ * before knowledge arrives -- removing a starting item then re-adding it once synced leaves its crafting
+ * recipe stuck hidden in JEI.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientStartingItems {
@@ -51,10 +62,6 @@ public final class ClientStartingItems {
         return id != null && ITEMS.contains(id.toString());
     }
 
-    /** Whether the server's starting-items set has arrived yet. The global set is never legitimately
-     *  empty (Antiquity ships 100+), so empty means "not synced yet". JEI uses this to avoid removing
-     *  items before knowledge is known — removing a starting item then re-adding it once synced
-     *  leaves its crafting recipe stuck hidden in JEI. */
     public static boolean isLoaded() {
         return !ITEMS.isEmpty();
     }

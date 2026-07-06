@@ -11,9 +11,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: the beauty-debug overlay asking for the diminishing-returns state of the
- * block at {@code pos} (how many of that block type the chunk's surface-and-up scan counted).
- * Sent only while debug mode is active.
+ * Client -> server: the beauty-debug overlay asking for the diminishing-returns state of the block
+ * at pos (how many of that block type the chunk's surface-and-up scan counted). Sent only while
+ * debug mode is active.
  */
 @ApiStatus.Internal
 public record RequestBlockAppealPayload(BlockPos pos) implements CustomPacketPayload {

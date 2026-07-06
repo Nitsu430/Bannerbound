@@ -30,64 +30,44 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.MobSpawnType;
 
 /**
- * Server-side singleton that runs the procreation loop for Antiquity. Two responsibilities:
- *
+ * Server-side singleton running Antiquity's procreation loop, wired in
+ * {@code ResearchEvents.onServerTick} alongside the other per-tick managers (cheap on a
+ * no-pregnancy server: it only re-scans during night and the session list is usually empty). Two
+ * responsibilities:
  * <ol>
- *   <li><b>Once per night-start</b>, scan every settlement's homes for opposite-gender resident
- *       pairs that are both asleep, adult, and like each other above STRANGERS. Roll the
- *       per-tier chance ({@link #chanceFor}); each successful roll opens a
- *       {@link LovemakingSession} that pulses heart particles 5 times over ~12 s and ends with
- *       the woman flagged pregnant.</li>
- *   <li><b>Every tick</b>, advance active sessions, cancel any whose participants stopped
- *       sleeping / died / lost the home, and deliver babies for mothers whose pregnancy timer
- *       elapsed (this entry point — {@link #deliver} — is invoked from
- *       {@code CitizenEntity.aiStep}'s 20-tick poll).</li>
+ *   <li>Periodically during the night, scan every settlement's valid homes for opposite-gender
+ *       resident pairs that are both asleep, adult, and above STRANGERS. Roll the per-tier chance
+ *       ({@link #chanceFor}), nudged by the home's happiness; each success opens a
+ *       {@link LovemakingSession} that pulses heart particles 5 times over ~12 s and ends with the
+ *       woman flagged pregnant.</li>
+ *   <li>Every tick, advance active sessions, cancel any whose participants stopped sleeping / died /
+ *       lost the home, and deliver babies whose pregnancy timer elapsed ({@link #deliver}, invoked
+ *       from {@code CitizenEntity.aiStep}'s 20-tick poll).</li>
  * </ol>
- *
- * <p><b>Pair-selection invariants</b>: a woman can conceive at most once per night (first
- * successful roll locks her out of further pairs), and a man can father at most once per night
- * (locks the same way). Iteration order is randomised so the same (M, F) doesn't always win.
- * Pairs that share a home cross-bucket the same way the user intended: a 2M+2F home can
- * produce up to 2 pregnancies per night.
+ * Scanning is periodic (every {@link #SCAN_INTERVAL_TICKS}) rather than one-shot-at-night-start: the
+ * one-shot version fired before citizens reached their beds, found everyone awake, then never
+ * re-scanned. {@link #ROLLED_TONIGHT} (cleared each new night) enforces the pair-selection
+ * invariants: a woman conceives at most once per night and a man fathers at most once, whether the
+ * roll succeeds or fails. Iteration order is randomised so the same (M, F) does not always win; a
+ * 2M+2F home can still produce up to 2 pregnancies per night. Both the mate-scan and delivery honour
+ * a soft population cap - at the cap no new sessions fire and finished pregnancies are held open
+ * (never cancelled) to retry once the cap rises or population drops. Sessions and ROLLED_TONIGHT are
+ * server-only, never persisted; a save mid-session just drops them.
  */
 @ApiStatus.Internal
 public final class BabyMakingManager {
-    /** Matches {@code SleepGoal}'s night window so the mate-scan fires while citizens are
-     *  actually in bed. {@code 12500} ticks past midnight is when monsters spawn / beds become
-     *  usable; {@code 23460} is when natural wake happens. */
-    private static final long NIGHT_START = 12_500L;
+    private static final long NIGHT_START = 12_500L; // matches SleepGoal's night window (monsters spawn / beds usable)
     private static final long NIGHT_END = 23_460L;
-    /** How often we re-scan during the night for newly-eligible pairs. 100 ticks = 5 s. The
-     *  one-shot-at-night-start design missed pairs that hadn't reached bed yet at NIGHT_START
-     *  (or hadn't been homed yet, or just got their relationship bumped past STRANGERS). */
     private static final int SCAN_INTERVAL_TICKS = 100;
-    /** Ticks between heart-particle bursts. 60 = 3 s. */
     private static final int LOVEMAKING_BURST_INTERVAL = 60;
-    /** Total bursts in a session. After the 5th burst the woman becomes pregnant. */
     private static final int LOVEMAKING_BURSTS = 5;
 
-    /** Day index ({@code dayTime / 24000}) of the current night. {@code -1} when we're in
-     *  daytime (no night in progress). Detecting a transition from -1 → real day means "new
-     *  night just started" and we clear {@link #ROLLED_TONIGHT}. */
     private static long currentNightDay = -1L;
-    /** Women who have already been rolled for during the current night — both successes (now
-     *  pregnant) and failures (skipped from re-rolling). Cleared on each new night so a
-     *  citizen who narrowly missed last night gets another chance tomorrow. */
     private static final java.util.Set<UUID> ROLLED_TONIGHT = new java.util.HashSet<>();
-    /** Active sessions. Server-only, never persisted; a save mid-session just drops it. */
     private static final List<LovemakingSession> SESSIONS = new ArrayList<>();
 
     private BabyMakingManager() {}
 
-    /** Wired in {@code ResearchEvents.onServerTick} alongside the other per-tick managers.
-     *  Cheap on a no-pregnancy server: re-scans every 5 s during night only, session list is
-     *  usually empty.
-     *
-     *  <p><b>Why periodic instead of one-shot</b>: the original one-shot-at-NIGHT_START version
-     *  fired before citizens actually reached their beds — the scan found everyone awake and
-     *  walking, no eligible pairs, then never re-scanned. Periodic scanning catches every pair
-     *  the moment both partners are in bed, and the {@link #ROLLED_TONIGHT} set ensures each
-     *  woman only gets one chance per night (success → pregnant, fail → skipped till tomorrow). */
     public static void tickAll(MinecraftServer server) {
         if (server == null) return;
         ServerLevel overworld = server.overworld();
@@ -98,21 +78,15 @@ public final class BabyMakingManager {
         boolean isNight = t >= NIGHT_START && t < NIGHT_END;
 
         if (!isNight) {
-            // Daytime: reset state for the next night.
             if (currentNightDay != -1L) {
                 currentNightDay = -1L;
                 ROLLED_TONIGHT.clear();
             }
         } else {
-            // Night → first tick after the transition (or first tick of a brand-new night via
-            // /time set night) clears the "already rolled" set so every eligible woman gets a
-            // fresh chance.
             if (currentNightDay != day) {
                 currentNightDay = day;
                 ROLLED_TONIGHT.clear();
             }
-            // Re-scan every SCAN_INTERVAL_TICKS for newly-eligible pairs. Cheap — outer loop
-            // over loaded settlements, inner loop over their valid homes only.
             if (now % SCAN_INTERVAL_TICKS == 0) {
                 startSessions(overworld, now);
             }
@@ -127,11 +101,6 @@ public final class BabyMakingManager {
         SettlementData sd = SettlementData.get(overworld);
         RandomSource rng = overworld.random;
         for (Settlement s : sd.all()) {
-            // Population gate: pop maximum bounds total citizens. If we're already at the cap,
-            // no new lovemaking sessions can fire — even if homes have eligible pairs sleeping
-            // in them. The cap grows when the player adds true spare beds (see
-            // Settlement.populationMaximum), which is the only way past the immigration floor
-            // (Antiquity = 7 per Era.immigrationFloor).
             if (s.population() >= s.populationMaximum()) continue;
             for (Home home : s.homes().values()) {
                 if (!home.valid()) continue;
@@ -142,14 +111,12 @@ public final class BabyMakingManager {
                     if (!(raw instanceof CitizenEntity ce)) continue;
                     if (!ce.isAlive() || ce.isChild() || !ce.isSleeping()) continue;
                     if (ce.getGender() == CitizenGender.MALE) {
-                        // Men can also only father once per night — same set is used to skip them.
                         if (!ROLLED_TONIGHT.contains(ce.getUUID())) men.add(ce);
                     } else if (!ce.isPregnant() && !ROLLED_TONIGHT.contains(ce.getUUID())) {
                         women.add(ce);
                     }
                 }
                 if (men.isEmpty() || women.isEmpty()) continue;
-                // Shuffle so the same M/F pair doesn't always win when multiple are eligible.
                 Random javaRng = new Random(rng.nextLong());
                 Collections.shuffle(men, javaRng);
                 Collections.shuffle(women, javaRng);
@@ -161,19 +128,11 @@ public final class BabyMakingManager {
                         if (takenWomen.contains(w.getUUID())) continue;
                         Relationship rel = m.getRelationships().get(w.getUUID());
                         if (rel.isFamily()) continue;
-                        // Relationship tier sets the baseline; the home's HAPPINESS (appeal + met
-                        // demands) nudges it. A delightful home can lift even strangers (0 baseline)
-                        // above zero, so procreation can fire regardless of relationship status; a
-                        // miserable home drags the combined chance down (possibly below zero → no roll).
                         double chance = (chanceFor(rel.tier())
                             + com.bannerbound.core.api.settlement.HomeDemand.reproductionBonus(
                                 home.cachedHomeHappiness()))
                             * com.bannerbound.core.Config.BIRTH_RATE_MULTIPLIER.get();
                         if (chance <= 0.0) continue;
-                        // Roll the moment we see this pair as eligible — independent of how
-                        // many ticks they've been sleeping. Whether the roll succeeds or fails,
-                        // both citizens get tagged so they don't re-roll later this same night
-                        // (one chance per pair-member per night).
                         boolean success = rng.nextDouble() < chance;
                         ROLLED_TONIGHT.add(w.getUUID());
                         ROLLED_TONIGHT.add(m.getUUID());
@@ -183,7 +142,7 @@ public final class BabyMakingManager {
                             SESSIONS.add(new LovemakingSession(
                                 w.getUUID(), m.getUUID(), home.pos(), now));
                         }
-                        break; // this man's done for tonight; on to the next man
+                        break;
                     }
                 }
             }
@@ -204,8 +163,6 @@ public final class BabyMakingManager {
                 it.remove(); continue;
             }
             long elapsed = now - sess.startTick();
-            // Bursts fire on elapsed = 0, 60, 120, 180, 240 — 5 bursts total. Negative elapsed
-            // shouldn't happen (sessions are made with now as startTick) but guard anyway.
             if (elapsed < 0 || elapsed % LOVEMAKING_BURST_INTERVAL != 0) continue;
             int burstIdx = (int) (elapsed / LOVEMAKING_BURST_INTERVAL);
             if (burstIdx >= LOVEMAKING_BURSTS) {
@@ -214,17 +171,12 @@ public final class BabyMakingManager {
             SocialEvents.spawnHearts(overworld, mother);
             SocialEvents.spawnHearts(overworld, father);
             if (burstIdx == LOVEMAKING_BURSTS - 1) {
-                // 5th and final burst — pregnancy starts on this same tick.
                 mother.setPregnant(true, now, father.getUUID());
                 it.remove();
             }
         }
     }
 
-    /** Tier → per-night pregnancy probability for one (M, F) pair. STRANGERS and the negative
-     *  tiers return 0; FRIENDS_FOR_LIFE is the proxy for the eventual Lover overflow until that
-     *  ships — 100% is intentional so admins can test the birth path quickly via
-     *  {@code /bannerbound set_relationship} without waiting on probability rolls. */
     private static double chanceFor(RelationshipTier tier) {
         return switch (tier) {
             case ACQUAINTANCES    -> 0.15;
@@ -235,22 +187,14 @@ public final class BabyMakingManager {
         };
     }
 
-    /** Called from {@code CitizenEntity.aiStep}'s 20-tick poll when a pregnant mother's timer
-     *  has elapsed. Spawns the child at her position, installs the FAMILY bond on both parents,
-     *  fires the birth thoughts + chat broadcast, and clears the pregnancy state. */
     public static void deliver(CitizenEntity mother, ServerLevel sl, long now) {
         UUID fatherId = mother.getPregnancyFatherId();
         Settlement s = mother.getSettlement();
         if (s == null) {
-            // Orphan mother — clear pregnancy quietly, no birth.
             mother.setPregnant(false, -1L, null);
             return;
         }
-        // Population gate: babies don't deliver while the settlement is at its population cap.
-        // Pregnancy is held open (no setPregnant(false) call) so the next 20-tick poll retries
-        // — birth will happen the moment the cap rises (player builds a bed) or pop drops
-        // (someone dies / is exiled). This is intentionally a soft gate: pregnancies aren't
-        // cancelled, just postponed.
+        // At the pop cap, hold the pregnancy open (never setPregnant(false)) so the next poll retries; do NOT cancel.
         if (s.population() >= s.populationMaximum()) return;
         CitizenEntity child = BannerboundCore.CITIZEN.get().create(sl);
         if (child == null) {
@@ -260,8 +204,6 @@ public final class BabyMakingManager {
         CitizenGender gender = sl.random.nextBoolean() ? CitizenGender.MALE : CitizenGender.FEMALE;
         String name = CitizenNameLoader.randomName(sl.random, s.age(), gender);
         child.initializeCitizen(s.id(), name, gender, s.age(), s.identityFormatting());
-        // Use the language-baked name (set by initializeCitizen) for the roster so chat / recall /
-        // workshop surfaces read the same in-language name as the name tag.
         name = child.getCitizenName();
         child.setIsChild(true);
         child.setBornAtTick(now);
@@ -270,13 +212,11 @@ public final class BabyMakingManager {
         child.finalizeSpawn(sl, sl.getCurrentDifficultyAt(mother.blockPosition()),
             MobSpawnType.MOB_SUMMONED, null);
         if (!sl.addFreshEntity(child)) {
-            // Spawn failed (rare — usually chunk loading) — clear pregnancy without effects.
             mother.setPregnant(false, -1L, null);
             return;
         }
         s.addCitizen(new Citizen(child.getUUID(), name));
 
-        // Family bonds: child ↔ mother always; child ↔ father if he's still loaded + alive.
         SocialEvents.linkMutualFamily(child, mother);
         CitizenEntity father = null;
         if (fatherId != null && sl.getEntity(fatherId) instanceof CitizenEntity fe && fe.isAlive()) {
@@ -284,11 +224,6 @@ public final class BabyMakingManager {
             SocialEvents.linkMutualFamily(child, father);
         }
 
-        // Sibling bonds: every other living citizen born to this same mother is the new child's
-        // sibling, so install the FAMILY bond between them. Resolves through the roster (tolerates
-        // unloaded chunks — those siblings just miss this pass; the bond is one-directional-safe
-        // since linkMutualFamily writes both sides). Pre-feature children with no recorded mother
-        // (motherId == null) are skipped, which correctly avoids matching other motherless citizens.
         for (Citizen c : s.citizens()) {
             if (c.entityId().equals(child.getUUID())) continue;
             if (!(sl.getEntity(c.entityId()) instanceof CitizenEntity sibling)) continue;
@@ -296,7 +231,6 @@ public final class BabyMakingManager {
             SocialEvents.linkMutualFamily(child, sibling);
         }
 
-        // Mother + father get the per-partner MY_CHILD_BORN thought, keyed to the new child.
         mother.getThoughts().add(ThoughtKind.MY_CHILD_BORN, child.getUUID(), now, sl.random);
         mother.recomputeHappiness();
         if (father != null) {
@@ -304,9 +238,6 @@ public final class BabyMakingManager {
             father.recomputeHappiness();
         }
 
-        // Every other settlement citizen gets the single-instance NEW_CHILD_IN_SETTLEMENT.
-        // Iterating the roster + resolving the entity tolerates unloaded chunks (those citizens
-        // just miss this one — same forgiving model as the weather thought broadcast).
         for (Citizen c : s.citizens()) {
             if (c.entityId().equals(mother.getUUID()) || c.entityId().equals(child.getUUID())) continue;
             if (father != null && c.entityId().equals(father.getUUID())) continue;
@@ -316,8 +247,6 @@ public final class BabyMakingManager {
             ce.recomputeHappiness();
         }
 
-        // Chat broadcast — uses display-name components so settlement colour + gender glyphs
-        // come through styled.
         MinecraftServer server = sl.getServer();
         if (server != null) {
             Component msg = Component.translatable("bannerbound.birth.broadcast",
@@ -329,20 +258,14 @@ public final class BabyMakingManager {
             }
         }
 
-        // Heart particle above the mother to mark the moment visually.
         SocialEvents.spawnHearts(sl, mother);
 
-        // Clear pregnancy LAST so the refreshDisplayName fires after the chat message captured
-        // the still-pregnant display name. Cosmetic but reads better in chat.
+        // Clear pregnancy LAST so the chat broadcast above captures the still-pregnant display name.
         mother.setPregnant(false, -1L, null);
 
-        // Persist the settlement so the new citizen, family bonds, and roster entry survive a
-        // reload without waiting for the next dirty-batch.
         SettlementData.get(sl).setDirty();
     }
 
-    /** Chat broadcast for the child → adult transition. Called from {@code CitizenEntity.aiStep}
-     *  when the aging timer elapses; the flag flip itself happens at the call site. */
     public static void broadcastGrewUp(ServerLevel sl, CitizenEntity child) {
         MinecraftServer server = sl.getServer();
         if (server == null) return;

@@ -20,27 +20,24 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
- * Leisure goal: an idle citizen wanders to a nearby {@link StoneCookingPotBlockEntity} holding a
- * finished stew within the settlement claims, eats a serving (draining the pot like the player or the
- * larder would), and comes away with a strong {@link AntiquityThoughts#ENJOYED_STEW} food mood
- * ("I ate a warm stew", +10). The direct sibling of {@link GrogDrinkGoal} — same throttled scan,
- * leisure priority (3), and long post-meal cooldown so a settlement doesn't form an eating heartbeat —
- * attached to Core's {@link CitizenEntity} through the generic {@code CitizenGoalRegistry}. Poisoned
- * stews are skipped ({@link StoneCookingPotBlock#hasReadyServing} excludes them).
+ * Leisure goal: an idle citizen walks to the nearest {@link StoneCookingPotBlockEntity} in the
+ * settlement's claimed chunks that holds a finished stew, eats a serving over ~3.5s with audible
+ * bites (draining the pot via {@link StoneCookingPotBlock#takeServing} exactly like a player or the
+ * larder would), and comes away with the strong {@link AntiquityThoughts#ENJOYED_STEW} food mood
+ * ("I ate a warm stew", +10). Direct sibling of {@code GrogDrinkGoal}: same throttled think-tick
+ * scan, leisure priority (3), and a long randomized post-meal cooldown (5-12 in-game minutes,
+ * rolled in {@link #stop()}) so a settlement never forms an eating heartbeat. Attached to Core's
+ * {@link CitizenEntity} through the generic {@code CitizenGoalRegistry}. Poisoned or unfinished
+ * stews are excluded by {@link StoneCookingPotBlock#hasReadyServing}, and no leisure meals happen
+ * while a crisis is active.
  */
 public class StewEatGoal extends Goal {
-    /** Only consider pots within this many blocks of the citizen. */
     private static final int SEARCH_RADIUS = 24;
-    /** "At the pot" — within ~2.5 blocks; a touch generous so a citizen parked just shy starts eating. */
     private static final double EAT_REACH_SQ = 6.25;
-    /** Time spent eating once arrived (≈3.5s), with an audible bite at the start and halfway. */
     private static final int EAT_DURATION = 70;
-    /** Give up walking if we can't reach the pot in this long (path blocked / target gone). */
     private static final int WALK_TIMEOUT = 200;
-    /** Post-meal cooldown range — 5 to 12 in-game minutes (eating out is occasional, not constant). */
     private static final int COOLDOWN_MIN = 6_000;
     private static final int COOLDOWN_MAX = 14_400;
-    /** Throttle the pot scan with a small extra interval on top of think ticks. */
     private static final int SCAN_INTERVAL = 40;
 
     private final CitizenEntity citizen;
@@ -67,7 +64,7 @@ public class StewEatGoal extends Goal {
         if (citizen.isPassenger() || citizen.isChild()) return false;
         Settlement settlement = citizen.getSettlement();
         if (settlement == null) return false;
-        if (settlement.activeCrisis() != null) return false;          // no leisure meals mid-crisis
+        if (settlement.activeCrisis() != null) return false;
         if (!citizen.isThinkTick()) return false;
         if (scanCooldown > 0) { scanCooldown--; return false; }
         scanCooldown = SCAN_INTERVAL;
@@ -100,7 +97,7 @@ public class StewEatGoal extends Goal {
         ticksRunning++;
 
         if (!(sl.getBlockEntity(targetPot) instanceof StoneCookingPotBlockEntity)) {
-            targetPot = null;                               // pot broken / changed → bail
+            targetPot = null;
             return;
         }
 
@@ -108,13 +105,13 @@ public class StewEatGoal extends Goal {
             facePot();
             eatTicks--;
             if (eatTicks == EAT_DURATION / 2) {
-                playBite(sl);                               // second bite, mid-meal
+                playBite(sl);
             }
             if (eatTicks <= 0) {
                 if (StoneCookingPotBlock.takeServing(sl, targetPot)) {
                     onEaten(sl);
                 }
-                targetPot = null;                           // done (stop() rolls the cooldown)
+                targetPot = null;
             }
             return;
         }
@@ -123,19 +120,19 @@ public class StewEatGoal extends Goal {
             targetPot.getX() + 0.5, targetPot.getY() + 0.5, targetPot.getZ() + 0.5);
         if (d2 <= EAT_REACH_SQ) {
             if (!StoneCookingPotBlock.hasReadyServing(sl, targetPot)) {
-                targetPot = null;                           // someone emptied it before we arrived
+                targetPot = null;
                 return;
             }
             citizen.getNavigation().stop();
             facePot();
             eating = true;
             eatTicks = EAT_DURATION;
-            playBite(sl);                                   // first bite, the moment they reach it
+            playBite(sl);
         } else if (citizen.getNavigation().isDone()) {
             citizen.getNavigation().moveTo(
                 targetPot.getX() + 0.5, targetPot.getY(), targetPot.getZ() + 0.5, speedModifier);
         }
-        if (ticksRunning > WALK_TIMEOUT) {                  // couldn't get there — give up this round
+        if (ticksRunning > WALK_TIMEOUT) {
             targetPot = null;
         }
     }
@@ -149,14 +146,12 @@ public class StewEatGoal extends Goal {
         cooldown = rollCooldown();
     }
 
-    /** The morale payoff once the meal finishes: a strong, lasting food-pillar mood. */
     private void onEaten(ServerLevel sl) {
         long now = sl.getGameTime();
         citizen.getThoughts().add(AntiquityThoughts.ENJOYED_STEW, null, now, sl.random);
         citizen.recomputeHappiness();
     }
 
-    /** An audible bite at the pot — at the start and halfway through, so it reads as actively eating. */
     private void playBite(ServerLevel sl) {
         if (targetPot == null) return;
         sl.playSound(null, targetPot, SoundEvents.GENERIC_EAT, SoundSource.NEUTRAL,
@@ -169,7 +164,6 @@ public class StewEatGoal extends Goal {
             targetPot.getX() + 0.5, targetPot.getY() + 0.5, targetPot.getZ() + 0.5);
     }
 
-    /** Nearest claimed-chunk pot with a finished (non-poisoned) stew, within {@link #SEARCH_RADIUS}. */
     @Nullable
     private BlockPos findPot(ServerLevel sl, Settlement settlement) {
         BlockPos origin = citizen.blockPosition();

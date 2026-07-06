@@ -30,30 +30,31 @@ import net.neoforged.api.distmarker.OnlyIn;
 import org.joml.Matrix4f;
 
 /**
- * Renders the Stone Anvil in its two modes:
- * <ul>
- *   <li><b>Pile mode</b> — the placed-item pile (3×3 grid) + the ghost recipe preview / floating
- *       result, cloned from {@link FletchingStationRenderer} (generic over {@code GhostRecipeWorkstation}).</li>
- *   <li><b>Cast mode</b> — the placed fired mold (transparent-cavity {@code _model}) with the molten
- *       metal pooling in its cavity as you pour.</li>
- * </ul>
+ * Renders the Stone Anvil's three modes. Pile mode: the placed-item 3x3 grid pile (just above the
+ * 13px anvil top) plus the ghost recipe preview and floating result, cloned from
+ * FletchingStationRenderer (generic over GhostRecipeWorkstation). Cast mode: the placed fired mold
+ * drawn as its standalone baked "_model" item model (registered in client setup; its alpha-0 cavity
+ * is a real hole through the extruded thickness), laid flat on the anvil and rendered cutout; the
+ * molten fill is one translucent quad over the mold footprint whose cavity SHAPE comes for free
+ * because the cutout mold body writes depth and occludes everything outside the hole. The quad
+ * rises through MOLD_THICK (about the model's extruded depth at MOLD_SCALE) as the pour fills,
+ * full-bright while molten and dimmed once solid; MOLTEN_HALF sits a touch inside the mold's edge.
+ * Forging mode: the workpiece lying on the anvil during the cold-hammer minigame, its heat shown on
+ * the item itself via the entity overlay (white-hot flash fading to red as it cools, no extra quad),
+ * pulsing slightly and jolting down on each strike.
  */
 @OnlyIn(Dist.CLIENT)
 public class StoneAnvilRenderer implements BlockEntityRenderer<StoneAnvilBlockEntity> {
-    // Pile grid (just above the 13px anvil top).
     private static final double TOP_Y = 0.84;
     private static final double CELL = 0.2;
     private static final float BLOCK_SCALE = 0.2F;
     private static final float ITEM_SCALE = 0.3F;
 
-    // 3D placed mold: a baked generated model (transparent cavity = a real hole) laid flat, with the
-    // molten pooling in the hole. MOLD_THICK ≈ the model's extruded depth at this scale.
     private static final float MOLD_SCALE = 0.85F;
     private static final float MOLD_CENTER_Y = 0.84F;
     private static final float MOLD_THICK = 0.05F;
-    private static final float MOLTEN_HALF = 0.37F * MOLD_SCALE; // a touch inside the mold's edge
+    private static final float MOLTEN_HALF = 0.37F * MOLD_SCALE;
 
-    /** The standalone baked model for a placed mold of {@code shape} (registered in client setup). */
     public static net.minecraft.client.resources.model.ModelResourceLocation placedMoldModel(String shape) {
         return net.minecraft.client.resources.model.ModelResourceLocation.standalone(
             ResourceLocation.fromNamespaceAndPath("bannerboundantiquity",
@@ -78,21 +79,17 @@ public class StoneAnvilRenderer implements BlockEntityRenderer<StoneAnvilBlockEn
         }
     }
 
-    // ── Forging mode — the glowing workpiece on the anvil during the cold-hammer minigame ──────────
     private void renderForging(StoneAnvilBlockEntity be, float partialTick, PoseStack pose,
                                MultiBufferSource buffers) {
         long gt = be.getLevel() != null ? be.getLevel().getGameTime() : 0L;
         float heat = be.forgeHeat();
 
-        // Heat is shown ON the workpiece itself via the entity overlay (white-flash + red), so it glows
-        // white-hot when fresh and red-hot as it cools — no texture quad, full-bright. Pulses a touch.
         float pulse = 0.85F + 0.15F * Mth.sin((gt + partialTick) * 0.30F);
         float h = Mth.clamp(heat * pulse, 0F, 1F);
-        int whiteU = (int) (h * 15F);            // 15 = full white-hot, 0 = none
-        int redV = 3 + (int) ((1F - h) * 7F);    // 3 = red row (cooling), 10 = neutral (hottest)
+        int whiteU = (int) (h * 15F);            // overlay U 15 = full white-hot flash, 0 = none
+        int redV = 3 + (int) ((1F - h) * 7F);    // overlay V 3 = red hurt row (cooling), 10 = neutral
         int overlay = net.minecraft.client.renderer.texture.OverlayTexture.pack(whiteU, redV);
 
-        // The workpiece, laid on the anvil, jolting down on each strike.
         float since = (gt - be.lastStruckGameTime()) + partialTick;
         float recoil = since < 5f ? -Math.max(0f, (5f - since) / 5f) * 0.06F : 0f;
         ItemStack work = be.forgeItem();
@@ -106,13 +103,10 @@ public class StoneAnvilRenderer implements BlockEntityRenderer<StoneAnvilBlockEn
         pose.popPose();
     }
 
-    // ── Cast mode ───────────────────────────────────────────────────────────────────────────────
     private void renderMold(StoneAnvilBlockEntity be, PoseStack pose, MultiBufferSource buffers, int light) {
         int blockLight = LevelRenderer.getLightColor(be.getLevel(), be.getBlockPos());
         Matrix4f mat = pose.last().pose();
 
-        // 1) Molten fill — a quad over the mold footprint, masked to the cavity SHAPE by the hole in
-        //    the cutout body (opaque parts write depth and occlude it), so it's the right size for free.
         float frac = be.fillFraction();
         if (frac > 0.0F) {
             TextureAtlasSprite molten = Minecraft.getInstance()
@@ -130,21 +124,18 @@ public class StoneAnvilRenderer implements BlockEntityRenderer<StoneAnvilBlockEn
                 molten.getU0(), molten.getU1(), molten.getV0(), molten.getV1());
         }
 
-        // 2) The 3D mold body — the baked generated model (alpha-0 cavity = a real hole through the
-        //    extruded thickness), laid flat on the anvil, rendered cutout.
         net.minecraft.client.resources.model.BakedModel model =
             Minecraft.getInstance().getModelManager().getModel(placedMoldModel(be.moldShape()));
         VertexConsumer body = buffers.getBuffer(net.minecraft.client.renderer.Sheets.cutoutBlockSheet());
         pose.pushPose();
         pose.translate(0.5, MOLD_CENTER_Y, 0.5);
-        pose.mulPose(Axis.XP.rotationDegrees(90.0F)); // lay flat → the extruded depth sticks up
+        pose.mulPose(Axis.XP.rotationDegrees(90.0F));
         pose.scale(MOLD_SCALE, MOLD_SCALE, MOLD_SCALE);
-        pose.translate(-0.5, -0.5, -0.5); // centre the 0..1 model on the anvil
+        pose.translate(-0.5, -0.5, -0.5);
         renderModelQuads(model, pose, body, blockLight, OverlayTexture.NO_OVERLAY);
         pose.popPose();
     }
 
-    /** Draws every quad of a baked model with flat white tint at the given light. */
     private static void renderModelQuads(net.minecraft.client.resources.model.BakedModel model,
                                          PoseStack pose, VertexConsumer vc, int light, int overlay) {
         PoseStack.Pose p = pose.last();
@@ -161,7 +152,6 @@ public class StoneAnvilRenderer implements BlockEntityRenderer<StoneAnvilBlockEn
         }
     }
 
-    // ── Pile mode (clone of FletchingStationRenderer) ───────────────────────────────────────────
     private void renderPile(StoneAnvilBlockEntity be, float partialTick, PoseStack pose,
                             MultiBufferSource buffers, int light) {
         List<ItemStack> contents = be.getContents();

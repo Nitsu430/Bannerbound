@@ -38,6 +38,33 @@ import net.minecraft.world.item.crafting.RecipeInput;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
+/**
+ * JEI plugin implementing Bannerbound's knowledge gate: items and recipes the local player hasn't
+ * unlocked yet are REMOVED from JEI (no "?" wall, no progression spoiler) rather than masked, while
+ * known items (starting items + research unlocks) stay so recipes built from them still resolve.
+ * Config.JEI_SHOW_UNKNOWN bypasses the whole gate. Wired to ClientResearchState and
+ * ClientStartingItems listeners so visibility tracks research live; applyKnowledgeGate is the single
+ * entry point and re-runs on every knowledge change.
+ *
+ * Two invariants this class exists to defend:
+ *  - Recipes are gated by OUTPUT, not input: a recipe that produces something the player can make
+ *    must always be visible even if an input is still unknown (the input keeps its own "?" icon).
+ *    That output short-circuit keeps starting-item recipes like flint_knife in JEI.
+ *  - Vanilla crafting is gated by GRID SIZE, not knowledge: the 2x2 inventory grid is always
+ *    available so every 2x2-fitting recipe shows, and 3x3 recipes are always hidden (this mod has no
+ *    crafting table). Knowledge-gating crafting left flint_knife stuck hidden, so it is deliberately
+ *    excluded; other vanilla types (smelting, stonecutting, ...) and custom station recipes stay
+ *    knowledge-gated.
+ *
+ * Startup races drove the rest. JEI caches each ingredient's search name once at add time, so items
+ * indexed before the knowledge set synced are stuck searchable only as "unknown item"; once
+ * knowledge lands we re-add the known items a single time (refreshedKnownNames) to refresh those
+ * cached names. The item-visibility sync must not run until ClientStartingItems has synced: if it
+ * runs first, every starting item looks unknown and gets removed, and re-adding them later does NOT
+ * un-hide their crafting recipes in JEI -- leaving e.g. flint_knife permanently absent. Each vanilla
+ * type is fully unhidden then re-hidden to only-currently-unknown, making the gate self-correcting
+ * and idempotent.
+ */
 @JeiPlugin
 @OnlyIn(Dist.CLIENT)
 public final class BannerboundCoreJeiPlugin implements IModPlugin {
@@ -51,9 +78,6 @@ public final class BannerboundCoreJeiPlugin implements IModPlugin {
     private final Map<RecipeType<?>, List<?>> hiddenRecipes = new HashMap<>();
     private final List<ItemStack> itemIngredientUniverse = new ArrayList<>();
     private final List<ItemStack> hiddenItemIngredients = new ArrayList<>();
-    /** JEI caches each ingredient's search name once, when it's added. Anything indexed before the
-     *  knowledge set synced was named "Unknown item" (the masked name) and stays unsearchable. Once
-     *  knowledge lands we re-add the known items a single time to refresh those cached names. */
     private boolean refreshedKnownNames = false;
     private final Runnable knowledgeListener = this::applyKnowledgeGate;
     private IJeiRuntime runtime;
@@ -82,7 +106,7 @@ public final class BannerboundCoreJeiPlugin implements IModPlugin {
     @Override
     public void onRuntimeAvailable(IJeiRuntime jeiRuntime) {
         runtime = jeiRuntime;
-        refreshedKnownNames = false; // JEI rebuilt its list this join → refresh names again once knowledge lands
+        refreshedKnownNames = false;
         ClientResearchState.addKnowledgeListener(knowledgeListener);
         ClientStartingItems.addListener(knowledgeListener);
         applyKnowledgeGate();
@@ -112,16 +136,7 @@ public final class BannerboundCoreJeiPlugin implements IModPlugin {
             unhideAll(jeiRecipes);
             return;
         }
-        // Un-researched items are REMOVED from JEI's ingredient list (no "?" wall, no progression
-        // spoiler). KNOWN items (starting items + researched) stay, so recipes made of known items —
-        // like flint_knife — still resolve. syncItemIngredientVisibility removes newly-unknown items
-        // and re-adds any that have become known, tracking research live.
-        //
-        // CRITICAL: only run this once the starting-items set has actually synced. If JEI's first
-        // gate runs before that sync (a real race on world join), every starting item looks "unknown"
-        // and gets removed; re-adding them when the sync lands does NOT un-hide their crafting recipes
-        // in JEI, leaving e.g. the flint_knife recipe permanently absent. Skipping here is safe — the
-        // ClientStartingItems listener re-invokes applyKnowledgeGate the moment the set arrives.
+        // Order-dependent: never remove item ingredients until starting-items has synced, or their crafting recipes stay hidden forever.
         if (ClientStartingItems.isLoaded()) {
             syncItemIngredientVisibility(runtime.getIngredientManager());
         } else {
@@ -158,11 +173,6 @@ public final class BannerboundCoreJeiPlugin implements IModPlugin {
         net.minecraft.world.item.crafting.RecipeType<R> vanillaType
     ) {
         List<RecipeHolder<R>> all = level.getRecipeManager().getAllRecipesFor(vanillaType).stream().toList();
-        // Clear ANY stale hidden state for this type first. A recipe hidden during an earlier gate
-        // pass — e.g. flint_knife while its output was still "unknown" because starting-items hadn't
-        // synced when JEI loaded — was never being un-hidden once it became known (the incremental
-        // unhide only covered the last-tracked subset). Unhiding the whole type, then re-hiding only
-        // what's currently unknown, makes the gate self-correcting and idempotent.
         jeiRecipes.unhideRecipes(jeiType, all);
         List<RecipeHolder<R>> unknown = all.stream()
             .filter(holder -> shouldHideRecipe(holder, level))
@@ -190,12 +200,6 @@ public final class BannerboundCoreJeiPlugin implements IModPlugin {
                                                    T recipe) {
         IIngredientSupplier ingredients = recipeManager.getRecipeIngredients(category, recipe);
         Collection<ITypedIngredient<?>> outputs = ingredients.getIngredients(RecipeIngredientRole.OUTPUT);
-        // A recipe that PRODUCES something the player already knows (a starting item or a
-        // research-unlocked item) must always be visible — the player can craft it, so its
-        // recipe must be discoverable. This is the whole point of the gate: hide recipes for
-        // things you can't make yet, never the ones you can. So if every output is known, the
-        // recipe stays even if an INPUT happens to be unknown (the input's own icon is still the
-        // question-mark gate, which is the intended leak-protection).
         if (hasOnlyKnownOutputs(outputs)) {
             return false;
         }
@@ -203,7 +207,6 @@ public final class BannerboundCoreJeiPlugin implements IModPlugin {
             || hasUnknownItem(outputs);
     }
 
-    /** True only when at least one output exists and EVERY output stack is known to the player. */
     private static boolean hasOnlyKnownOutputs(Collection<ITypedIngredient<?>> outputs) {
         boolean sawOutput = false;
         for (ITypedIngredient<?> ingredient : outputs) {
@@ -261,21 +264,11 @@ public final class BannerboundCoreJeiPlugin implements IModPlugin {
         ClientLevel level
     ) {
         R recipe = holder.value();
-        // Crafting recipes get a SIMPLE rule, independent of research knowledge: the 2x2 inventory
-        // grid is always available, so EVERY 2x2-fitting crafting recipe is shown in JEI; 3x3
-        // (crafting-table) recipes are always hidden because this mod has no crafting table. This is
-        // deliberately NOT knowledge-gated — gating it was leaving the flint_knife recipe stuck
-        // hidden (it's a starting item whose "known" state isn't reliably set when the gate first
-        // runs). Knowledge gating still applies to the other vanilla types (smelting, stonecutting,
-        // …) below, and to the custom station recipes (crafting stone, etc.) elsewhere.
+        // Gate crafting by grid size, NOT knowledge: show all 2x2-fitting recipes, hide 3x3 (no crafting table); knowledge-gating here strands flint_knife.
         if (recipe instanceof net.minecraft.world.item.crafting.CraftingRecipe craftingRecipe) {
             return !craftingRecipe.canCraftInDimensions(2, 2);
         }
         ItemStack result = recipe.getResultItem(level.registryAccess());
-        // Output known (starting item or research-unlocked) → the player can craft it, so its
-        // recipe must always show, regardless of what the inputs are. This is what makes
-        // starting-item recipes like flint_knife appear in JEI: the result is in the starting
-        // set, so we short-circuit before the input scan can hide it.
         if (result != null && !result.isEmpty() && !shouldHideStack(result)) {
             return false;
         }
@@ -317,10 +310,6 @@ public final class BannerboundCoreJeiPlugin implements IModPlugin {
         hiddenItemIngredients.clear();
         hiddenItemIngredients.addAll(nextHidden);
 
-        // First time knowledge is actually present: re-add the known (visible) items so JEI rebuilds
-        // their cached search names with the now-correct (un-masked) display name. Without this,
-        // items JEI indexed during the pre-sync window stay searchable only as "unknown item". The
-        // known set is small (starting items + research unlocks), so this one-shot is cheap.
         if (!refreshedKnownNames) {
             refreshedKnownNames = true;
             List<ItemStack> knownVisible = itemIngredientUniverse.stream()

@@ -20,15 +20,23 @@ import net.neoforged.neoforge.event.AddReloadListenerEvent;
 import net.neoforged.neoforge.event.OnDatapackSyncEvent;
 
 /**
- * Wires the research subsystem into the server lifecycle:
- * <ul>
- *   <li>{@code AddReloadListenerEvent} — registers {@link StartingItemsLoader},
- *       {@link ResearchTreeLoader}, {@link OreDisguiseLoader} as datapack reload listeners.</li>
- *   <li>{@code OnDatapackSyncEvent} — runs auto-unlocks (fixes existing saves on first load)
- *       and pushes era/items/tree/disguises/state to the joining player or to everyone after
- *       a global /reload.</li>
- *   <li>{@code ServerTickEvent.Post} — drives {@link ResearchManager#tickAll} every tick.</li>
- * </ul>
+ * Wires the research subsystem (and, by extension, most per-settlement server tickers) into the
+ * server lifecycle via three events.
+ *
+ * <p>{@code AddReloadListenerEvent} registers every datapack reload listener (research/culture/
+ * faith trees, starting items, ore disguises, drop overrides, tool ages, chunk/city-state/era/
+ * appeal/food/palette/language/crisis/codex/barbarian data).
+ *
+ * <p>{@code OnDatapackSyncEvent} re-runs auto-unlocks after the tree (re)loads - this fixes existing
+ * saves and picks up newly added auto_unlock nodes on /reload - then pushes era, items, trees,
+ * disguises and per-manager state to the joining player (single) or to everyone after a global
+ * /reload.
+ *
+ * <p>{@code ServerTickEvent.Post} drives every per-settlement ticker (research, culture, faith,
+ * immigration, crises, barbarians, city-states, ruination, trade, ...). Post is used so entities
+ * have already ticked. Two ordering constraints matter and are flagged inline below: the dormancy
+ * pre-pass must run before any per-settlement ticker, and chunk-beauty must refresh before
+ * immigration.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -65,12 +73,10 @@ public final class ResearchEvents {
 
     @SubscribeEvent
     public static void onDatapackSync(OnDatapackSyncEvent event) {
-        // After the tree (re)loads, sweep settlements for any auto_unlock nodes they're missing.
-        // Covers existing saves and new auto_unlock nodes added via /reload.
         ResearchManager.applyAllAutoUnlocks(event.getPlayerList().getServer());
         com.bannerbound.core.api.research.CultureManager.applyAllAutoUnlocks(event.getPlayerList().getServer());
         com.bannerbound.core.api.research.InsightManager.rebuildIndex();
-        com.bannerbound.core.barbarian.CampPieces.clearCache(); // re-scan camp .nbt pieces after /reload
+        com.bannerbound.core.barbarian.CampPieces.clearCache();
         assignDefaultCultureStyles(event.getPlayerList().getServer());
         com.bannerbound.core.language.CustomLanguageSync.refreshLoadedCitizenNames(
             event.getPlayerList().getServer());
@@ -121,8 +127,6 @@ public final class ResearchEvents {
         }
     }
 
-    /** Gives a default culture style to any settlement saved before the culture-style feature
-     *  existed, so its block appeal isn't stuck on base values forever. */
     private static void assignDefaultCultureStyles(net.minecraft.server.MinecraftServer server) {
         if (server == null) return;
         java.util.List<String> styleIds =
@@ -143,41 +147,24 @@ public final class ResearchEvents {
 
     @SubscribeEvent
     public static void onServerTick(net.neoforged.neoforge.event.tick.ServerTickEvent.Post event) {
-        // Snapshot the citizen-AI profiler for this tick (entities already ticked before Post).
         com.bannerbound.core.sim.CitizenAiProfiler.endTick();
-        // Dormancy pre-pass: refresh every settlement's transient dormant flag BEFORE any
-        // per-settlement ticker below (research, culture, crises, immigration, ...) so they all
-        // read the same fresh value within this tick.
+        // Dormancy pre-pass: must run before every per-settlement ticker below so they read one fresh flag.
         SettlementManager.refreshDormancy(event.getServer());
         ResearchManager.tickAll(event.getServer());
         com.bannerbound.core.api.research.CultureManager.tickAll(event.getServer());
-        // Devotion accrual + per-second faith state broadcast (FAITH_PLAN.md).
         com.bannerbound.core.api.faith.FaithManager.tickAll(event.getServer());
         com.bannerbound.core.api.research.InsightManager.tickLevels(event.getServer());
-        // Refresh chunk beauty before immigration so the culture accumulator reads fresh tags.
+        // Must refresh chunk beauty before immigration: the culture accumulator reads these tags.
         com.bannerbound.core.api.settlement.ChunkBeautyManager.tickAll(event.getServer());
         com.bannerbound.core.api.settlement.ImmigrationManager.tickAll(event.getServer());
         com.bannerbound.core.crisis.CrisisManager.tickAll(event.getServer());
-        // Procreation loop: nightly mate-scan + active lovemaking-session tick. Cheap when no
-        // one is sleeping in a home with eligible pairs (most of every day).
         com.bannerbound.core.social.BabyMakingManager.tickAll(event.getServer());
-        // Throwaway crowd-LOD stress test (/bannerbound simulate). No-op unless a session is running.
         com.bannerbound.core.sim.SimulationManager.tickAll(event.getServer());
-        // Throwaway long-distance traversal proof (/bannerbound trader_simulate). No-op unless running.
         com.bannerbound.core.sim.TraderSimManager.tickAll(event.getServer());
-        // Barbarian camp seeding (and, in later phases, realize/clocks/raids). Self-gated to a scan
-        // every N ticks; cheap no-op otherwise.
         com.bannerbound.core.barbarian.BarbarianCampManager.tickAll(event.getServer());
-        // AI city-states: detect villages near players, run their abstract economy/evolution clock.
-        // Self-gated to periodic passes; cheap no-op when none are near / none exist.
         com.bannerbound.core.citystate.CityStateManager.tickAll(event.getServer());
-        // City-state war: pending countdowns, mercenary garrisons, capture timeouts. Cheap no-op
-        // when no city-state is at war.
         com.bannerbound.core.citystate.CityStateWarManager.tickAll(event.getServer());
-        // Ruination: razed/disbanded areas slowly crumble to ruins. No-op when nothing's crumbling.
         com.bannerbound.core.ruin.RuinManager.tickAll(event.getServer());
-        // Settlement-to-settlement trade: offer expiry, war-cancel, escrow gathering, clock transit,
-        // delivery/refund deposits. Self-gated to a sweep every 20 ticks; no-op with no deals.
         com.bannerbound.core.trade.TradeManager.tickAll(event.getServer());
     }
 }

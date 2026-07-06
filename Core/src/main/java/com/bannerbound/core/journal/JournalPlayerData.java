@@ -13,7 +13,11 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.saveddata.SavedData;
 
-/** World SavedData for player-scoped journal entries such as tutorials. */
+/**
+ * World SavedData holding player-scoped journal entries (e.g. tutorials), keyed by player UUID.
+ * Attached to the overworld's data storage under DATA_NAME; entriesFor lazily creates a player's
+ * list. Persistence via the standard SavedData save/load pair.
+ */
 public final class JournalPlayerData extends SavedData {
     private static final String DATA_NAME = "bannerbound_player_journal";
 

@@ -18,7 +18,14 @@ import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.GsonHelper;
 import net.minecraft.util.profiling.ProfilerFiller;
 
-/** Loads data/<namespace>/crises/*.json. */
+/**
+ * Data-pack reload listener that parses data/<namespace>/crises/*.json into an immutable map of
+ * CrisisDefinition keyed by full resource id, exposed via getAll/get and consumed by CrisisManager.
+ * Parsing is deliberately tolerant: it accepts both snake_case and camelCase key aliases, converts
+ * "seconds" fields to ticks, fills per-field defaults, drops any crisis that defines no choices, and
+ * logs-and-skips a malformed file rather than failing the whole reload. DEFINITIONS is volatile so
+ * the fresh map published by the reload thread is visible to game-thread readers immediately.
+ */
 public final class CrisisDefinitionLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "crises";
     private static final Gson GSON = new Gson();

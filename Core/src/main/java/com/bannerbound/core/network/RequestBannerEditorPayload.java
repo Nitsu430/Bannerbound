@@ -10,8 +10,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: the player clicked the town hall's "Banner" button — asks the server to validate
- * (member, Heraldry researched) and answer with an {@link OpenBannerEditorPayload} snapshot.
+ * C->S: the player clicked the town hall's "Banner" button -- asks the server to validate (member,
+ * Heraldry researched) and answer with an OpenBannerEditorPayload snapshot.
  */
 @ApiStatus.Internal
 public record RequestBannerEditorPayload() implements CustomPacketPayload {

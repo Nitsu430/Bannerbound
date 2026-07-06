@@ -10,8 +10,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: cancel the settlement's pending palette change + its confirm votes. Twin of
- * {@link RetractPolicyChangePayload}. No fields — clears whatever change is currently pending.
+ * C->S request to cancel the settlement's pending palette change and its confirm votes. Twin of
+ * {@link RetractPolicyChangePayload}. Fieldless (unit codec, shared INSTANCE); the server clears
+ * whatever palette change is currently pending.
  */
 @ApiStatus.Internal
 public record RetractPaletteChangePayload() implements CustomPacketPayload {

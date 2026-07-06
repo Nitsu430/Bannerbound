@@ -19,31 +19,22 @@ import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Decides whether an individual dropped stack is allowed to reach the world / a worker's
- * drop-off, given the civ that caused the drop. The rule, per stack:
- * <ol>
- *   <li>A {@code never_drop} override (from {@link DropOverrideLoader}) always strips it.</li>
- *   <li>An {@code always_drop} override always keeps it.</li>
- *   <li>Otherwise it's kept only if the settlement knows the item ({@link ItemKnowledge}).</li>
- * </ol>
- * A {@code null} settlement means no civ context, so only globally-known starting items survive.
- * <p>
- * This is the shared chokepoint behind both the player-facing drop events
+ * Shared chokepoint deciding whether an individual dropped stack may reach the world or a
+ * worker's drop-off, given the civ that caused the drop. Per stack: a never_drop override
+ * (DropOverrideLoader, optionally scoped to the broken-block / killed-entity source id)
+ * always strips it; an always_drop override always keeps it; otherwise it survives only if
+ * the settlement knows the item ({@link ItemKnowledge}). A null settlement means no civ
+ * context, so only globally-known starting items pass. Both the player-facing drop events
  * ({@link com.bannerbound.core.event.DropGatingEvents}) and the worker collection sites
- * (forester / digger / fisher), which compute their drops with {@code Block.getDrops} and never
- * fire those events.
+ * (forester / digger / fisher, which compute drops via Block.getDrops and never fire those
+ * events) route through here. {@link #settlementOf} resolves the owning civ from the causing
+ * entity, following a projectile to its owner; wild mobs and settlement-less players yield
+ * null.
  */
 public final class SettlementDropFilter {
     private SettlementDropFilter() {
     }
 
-    /**
-     * @param settlement the civ that caused the drop, or null for no civ context
-     * @param sourceId   id of the broken block or killed entity (for scoped never_drop overrides);
-     *                   null when the source is unknown (e.g. a felling-tree particle drop)
-     * @param stack      the candidate drop
-     * @return true if {@code stack} is allowed to drop
-     */
     public static boolean shouldDrop(@Nullable Settlement settlement, @Nullable ResourceLocation sourceId,
                                      ItemStack stack) {
         if (stack == null || stack.isEmpty()) {
@@ -61,23 +52,16 @@ public final class SettlementDropFilter {
         };
     }
 
-    /** Removes any disallowed stack from a list of raw {@link ItemStack} drops, in place. */
     public static void filterStacks(@Nullable Settlement settlement, @Nullable ResourceLocation sourceId,
                                     List<ItemStack> drops) {
         drops.removeIf(stack -> !shouldDrop(settlement, sourceId, stack));
     }
 
-    /** Removes any disallowed {@link ItemEntity} from a drops collection, in place. Used by the
-     *  block/living drop events, whose drops are already spawned as entities. */
     public static void filterEntities(@Nullable Settlement settlement, @Nullable ResourceLocation sourceId,
                                       java.util.Collection<ItemEntity> drops) {
         drops.removeIf(item -> !shouldDrop(settlement, sourceId, item.getItem()));
     }
 
-    /**
-     * Resolves the civ that should own a drop caused by {@code entity}: a player's settlement, a
-     * worker citizen's settlement, or null for anything else (wild mobs, no-settlement players).
-     */
     @Nullable
     public static Settlement settlementOf(@Nullable Entity entity) {
         if (entity instanceof Projectile projectile && projectile.getOwner() != null) {

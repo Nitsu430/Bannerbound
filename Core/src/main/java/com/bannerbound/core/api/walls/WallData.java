@@ -30,33 +30,38 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.saveddata.SavedData;
 
 /**
- * {@link SavedData} for the walls system: each settlement's frozen {@link WallPlan}, its
- * design library (Phase 5), and — crucially — its <b>built-wall set</b>: every position where
- * a wall block was actually PLACED into the blueprint (by hand via the place-event hook in
- * {@code WallEvents}, by builders inline in Phase 4). This is the authoritative "this block IS
- * settlement wall" memory: it survives plan cancellation and re-layout, so a wall designed
- * out of terrain blocks (dirt!) can never be mistaken for a hill by the ground walk, no
- * matter what happened to the plan since. Positions leave the set when their block breaks
- * (event) or is found to be air during {@link #reconcile} (explosions, pre-event edits).
+ * {@link SavedData} for the walls system. Per settlement it holds: the frozen {@link WallPlan}; the
+ * player design library (Phase 5); per-kind active design ids; refinement overrides (gate anchors,
+ * wall-top Y, per-piece variant, foundation-off); designer draft working copies; and - crucially -
+ * the <b>built-wall set</b>: every position where a wall block was actually PLACED into the blueprint
+ * (by hand via the place-event hook in {@code WallEvents}, or by builders inline in Phase 4). That
+ * set is the authoritative "this block IS settlement wall" memory: it survives plan cancellation and
+ * re-layout, so a wall designed out of terrain blocks (dirt!) can never be mistaken for a hill by the
+ * ground walk, no matter what happened to the plan since. Positions leave the set when their block
+ * breaks (event) or is found to be air during {@link #reconcile} (explosions, pre-event edits).
  *
- * <p>Kept separate from {@code SettlementData} so the piece arrays, design palettes and
- * position sets don't bloat the frequently-saved settlement blob — same split as
- * {@code ChunkBeautyData}.
+ * <p>{@link #blueprint} is the pos -> expected-state expansion of the committed plan with connections
+ * BAKED via {@link WallConnectivity} (design-only neighbors) so expected states are the EXACT final
+ * wall states (builders/ghosts place them verbatim, player placements snap to them, playtest
+ * 2026-06-12). It is cached in {@code blueprintCache}, which is {@code transient} (never saved) and
+ * MUST be invalidated on every plan/design/refinement change - every mutator here calls
+ * {@code blueprintCache.remove}. {@link #reconcile} backfills built-matches and drops now-air
+ * positions; cheap enough to run on construct/status but it must NEVER run on a tick path.
+ *
+ * <p>Refinement anchors are packed (x, 0, z) slot starts; an anchor that stops matching a slot after
+ * re-expansion is silently ignored (the shared stability rule). Drafts are autosaved designer working
+ * copies that never activate and never enter the design resolver. Kept separate from
+ * {@code SettlementData} so these arrays, palettes and position sets don't bloat the frequently-saved
+ * settlement blob - same split as {@code ChunkBeautyData}.
  */
 @ApiStatus.Internal
 public class WallData extends SavedData {
     private static final String DATA_NAME = "bannerbound_walls";
 
     private final Map<UUID, WallPlan> plans = new HashMap<>();
-    /** Player-authored designs per settlement (Phase 5 fills this; defaults never live here). */
     private final Map<UUID, List<WallDesign>> libraries = new HashMap<>();
-    /** Positions where wall blocks were actually placed and still stand. */
     private final Map<UUID, LongOpenHashSet> builtWalls = new HashMap<>();
-    /** Player-marked gate slots: packed (x, 0, z) segment-slot starts from the preview. Input
-     *  to the layout engine; anchors that stop matching a slot after expansion are ignored. */
     private final Map<UUID, LongOpenHashSet> gateAnchors = new HashMap<>();
-    /** Transient pos→expected-state cache per settlement, invalidated on plan change. Lets the
-     *  per-block-place event hook check membership in O(1) instead of re-expanding the plan. */
     private final transient Map<UUID, Long2ObjectMap<BlockState>> blueprintCache = new HashMap<>();
 
     public WallData() {
@@ -85,10 +90,6 @@ public class WallData extends SavedData {
         setDirty();
     }
 
-    /** Cached pos → expected-state expansion of the committed plan (empty map if no plan).
-     *  Connections are BAKED (WallConnectivity, design-only neighbors) so the expected states
-     *  are the EXACT final wall states — builders place them verbatim, ghosts show them
-     *  verbatim, player placements snap to them (playtest 2026-06-12). */
     public Long2ObjectMap<BlockState> blueprint(ServerLevel level, UUID settlementId,
                                                 Function<String, WallDesign> designs) {
         return blueprintCache.computeIfAbsent(settlementId, id -> {
@@ -98,9 +99,6 @@ public class WallData extends SavedData {
         });
     }
 
-    // ─── Built-wall tracking ────────────────────────────────────────────────────────────────
-
-    /** Live set of positions whose blocks ARE settlement wall (placed, still standing). */
     public LongSet builtWall(UUID settlementId) {
         return builtWalls.computeIfAbsent(settlementId, k -> new LongOpenHashSet());
     }
@@ -118,13 +116,6 @@ public class WallData extends SavedData {
         }
     }
 
-    /**
-     * Re-syncs the built-wall set against the world: blueprint positions whose block already
-     * matches are marked built (backfills walls that predate placement tracking; self-heals
-     * anything a hook missed), and built positions that are now air are dropped (explosions,
-     * non-event removals). Cheap — a few thousand block reads — and run on construct/status,
-     * never on a tick path.
-     */
     public void reconcile(ServerLevel level, UUID settlementId, Function<String, WallDesign> designs) {
         Long2ObjectMap<BlockState> blueprint = blueprint(level, settlementId, designs);
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
@@ -153,14 +144,10 @@ public class WallData extends SavedData {
         }
     }
 
-    /** Live set of player-marked gate anchors (packed (x, 0, z) slot starts). */
     public LongSet gateAnchors(UUID settlementId) {
         return gateAnchors.computeIfAbsent(settlementId, k -> new LongOpenHashSet());
     }
 
-    /** Player wall-top refinements (Phase 5.5): packed slot-start anchor → ABSOLUTE top Y.
-     *  Applied after the auto top-alignment chain; anchors that stop matching a slot after
-     *  expansion are silently ignored (same stability rule as gates). */
     private final Map<UUID, Map<Long, Integer>> topOverrides = new HashMap<>();
 
     public Map<Long, Integer> topOverrides(UUID settlementId) {
@@ -175,9 +162,6 @@ public class WallData extends SavedData {
         setDirty();
     }
 
-    /** Per-piece design VARIANT overrides (kind-aware refine anchor → LIBRARY design id).
-     *  Variants are PLAYER-SAVED designs of the same kind + footprint ("variants shouldn't
-     *  be auto-derived", playtest 2026-06-12); absent = the active (base) design. */
     private final Map<UUID, Map<Long, String>> variantOverrides = new HashMap<>();
 
     public Map<Long, String> variantOverrides(UUID settlementId) {
@@ -192,15 +176,12 @@ public class WallData extends SavedData {
         setDirty();
     }
 
-    /** Per-piece "no foundation" refinements: pieces whose bottom-course continuation is
-     *  suppressed (kind-aware refine anchors, playtest 2026-06-12). */
     private final Map<UUID, LongOpenHashSet> foundationOff = new HashMap<>();
 
     public LongSet foundationOff(UUID settlementId) {
         return foundationOff.computeIfAbsent(settlementId, k -> new LongOpenHashSet());
     }
 
-    /** Toggles; returns true if continuation is now OFF for that piece. */
     public boolean toggleFoundationOff(UUID settlementId, long packedAnchor) {
         LongOpenHashSet set = foundationOff.computeIfAbsent(settlementId, k -> new LongOpenHashSet());
         boolean nowOff = set.add(packedAnchor);
@@ -212,7 +193,6 @@ public class WallData extends SavedData {
         return nowOff;
     }
 
-    /** Toggles a gate anchor; returns true if it is now SET. */
     public boolean toggleGateAnchor(UUID settlementId, long packedAnchor) {
         LongOpenHashSet set = gateAnchors.computeIfAbsent(settlementId, k -> new LongOpenHashSet());
         boolean added = set.add(packedAnchor);
@@ -227,7 +207,6 @@ public class WallData extends SavedData {
         return libraries.computeIfAbsent(settlementId, k -> new ArrayList<>());
     }
 
-    /** Active design id per kind (key = settlementId + kind). Null/absent = built-in default. */
     private final Map<UUID, Map<WallDesign.Kind, String>> activeIds = new HashMap<>();
 
     @Nullable
@@ -245,7 +224,6 @@ public class WallData extends SavedData {
         setDirty();
     }
 
-    /** Adds or replaces (by id) a design in the settlement's library. */
     public void upsertDesign(UUID settlementId, WallDesign design) {
         List<WallDesign> library = library(settlementId);
         library.removeIf(d -> d.id().equals(design.id()));
@@ -254,7 +232,6 @@ public class WallData extends SavedData {
         setDirty();
     }
 
-    /** Removes a library design; clears the active pointer if it pointed at it. */
     public void removeDesign(UUID settlementId, String designId) {
         boolean removed = library(settlementId).removeIf(d -> d.id().equals(designId));
         if (removed) {
@@ -267,7 +244,6 @@ public class WallData extends SavedData {
         }
     }
 
-    /** Library design by id, or null (caller falls back to the built-in defaults). */
     @Nullable
     public WallDesign libraryDesign(UUID settlementId, String designId) {
         for (WallDesign design : library(settlementId)) {
@@ -276,8 +252,6 @@ public class WallData extends SavedData {
         return null;
     }
 
-    /** Designer working copies, one per kind — autosaved when the designer closes so Escape
-     *  never loses work (playtest 2026-06-12). Never activated, never enter the resolver. */
     private final Map<UUID, Map<WallDesign.Kind, WallDesign>> drafts = new HashMap<>();
 
     @Nullable
@@ -292,7 +266,6 @@ public class WallData extends SavedData {
         setDirty();
     }
 
-    /** Settlement dissolved — drop everything walls-related. */
     public void remove(UUID settlementId) {
         boolean removed = plans.remove(settlementId) != null;
         removed |= libraries.remove(settlementId) != null;

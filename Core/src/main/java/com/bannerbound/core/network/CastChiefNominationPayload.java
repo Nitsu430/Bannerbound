@@ -13,7 +13,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: this player nominates {@code candidate} for the active chief election.
+ * C->S: this player nominates {@code candidate} for the active chief election.
  * Replaces any previous nomination from the same voter (you can change your mind until the
  * round resolves). Routed to {@code SettlementManager.handleChiefNomination} via
  * {@code ServerPayloadHandler.handleCastChiefNomination}.

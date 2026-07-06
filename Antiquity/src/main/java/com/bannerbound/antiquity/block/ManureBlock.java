@@ -16,19 +16,17 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
  * A flat pat of manure that domesticated livestock leave on the floor of a pen (placed by
- * {@code HerdingEvents}). It has no collision — animals and the herder walk right over it — but it
- * <b>fouls the pen</b>: every manure block within a breeding pair's radius shaves their breed chance
+ * {@code HerdingEvents}). It has no collision (animals and the herder walk right over it) but it
+ * fouls the pen: every manure block within a breeding pair's radius shaves their breed chance
  * (Core's {@code BreedingEvents}, recognised by the {@code #bannerbound:manure} tag). Clearing it
  * (faster with a shovel via {@code minecraft:mineable/shovel}) yields {@code dung}, the bone-meal-style
- * fertilizer. Herders muck it out automatically as pen upkeep.
- *
- * <p>Sits in the air cell on top of a floor block (like a carpet) and pops off if its support is removed
- * or isn't a solid top face — so it never floats and never sits on a fence.
+ * fertilizer. Herders muck it out automatically as pen upkeep. Sits in the air cell on top of a floor
+ * block like a carpet and pops off if its support is removed or isn't a solid top face, so it never
+ * floats and never sits on a fence.
  */
 public class ManureBlock extends Block {
     public static final MapCodec<ManureBlock> CODEC = simpleCodec(ManureBlock::new);
 
-    /** A low, flat pat — outline only (collision is empty via {@code noCollission}). */
     private static final VoxelShape SHAPE = Block.box(1.0, 0.0, 1.0, 15.0, 2.0, 15.0);
 
     public ManureBlock(BlockBehaviour.Properties properties) {

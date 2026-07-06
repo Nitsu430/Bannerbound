@@ -42,24 +42,37 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 /**
- * Herding-related event handlers (merged from HerdingEvents, HerdingEvents, HerdingEvents).
+ * Herding event handlers: taming, pen manure, and fiber-rope leashing for Antiquity livestock.
+ *
+ * <p>TAMING ({@link #onFeed}): feeding an untameable livestock animal (cow/sheep/pig/chicken/...) its
+ * favourite food tames it, after which it reverts to vanilla behaviour -- no fleeing, no footprints,
+ * exempt from the hunting fear/bleed (see {@link HuntingFear#isTamed}). The TAMED_LIVESTOCK flag is
+ * serialized, so it sticks forever. Pets/mounts with their own vanilla taming (wolves, cats, horses)
+ * and predators (ocelots) keep their own rules. Runs at HIGHEST so taming still happens when Core's
+ * VanillaGates later cancels the breeding interaction for an un-researched player -- calming an animal
+ * is separate from breeding it.
+ *
+ * <p>MANURE ({@link #onServerTick} -> {@link #foulPen}): every 30s a domesticated animal in a herder
+ * pen may drop a MANURE pat nearby, which fouls the pen's fertility (Core's BreedingEvents) until it
+ * is cleared by a herder mucking out or the player (yielding dung). A pen self-limits to ~1 pat per 8
+ * floor cells so an untended pen never carpets over. Mirrors HerderFoodBonus's pen walk (settlements
+ * -> herder markers -> {@link PenEnclosure} -> animals inside) on a slow ServerTickEvent.Post cadence,
+ * chunk-guarded so it never force-loads a far pen.
+ *
+ * <p>LEASHING ({@link #onLeash}, {@link #tieLedAnimalsToFence}): a plain (non-shift) herder_rope click
+ * on a leashable Animal is exactly the vanilla lead with our cordage and (via MobRendererMixin +
+ * RopeRenderEvents) a green rope colour -- it calls vanilla Mob.setLeashedTo, so vanilla's tickLeash
+ * handles the follow/pull, elastic snap, too-far break, and save/load for free. Re-clicking your own
+ * animal drops the leash; clicking a fence post while leading ties them to a knot. Gated behind the
+ * {@link #FLAG} research (Animal Husbandry, alongside allow_animal_breeding). Shift is FiberRopeItem's
+ * spear-reel and curare-unconscious targets are the PoisonEvents kidnap drag, so the three rope
+ * interactions never collide.
  */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID)
 @ApiStatus.Internal
 public final class HerdingEvents {
     private HerdingEvents() {}
 
-    /*
-     * Feeding an untameable livestock animal (cow, sheep, pig, chicken, …) its favourite food once
-     * <b>tames</b> it: from then on it reverts to vanilla behaviour — it no longer flees the player, drops
-     * no footprints, and is exempt from the hunting fear/bleed (see {@link HuntingFear#isTamed}). The
-     * {@code TAMED_LIVESTOCK} flag is serialized, so it sticks for that animal forever.
-     *
-     * <p>Pets/mounts that have their own vanilla taming (wolves, cats, horses) and predators (ocelots)
-     * are left to their own rules. Runs at {@link EventPriority#HIGHEST} so taming still happens even when
-     * Core's {@code VanillaGates} later cancels the breeding interaction for an un-researched player
-     * — calming an animal is separate from breeding it.</p>
-     */
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     static void onFeed(PlayerInteractEvent.EntityInteract event) {
         if (event.getLevel().isClientSide()) {
@@ -68,14 +81,14 @@ public final class HerdingEvents {
         if (!(event.getTarget() instanceof Animal animal)
                 || animal instanceof TamableAnimal || animal instanceof AbstractHorse
                 || animal instanceof Ocelot) {
-            return; // only untameable livestock; pets/mounts/predators keep their own rules
+            return;
         }
         if (HuntingFear.isTamed(animal)) {
-            return; // already tamed — don't re-burst hearts
+            return;
         }
         ItemStack stack = event.getItemStack();
         if (stack.isEmpty() || !animal.isFood(stack)) {
-            return; // must be its favourite food
+            return;
         }
         HuntingFear.setTamed(animal);
         if (animal.level() instanceof ServerLevel level) {
@@ -85,22 +98,8 @@ public final class HerdingEvents {
         }
     }
 
-    /*
-     * Every so often a domesticated animal in a herder pen drops a {@link BannerboundAntiquity#MANURE manure}
-     * pat on the floor near it. Manure fouls the pen's fertility (Core's {@code BreedingEvents}) until it's
-     * cleared — by a herder mucking out (pen upkeep) or the player (yielding {@code dung}). A pen self-limits
-     * to a cap so it never carpets in manure if left untended.
-     *
-     * <p>Mirrors {@link com.bannerbound.core.entity.HerderFoodBonus}'s pen walk (settlements → herder pen
-     * markers → {@link PenEnclosure} → animals inside), but on a slow {@link ServerTickEvent.Post} cadence and
-     * chunk-guarded so it never force-loads a far pen.
-     */
-    /** How often the pass runs (server ticks). 600 = every 30 s — manure is meant to be occasional. */
     private static final int INTERVAL_TICKS = 600;
-    /** Per-animal chance, each pass, to drop a pat. ~0.7 over the 30 s cadence → a cow fouls its spot
-     *  roughly every ~40 s (kept in line with the old 5 s × 0.12 rate, just checked less often). */
     private static final double POOP_CHANCE = 0.7;
-    /** How close to the animal a pat lands (interior floor cells within this horizontal distance). */
     private static final double DROP_RADIUS = 2.5;
 
     private static int tickCounter;
@@ -109,11 +108,10 @@ public final class HerdingEvents {
     static void onServerTick(ServerTickEvent.Post event) {
         if (++tickCounter % INTERVAL_TICKS != 0) return;
         MinecraftServer server = event.getServer();
-        ServerLevel level = server.overworld();   // settlements (and their pens) live in the overworld
+        ServerLevel level = server.overworld();
         BlockSelectionRegistry reg = BlockSelectionRegistry.get(level);
         for (Settlement s : SettlementData.get(level).all()) {
-            // Don't foul a DORMANT settlement's pens: force-loaded claims keep this pass running
-            // while every member is offline (mirrors FoodSpoilageEvents' dormancy guard).
+            // Skip dormant settlements: their claims stay force-loaded while every member is offline (mirrors FoodSpoilageEvents' dormancy guard).
             if (s.isDormant()) continue;
             for (BlockSelection sel : reg.getForSettlement(s.id())) {
                 if (sel.kind() != BlockSelection.Kind.WORKSTATION) continue;
@@ -131,7 +129,6 @@ public final class HerdingEvents {
 
     private static void foulPen(ServerLevel level, PenEnclosure.Result r, EntityType<? extends Animal> type) {
         RandomSource rng = level.getRandom();
-        // Self-limit: a pen tops out at ~1 pat per 8 floor cells so an untended pen doesn't carpet over.
         int cap = Math.max(1, r.interior().size() / 8);
         if (countManure(level, r) >= cap) return;
 
@@ -142,12 +139,10 @@ public final class HerdingEvents {
             BlockPos floor = pickDropFloor(level, r, a, rng);
             if (floor == null) continue;
             level.setBlockAndUpdate(floor.above(), BannerboundAntiquity.MANURE.get().defaultBlockState());
-            if (countManure(level, r) >= cap) return;   // respect the cap as the pass deposits
+            if (countManure(level, r) >= cap) return;
         }
     }
 
-    /** An interior floor cell near {@code a} whose air cell is free for a pat (solid floor, empty above,
-     *  no water, not already manure). Null if none qualify. */
     private static BlockPos pickDropFloor(ServerLevel level, PenEnclosure.Result r, Animal a, RandomSource rng) {
         List<BlockPos> candidates = new ArrayList<>();
         for (BlockPos c : r.interior()) {
@@ -155,9 +150,9 @@ public final class HerdingEvents {
             double dz = (c.getZ() + 0.5) - a.getZ();
             if (dx * dx + dz * dz > DROP_RADIUS * DROP_RADIUS) continue;
             BlockState floor = level.getBlockState(c);
-            if (!floor.blocksMotion() || !floor.getFluidState().isEmpty()) continue;   // need a dry solid floor
+            if (!floor.blocksMotion() || !floor.getFluidState().isEmpty()) continue;
             BlockState above = level.getBlockState(c.above());
-            if (!above.isAir()) continue;   // occupied (water, another pat, a block) → skip
+            if (!above.isAir()) continue;
             candidates.add(c.immutable());
         }
         return candidates.isEmpty() ? null : candidates.get(rng.nextInt(candidates.size()));
@@ -171,25 +166,9 @@ public final class HerdingEvents {
         return n;
     }
 
-    /*
-     * Leashing animals with a fiber rope — exactly the vanilla lead, just with our cordage and (via
-     * {@code MobRendererMixin} + {@link com.bannerbound.antiquity.client.RopeRenderEvents}) the green
-     * rope colour. A plain (non-shift) {@code #bannerbound:herder_rope} click on a leashable {@link Animal}
-     * calls vanilla {@code Mob.setLeashedTo} — so vanilla's own {@code tickLeash} handles the follow/pull,
-     * the elastic snap, the too-far break, and save/load persistence for free. Re-clicking your own animal
-     * drops the leash; clicking a fence post while leading ties them to a knot (see {@link #tieLedAnimalsToFence}).
-     *
-     * <p>Shift is left to {@code FiberRopeItem}'s spear-reel, and curare-unconscious targets are left to the
-     * {@link PoisonEvents} kidnap drag — so the three rope interactions never collide.</p>
-     */
-    /** Research flag (granted by Animal Husbandry, alongside {@code allow_animal_breeding}) that lets a
-     *  settlement leash animals — domestication is the point where you learn to lead a beast. */
     public static final String FLAG = "bannerbound.allow_leashing";
-    /** How far from a fence a led animal can be and still get tied to it (vanilla lead uses ~7). */
     private static final double TIE_RANGE = 7.0;
 
-    /** Grab/release: a plain rope click on a leashable animal leashes it to you (or, if it's already
-     *  yours, lets it go). Mirrors vanilla lead-on-mob. */
     @SubscribeEvent
     static void onLeash(PlayerInteractEvent.EntityInteract event) {
         Player player = event.getEntity();
@@ -205,13 +184,12 @@ public final class HerdingEvents {
         if (!player.level().isClientSide) {
             if (animal.isLeashed()) {
                 if (animal.getLeashHolder() == player) {
-                    animal.dropLeash(true, false); // re-click my own → let go (rope never left the hand)
+                    animal.dropLeash(true, false);
                     player.swing(event.getHand());
                 } else {
-                    return; // held by someone else / tied to a fence — leave it
+                    return;
                 }
             } else if (!leashingUnlocked(player)) {
-                // Leashing is gated behind Animal Husbandry — tell them why, like the breeding gate.
                 if (player instanceof ServerPlayer sp) {
                     sp.sendSystemMessage(Component.translatable("bannerbound.feature.cant_do_yet")
                         .withStyle(ChatFormatting.RED));
@@ -220,15 +198,13 @@ public final class HerdingEvents {
                 animal.setLeashedTo(player, true);
                 player.swing(event.getHand());
             } else {
-                return; // this mob refuses a leash (vanilla rule)
+                return;
             }
         }
         event.setCanceled(true);
         event.setCancellationResult(InteractionResult.sidedSuccess(player.level().isClientSide));
     }
 
-    /** Whether {@code player}'s settlement has researched leashing (the {@link #FLAG}, from Animal
-     *  Husbandry). Server-only; mirrors {@code SpearFishing.unlocked} / {@code VanillaGates}. */
     public static boolean leashingUnlocked(Player player) {
         if (!(player instanceof ServerPlayer serverPlayer)) {
             return false;
@@ -242,19 +218,14 @@ public final class HerdingEvents {
             Settlement settlement = data.getByPlayer(serverPlayer.getUUID());
             return ResearchManager.hasFlag(settlement, FLAG);
         } catch (Exception ex) {
-            return false; // no settlement / not loaded → treat as not unlocked
+            return false;
         }
     }
 
-    /** True if the player is currently leading at least one animal within tying range of {@code pos}
-     *  — lets the rope-post interaction prefer "tie my animals here" over starting a post-to-post tie
-     *  (works on both sides, since the leash holder is synced to the client). */
     public static boolean hasLedAnimalsNear(Player player, BlockPos pos) {
         return !ledAnimalsNear(player, pos).isEmpty();
     }
 
-    /** Tie every animal the player is leading to a fence knot at {@code pos} (vanilla lead-to-fence).
-     *  Server-only; returns true if at least one was tied. */
     public static boolean tieLedAnimalsToFence(Player player, Level level, BlockPos pos) {
         if (level.isClientSide) {
             return false;

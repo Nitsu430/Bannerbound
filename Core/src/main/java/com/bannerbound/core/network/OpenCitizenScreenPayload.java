@@ -15,13 +15,17 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: open the per-citizen detail screen when a player right-clicks one. Carries a
- * snapshot of the live state (name, current/max health, happiness, stamina) so the screen can
- * render before any live sync arrives, and the entityId so the Exile button can address the
- * same citizen on the server.
- * <p>
- * The name is a full {@link Component}, not a flattened string — citizen names carry a gender
- * icon (custom-font glyph) and a settlement-color tint, both of which a plain string would drop.
+ * S->C: open the per-citizen detail screen when a player right-clicks one. Carries a snapshot of
+ * live state (name, current/max health, happiness, stamina, compliance) so the screen renders
+ * before any live sync arrives, and the entityId so the Exile button can address the same citizen
+ * on the server. The name is a full Component, not a flattened string, because citizen names carry
+ * a gender icon (custom-font glyph) and a settlement-color tint that a plain string would drop.
+ *
+ * <p>compliance is 0..100 (default 100), shown as a bar below stamina. viewerResentment is what
+ * this citizen holds toward the VIEWING player only, filtered server-side so the screen never
+ * reveals what a citizen thinks of other players. STREAM_CODEC is over RegistryFriendlyByteBuf
+ * because ComponentSerialization needs registry access to encode component contents (e.g.
+ * hover-event item stacks); the other fields' codecs work over any ByteBuf.
  */
 @ApiStatus.Internal
 public record OpenCitizenScreenPayload(
@@ -36,18 +40,12 @@ public record OpenCitizenScreenPayload(
     int staminaMax,
     List<RelationshipEntry> relationships,
     List<ThoughtEntry> thoughts,
-    /** Step 9: 0..100, default 100. Displayed as a bar below stamina. */
     int compliance,
-    /** Step 9: resentment this citizen holds toward the VIEWING player only — filtered
-     *  server-side so the screen never reveals what a citizen thinks of other players. */
     int viewerResentment
 ) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<OpenCitizenScreenPayload> TYPE =
         new CustomPacketPayload.Type<>(ResourceLocation.fromNamespaceAndPath(BannerboundCore.MODID, "open_citizen_screen"));
 
-    // RegistryFriendlyByteBuf because ComponentSerialization.STREAM_CODEC needs registry access
-    // to encode component contents (e.g. hover-event item stacks). The other fields' codecs work
-    // over any ByteBuf, so they're unchanged.
     public static final StreamCodec<RegistryFriendlyByteBuf, OpenCitizenScreenPayload> STREAM_CODEC = StreamCodec.of(
         (buf, p) -> {
             ByteBufCodecs.VAR_INT.encode(buf, p.entityId());

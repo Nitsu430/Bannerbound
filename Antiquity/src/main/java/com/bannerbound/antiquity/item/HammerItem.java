@@ -28,16 +28,15 @@ import net.minecraft.core.particles.BlockParticleOption;
 import net.minecraft.core.particles.ParticleTypes;
 
 /**
- * Smithing hammers — the tool that drives the cold-hammer minigame at the stone anvil
- * (METALWORKING_PLAN.md Part 3). A hammer is not a digging tool; it has durability and a
- * <b>material rank</b> that gates how good a casting it can finish: a workpiece can only reach its
- * top quality when the hammer's rank is at least one step below the workpiece's own rank (a stone
- * hammer works copper/tin fully, but bronze needs a copper/tin hammer or it caps at Standard).
- *
- * <p>The minigame trigger ({@code useOn} the anvil) and the rank gate live with the minigame; this
- * class only carries the identity, durability, and a light blunt-weapon profile.
- *
- * @see #rank()
+ * Smithing hammers - the tool that drives the cold-hammer minigame at the stone anvil
+ * (METALWORKING_PLAN.md Part 3). A hammer is not a digging tool; it has durability, a heavy/slow
+ * blunt-weapon attack profile, and a material rank ({@link #rank()}, data-driven via
+ * {@code MetalworkingData}: stone 0, copper/tin 1, bronze 2, ...) that gates how good a casting it
+ * can finish: a workpiece can only reach its top quality when the hammer's rank is at least one
+ * step below the workpiece's own rank (a stone hammer works copper/tin fully, but bronze needs a
+ * copper/tin hammer or it caps at Standard). The minigame trigger ({@code useOn} the anvil) and the
+ * rank gate live with the minigame; this class's own {@code useOn} forges a Stone Anvil in place
+ * from a right-clicked vanilla stone block (oriented to the player, 2 durability).
  */
 public class HammerItem extends Item {
     private final Tier tier;
@@ -49,7 +48,6 @@ public class HammerItem extends Item {
         this.metalId = metalId;
     }
 
-    /** Heavy and slow — a hammer hits hard but is no sword. */
     private static ItemAttributeModifiers hammerAttributes(Tier tier) {
         return ItemAttributeModifiers.builder()
             .add(Attributes.ATTACK_DAMAGE,
@@ -62,7 +60,6 @@ public class HammerItem extends Item {
             .build();
     }
 
-    /** Right-click a stone block with a hammer to forge a Stone Anvil in place (oriented to the player). */
     @Override
     public InteractionResult useOn(UseOnContext ctx) {
         Level level = ctx.getLevel();
@@ -88,7 +85,6 @@ public class HammerItem extends Item {
         return InteractionResult.sidedSuccess(level.isClientSide);
     }
 
-    /** Material rank used by the quality gate (data-driven): stone 0, copper/tin 1, bronze 2, …. */
     public int rank() {
         return com.bannerbound.antiquity.metalworking.MetalworkingData.rank(metalId);
     }

@@ -14,15 +14,19 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.ItemTooltipEvent;
 
 /**
- * Client-side item tooltip event handlers (merged from TooltipHandlers, TooltipHandlers, TooltipHandlers).
+ * Client-side item tooltip handlers (mod-bus, Dist.CLIENT), three ItemTooltipEvent subscribers:
+ * onTooltip replaces an unknown/undiscovered item's tooltip with the masked name + action (via
+ * UnknownItemHelper); foodValueOnTooltip appends a green "Food value: X" line for items
+ * ClientFoodValueState recognises as food (silent otherwise); appealOnTooltip appends a purple
+ * "Appeal: X" line to block items, resolved for the local player's settlement (base + culture-style
+ * overrides, synced via ClientBlockAppealState) so it tracks the chosen style. appealOnTooltip skips
+ * unknown items so it never fights onTooltip's rewrite.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
 public final class TooltipHandlers {
     private TooltipHandlers() {
     }
-
-    // ---- from TooltipHandlers ----
 
     @SubscribeEvent
     public static void onTooltip(ItemTooltipEvent event) {
@@ -36,13 +40,6 @@ public final class TooltipHandlers {
         list.add(UnknownItemHelper.unknownAction());
     }
 
-    // ---- from TooltipHandlers ----
-
-    /*
-     * Appends a green "Food value: X" line to any item the {@link ClientFoodValueState} table
-     * recognises as food. Silent for items with no food value (no line shown). Sits parallel to
-     * {@link TooltipHandlers}; same {@code Dist.CLIENT} mod-bus subscriber pattern.
-     */
     @SubscribeEvent
     public static void foodValueOnTooltip(ItemTooltipEvent event) {
         ItemStack stack = event.getItemStack();
@@ -52,18 +49,10 @@ public final class TooltipHandlers {
             String.format("%.2f", value)).withStyle(ChatFormatting.GREEN));
     }
 
-    // ---- from TooltipHandlers ----
-
-    /*
-     * Appends a purple "Appeal: X" line to every block item's tooltip. The value is the appeal
-     * resolved for the local player's settlement (base + culture-style overrides), synced via
-     * {@link ClientBlockAppealState}, so it changes with the settlement's chosen style.
-     */
     @SubscribeEvent
     public static void appealOnTooltip(ItemTooltipEvent event) {
         ItemStack stack = event.getItemStack();
         if (!(stack.getItem() instanceof BlockItem blockItem)) return;
-        // Disguised/unknown items get their tooltip rewritten by TooltipHandlers — leave them.
         if (UnknownItemHelper.isUnknownForLocalPlayer(stack)) return;
 
         float appeal = ClientBlockAppealState.appealOf(blockItem.getBlock());

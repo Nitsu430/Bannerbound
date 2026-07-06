@@ -2,7 +2,11 @@ package com.bannerbound.core.codex;
 
 import java.util.List;
 
-/** One authorable block in a Chronicle article. */
+/**
+ * One authorable block in a Chronicle article page; type selects which fields matter (text,
+ * image, recipe, embedded entry link, ponder clip, item list). The canonical constructor
+ * null-normalizes every field so a partial JSON block renders safely.
+ */
 public record CodexPageElement(
     String type,
     String text,

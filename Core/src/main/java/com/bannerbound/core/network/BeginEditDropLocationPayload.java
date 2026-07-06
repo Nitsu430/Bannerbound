@@ -10,7 +10,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: the player clicked "Set drop location" (or "Set seeds storage", when {@code seed}) on the
+/** C->S: the player clicked "Set drop location" (or "Set seeds storage", when {@code seed}) on the
  *  Job tab. The server validates permission and replies with {@link OpenDropLocationEditPayload} so
  *  the client enters the in-world edit mode. {@code seed} marks the farmer's seed source instead of
  *  the harvest drop-off. */

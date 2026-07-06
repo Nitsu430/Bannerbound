@@ -81,7 +81,6 @@ public class HidePreferenceLoader extends SimpleJsonResourceReloadListener {
         }
     }
 
-    /** The preferred weapon category for {@code type}, or {@code null} if unlisted. */
     @Nullable
     public static WeaponCategory preferred(EntityType<?> type) {
         return PREFS.get(type);

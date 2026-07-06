@@ -16,9 +16,11 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Client mirror of the FAITH tree (third research tab): synced definitions + the
- * per-faith shared state ({@link FaithResearchStatePayload}). Twin of
- * {@link ClientCultureState}, minus the queue (the faith tree has no research queue).
+ * Client mirror of the FAITH tree (third research tab): synced node definitions plus the per-faith
+ * shared state ({@link FaithResearchStatePayload}) - completed set, active node, progress, queue,
+ * and insights. Twin of {@link ClientCultureState}. {@link #pantheonCap()} mirrors
+ * FaithManager.pantheonCap: base 1 plus one slot per completed node carrying the pantheon_slot
+ * flag (both the tree defs and the completed set are synced, so the client can recompute it).
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -68,8 +70,6 @@ public final class ClientFaithTreeState {
         firedInsights = Set.of();
     }
 
-    /** 1-based queue badge position (active = 1, first queued = 2…), 0 when not queued.
-     *  Mirrors ClientCultureState.getQueuePosition. */
     public static int getQueuePosition(String id) {
         if (!activeResearch.isEmpty() && id.equals(activeResearch)) return 1;
         int idx = queue.indexOf(id);
@@ -107,13 +107,10 @@ public final class ClientFaithTreeState {
         return progress.getOrDefault(id, 0.0);
     }
 
-    /** The faith's summed devotion rate — what fills the active node. */
     public static double getDevotionPerSecond() {
         return devotionPerSecond;
     }
 
-    /** Client mirror of FaithManager.pantheonCap: base 1 + one slot per completed faith
-     *  node carrying the pantheon_slot flag (tree defs + completed set are both synced). */
     public static int pantheonCap() {
         int cap = 1;
         for (Map.Entry<String, ResearchDefinition> e : tree.entrySet()) {

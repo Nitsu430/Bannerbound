@@ -62,15 +62,30 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.event.level.BlockEvent;
 
 /**
- * Game-bus event handlers for Bannerbound: Antiquity.
- * <ul>
- *   <li>Registers the Mortar and Pestle recipe loader with the server data manager.</li>
- *   <li>Shift-right-click + empty bottle on a mortar — scoops its water back out.</li>
- *   <li>Right-click + a block of coal on two stacked mud bricks — forms the Bloomery.</li>
- * </ul>
- * These gestures are caught at the {@link PlayerInteractEvent.RightClickBlock} level because the
- * blocks involved are vanilla (mud bricks) or the gesture sneaks while holding an item — both
- * cases vanilla never routes through a block's own interaction methods.
+ * Game-bus event handlers for Bannerbound: Antiquity. This is the interception hub for the mod's
+ * "gesture crafts": right-click gestures that turn vanilla blocks into Antiquity machines/multiblocks
+ * or spawn entities. They are caught at {@link PlayerInteractEvent.RightClickBlock} / RightClickItem
+ * rather than a block's own use method because the target is a vanilla block (mud bricks, cobblestone,
+ * logs, thatch) or the gesture holds an item while (not) sneaking -- cases vanilla never routes through
+ * a block's interaction methods. Handlers here: scoop mortar water; carve tanning rack / drying rack /
+ * fermentation trough / chopping stump; form bloomery / kiln / pottery slab / stockpile / fletching
+ * station / woodworking table / mason's bench / raft; knapping (gravel/flint/bone on a hard surface,
+ * or two rocks held in both hands); clay-mold shaping; and tying a leashed raft to a fence.
+ *
+ * Conventions every gesture follows: non-sneak-only where the held item is also placeable (so vanilla
+ * place/strip still works); server-authoritative research gates (client optimistically predicts and
+ * re-syncs if wrong); and on success both setCancellationResult(SUCCESS) and setCanceled(true) -- the
+ * SUCCESS result is mandatory or the cancel leaves the interaction PASS and the server reverts item
+ * changes. Because these swap blocks with level.setBlock (which bypasses EntityPlaceEvent), any place-
+ * time bookkeeping (the Stockpile record, multiblock refresh, etc.) is done by hand.
+ *
+ * Also registers every datapack reload listener (all the recipe/data managers) on AddReloadListenerEvent;
+ * pushes the arrow-part registry to clients on join/reload so modpack-added parts render; augments
+ * tooltips (crucible contents, hide quality, tool quality); applies effects (crucible-carry Slowness,
+ * intoxication tick + wake-up hangover); gates log breaking (no axe -> zero break speed, so the zero-wood
+ * bone axe is the bootstrap of the tree -> firewood -> campfire -> settlement path); harvests fiber/sticks
+ * with cutting tools; preserves a snow layer over a broken snow-logged rock; and on logout forfeits every
+ * in-progress hand-craft minigame (fletching, hammer, pottery, carpentry, masonry, mortar, tannery).
  */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID)
 @ApiStatus.Internal
@@ -78,8 +93,6 @@ public final class AntiquityEvents {
     private AntiquityEvents() {
     }
 
-    /** Carrying a charged crucible is heavy work — Slowness II while a molten/cooled crucible is in
-     *  either hand (METALWORKING_PLAN.md Part 2). Refreshed each tick; fades the moment you put it away. */
     @net.neoforged.bus.api.SubscribeEvent
     static void onCrucibleCarry(net.neoforged.neoforge.event.tick.EntityTickEvent.Post event) {
         if (!(event.getEntity() instanceof net.minecraft.world.entity.player.Player player)) return;
@@ -95,8 +108,6 @@ public final class AntiquityEvents {
         }
     }
 
-    /** Tick player drunkenness (GROG_PLAN.md Phase 3.5): sober over time + re-apply the current tier's
-     *  effects. Throttled to once a second; the manager early-outs when sober. */
     @net.neoforged.bus.api.SubscribeEvent
     static void onIntoxicationTick(net.neoforged.neoforge.event.tick.EntityTickEvent.Post event) {
         if (!(event.getEntity() instanceof net.minecraft.world.entity.player.Player player)) return;
@@ -104,18 +115,14 @@ public final class AntiquityEvents {
         com.bannerbound.antiquity.item.Intoxication.serverTick(player);
     }
 
-    /** Sleeping it off while hammered → a hangover instead of a free sober-up (GROG_PLAN.md Phase 3.5). */
     @net.neoforged.bus.api.SubscribeEvent
     static void onWakeUp(net.neoforged.neoforge.event.entity.player.PlayerWakeUpEvent event) {
         com.bannerbound.antiquity.item.Intoxication.startHangover(event.getEntity());
     }
 
-    /** Shape a base clay mold by holding a wood/stone <b>template tool</b> in the other hand and using
-     *  it (METALWORKING_PLAN.md Part 2): a base mold + an axe → an axe mold, + a sword → a blade mold,
-     *  etc. Fire the shaped mold in a kiln to harden it. */
     @net.neoforged.bus.api.SubscribeEvent
     static void onMoldShaping(net.neoforged.neoforge.event.entity.player.PlayerInteractEvent.RightClickItem event) {
-        if (event.getHand() != net.minecraft.world.InteractionHand.MAIN_HAND) return; // process the pair once
+        if (event.getHand() != net.minecraft.world.InteractionHand.MAIN_HAND) return; // only process the hand pair once
         net.minecraft.world.entity.player.Player player = event.getEntity();
         net.minecraft.world.item.ItemStack main = player.getMainHandItem();
         net.minecraft.world.item.ItemStack off = player.getOffhandItem();
@@ -145,11 +152,8 @@ public final class AntiquityEvents {
         event.setCancellationResult(net.minecraft.world.InteractionResult.sidedSuccess(player.level().isClientSide));
     }
 
-    /** Blocks you can knap on (stones + bricks). Right-clicking gravel/flint/bone against one of
-     *  these shapes a tool. */
     public static final TagKey<Block> HARD_SURFACE =
         TagKey.create(Registries.BLOCK, ResourceLocation.fromNamespaceAndPath(BannerboundAntiquity.MODID, "hard_surface"));
-    /** Items that harvest plant fibers from grass + sticks from leaves (blades + knives). */
     public static final TagKey<Item> CUTTING_TOOLS =
         TagKey.create(Registries.ITEM, ResourceLocation.fromNamespaceAndPath(BannerboundAntiquity.MODID, "cutting_tools"));
 
@@ -179,9 +183,6 @@ public final class AntiquityEvents {
         event.addListener(new com.bannerbound.antiquity.food.FoodSpoilageData());
     }
 
-    /** You can't fire an arrow whose materials your civ doesn't recognize — a stray arrow made from an
-     *  unresearched metal is dead weight until you learn it. Cancelling {@link ArrowLooseEvent} aborts
-     *  the shot cleanly (no arrow consumed). Creative players are exempt. */
     @SubscribeEvent
     static void onArrowLoose(net.neoforged.neoforge.event.entity.player.ArrowLooseEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer sp) || sp.isCreative()) return;
@@ -196,9 +197,6 @@ public final class AntiquityEvents {
         }
     }
 
-    /** Push the loaded {@link com.bannerbound.antiquity.recipe.ArrowPartRegistry arrow-part registry}
-     *  to clients on join / {@code /reload}, so modular arrows (icon, projectile, tooltip) render even
-     *  for modpack-added parts the client jar doesn't bundle. */
     @SubscribeEvent
     static void onDatapackSync(net.neoforged.neoforge.event.OnDatapackSyncEvent event) {
         com.bannerbound.antiquity.network.ArrowPartsSyncPayload payload =
@@ -213,9 +211,6 @@ public final class AntiquityEvents {
         }
     }
 
-    /** Shows the craftsmanship quality (Core's TOOL_QUALITY component) on any item that carries it:
-     *  the item's NAME is tinted by tier color and a "Quality: <tier>" line is appended. Only crafted
-     *  items carry the component — creative-spawned ones show nothing. */
     private static String capitalize(String id) {
         return id == null || id.isEmpty() ? "Metal"
             : Character.toUpperCase(id.charAt(0)) + id.substring(1);
@@ -223,7 +218,6 @@ public final class AntiquityEvents {
 
     @SubscribeEvent
     static void onItemTooltip(ItemTooltipEvent event) {
-        // Crucible: list its charge (or the molten metal + mB) and what it will resolve to.
         com.bannerbound.antiquity.item.CrucibleContents crucible =
             event.getItemStack().get(BannerboundAntiquity.CRUCIBLE_CONTENTS.get());
         if (crucible != null && !crucible.isEmpty()) {
@@ -246,7 +240,6 @@ public final class AntiquityEvents {
                 }
             }
         }
-        // Raw-hide quality (Antiquity's HIDE_QUALITY component): tint the name + append the tier.
         com.bannerbound.antiquity.item.HideQuality hide =
             event.getItemStack().get(com.bannerbound.antiquity.BannerboundAntiquity.HIDE_QUALITY.get());
         if (hide != null) {
@@ -279,7 +272,7 @@ public final class AntiquityEvents {
     static void onScoopMortarWater(PlayerInteractEvent.RightClickBlock event) {
         Player player = event.getEntity();
         if (!player.isSecondaryUseActive()) {
-            return; // only the shift gesture
+            return;
         }
         ItemStack held = event.getItemStack();
         if (!held.is(Items.GLASS_BOTTLE)) {
@@ -290,7 +283,7 @@ public final class AntiquityEvents {
             return;
         }
         if (mortar.isMixing() || !"water".equals(mortar.getLiquidId())) {
-            return; // only plain water can be scooped back out
+            return;
         }
         if (!level.isClientSide) {
             mortar.setLiquid("");
@@ -305,15 +298,11 @@ public final class AntiquityEvents {
             }
             level.playSound(null, event.getPos(), SoundEvents.BOTTLE_FILL, SoundSource.BLOCKS, 1.0F, 1.0F);
         }
-        // Mark the interaction as handled — without this, cancelling a RightClickBlock leaves
-        // the result as PASS, and the server reverts the inventory changes made above.
+        // SUCCESS result required, else the cancel leaves it PASS and the server reverts the item changes above
         event.setCancellationResult(InteractionResult.SUCCESS);
         event.setCanceled(true);
     }
 
-    /** Right-click a 2-wide, 2-tall square of logs with a cutting tool to carve it into a Tanning Rack
-     *  (TANNERY plan): the four logs are consumed and the rack's 2×2 multiblock takes their place,
-     *  facing the player. The knife takes 1 durability. */
     @SubscribeEvent
     static void onCarveTanningRack(PlayerInteractEvent.RightClickBlock event) {
         Player player = event.getEntity();
@@ -353,8 +342,6 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /** The bottom-left (master) corner of a 2×2 log square containing {@code clicked}, or null. The
-     *  clicked log can be any of the four corners, so each candidate master is tried. */
     private static BlockPos findLogSquare(Level level, BlockPos clicked, net.minecraft.core.Direction width) {
         BlockPos[] candidates = {
             clicked,
@@ -375,17 +362,10 @@ public final class AntiquityEvents {
         return level.getBlockState(p).is(net.minecraft.tags.BlockTags.LOGS);
     }
 
-    /**
-     * Right-click a log with a <b>bone blade</b> to carve a Drying Rack in place — a primitive line for
-     * drying items (cured hide → leather, plant fiber → thatch; see {@code drying_recipes}). The rack
-     * adopts the source log's wood (falling back to oak for woods without a registered variant).
-     * Non-sneak only (sneak = place the held block); defers to the Tanning Rack when the click is on a
-     * full 2×2 log square (that carve takes any cutting tool, the bone blade included).
-     */
     @SubscribeEvent
     static void onCarveDryingRack(PlayerInteractEvent.RightClickBlock event) {
         Player player = event.getEntity();
-        if (player.isSecondaryUseActive()) return; // sneak = place the held block normally
+        if (player.isSecondaryUseActive()) return;
         ItemStack held = event.getItemStack();
         if (!held.is(BannerboundAntiquity.BONE_BLADE.get())) return;
         Level level = event.getLevel();
@@ -394,7 +374,6 @@ public final class AntiquityEvents {
         if (!logState.is(net.minecraft.tags.BlockTags.LOGS)) return;
 
         net.minecraft.core.Direction facing = player.getDirection().getOpposite();
-        // A full 2×2 log square is a Tanning Rack — let that handler take it.
         if (findLogSquare(level, pos, facing.getClockWise()) != null) return;
 
         if (!level.isClientSide) {
@@ -417,8 +396,6 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /** The drying-rack wood key for a source log (e.g. {@code stripped_birch_log} → {@code birch}),
-     *  or {@code oak} for any log without a registered per-wood rack (modded / nether / bamboo). */
     private static String dryingRackWoodFor(net.minecraft.world.level.block.Block log) {
         String path = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(log).getPath();
         if (path.startsWith("stripped_")) path = path.substring("stripped_".length());
@@ -431,18 +408,10 @@ public final class AntiquityEvents {
         return BannerboundAntiquity.DRYING_RACK_BY_WOOD.containsKey(path) ? path : "oak";
     }
 
-    /**
-     * Right-click a log with a <b>bone knife</b> to carve a Fermentation Trough in place (GROG_PLAN.md)
-     * — scraping a log hollow into a vessel for brewing grog. Adopts the source log's wood (oak
-     * fallback). A knife has no other log gesture (axes carve the Chopping Stump / strip; the bone
-     * blade carves the Drying Rack), so there's no collision. Gated by the Fermentation research:
-     * until the civ knows it, this defers and the knife does nothing on the log. Non-sneak only; a
-     * full 2×2 log square is left to the Tanning Rack.
-     */
     @SubscribeEvent
     static void onCarveFermentationTrough(PlayerInteractEvent.RightClickBlock event) {
         Player player = event.getEntity();
-        if (player.isSecondaryUseActive()) return; // sneak = place normally
+        if (player.isSecondaryUseActive()) return;
         ItemStack held = event.getItemStack();
         if (!held.is(BannerboundAntiquity.BONE_KNIFE.get())) return;
         Level level = event.getLevel();
@@ -451,7 +420,6 @@ public final class AntiquityEvents {
         if (!logState.is(net.minecraft.tags.BlockTags.LOGS)) return;
 
         Direction facing = player.getDirection().getOpposite();
-        // A full 2×2 log square is a Tanning Rack — let that handler take it.
         if (findLogSquare(level, pos, facing.getClockWise()) != null) return;
 
         net.neoforged.neoforge.registries.DeferredBlock<com.bannerbound.antiquity.block.FermentationTroughBlock> troughBlock =
@@ -459,8 +427,6 @@ public final class AntiquityEvents {
                 fermentationTroughWoodFor(logState.getBlock()),
                 BannerboundAntiquity.FERMENTATION_TROUGH_BY_WOOD.get("oak"));
 
-        // Research gate. The server is authoritative; if the civ hasn't learnt Fermentation, bail (the
-        // knife just does nothing here). The client assumes it's known and re-syncs if it guessed wrong.
         if (!level.isClientSide && player instanceof net.minecraft.server.level.ServerPlayer sp
                 && com.bannerbound.core.event.UnknownItemBlocker.isUnknownForPlayer(sp, troughBlock.get().asItem())) {
             return;
@@ -482,8 +448,6 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /** The fermentation-trough wood key for a source log, or {@code oak} for any log without a
-     *  registered per-wood trough (modded / nether / bamboo). */
     private static String fermentationTroughWoodFor(net.minecraft.world.level.block.Block log) {
         String path = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(log).getPath();
         if (path.startsWith("stripped_")) path = path.substring("stripped_".length());
@@ -530,14 +494,13 @@ public final class AntiquityEvents {
         Level level = event.getLevel();
         BlockPos bottom = event.getPos();
         BlockPos top = bottom.above();
-        // The clicked block must be the bottom of a 1×1×2 mud-brick column.
         if (!level.getBlockState(bottom).is(Blocks.MUD_BRICKS)
                 || !level.getBlockState(top).is(Blocks.MUD_BRICKS)) {
             return;
         }
         if (!level.isClientSide) {
             Player player = event.getEntity();
-            Direction facing = player.getDirection().getOpposite(); // face the player
+            Direction facing = player.getDirection().getOpposite();
             BlockState lower = BannerboundAntiquity.BLOOMERY.get().defaultBlockState()
                 .setValue(BloomeryBlock.HALF, DoubleBlockHalf.LOWER)
                 .setValue(BloomeryBlock.FACING, facing);
@@ -553,15 +516,8 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /** Research node that must be completed before a settlement can build a Kiln. */
     private static final String KILN_RESEARCH = BannerboundAntiquity.MODID + ":kiln";
 
-    /**
-     * Right-click a cobblestone block with a clay ball → it becomes clayed cobblestone. When that
-     * completes a 2×2×2 cube of clayed cobblestone, the cube forms a {@link KilnFormation Kiln}.
-     * Gated behind the {@code Kilns} research: claying does nothing until the player's settlement
-     * has learned it (so building the multiblock is research-gated, the same way its outputs are).
-     */
     @SubscribeEvent
     static void onClayCobblestone(PlayerInteractEvent.RightClickBlock event) {
         ItemStack held = event.getItemStack();
@@ -588,7 +544,6 @@ public final class AntiquityEvents {
                     held.shrink(1);
                 }
                 level.playSound(null, pos, SoundEvents.GRAVEL_PLACE, SoundSource.BLOCKS, 0.8F, 1.1F);
-                // A little crumble of the new clayed surface as it's pressed on.
                 if (level instanceof ServerLevel server) {
                     server.sendParticles(new BlockParticleOption(ParticleTypes.BLOCK, clayed),
                         pos.getX() + 0.5, pos.getY() + 0.9, pos.getZ() + 0.5, 10, 0.3, 0.1, 0.3, 0.0);
@@ -600,13 +555,6 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /**
-     * Right-click a cobblestone block with a basket in hand → the cobblestone becomes a Stockpile
-     * anchor (the basket is woven into the shared store). A world-interaction craft, not a Crafting
-     * Stone recipe — so it's intercepted here rather than living in the recipe data. Gated behind
-     * Storage Logistics: the owning settlement must recognize the stockpile before the swap happens.
-     * Sneak-clicking falls through so the basket can still be placed normally.
-     */
     @SubscribeEvent
     static void onBasketCobblestone(PlayerInteractEvent.RightClickBlock event) {
         Player player = event.getEntity();
@@ -623,7 +571,6 @@ public final class AntiquityEvents {
             return;
         }
         if (!level.isClientSide) {
-            // Same knowledge gate as the stockpile's use/craft: owning civ must know it.
             if (!com.bannerbound.core.api.research.BlockUseGate.isUnlocked(
                     level, pos, com.bannerbound.core.BannerboundCore.STOCKPILE_ITEM.get())) {
                 if (player instanceof ServerPlayer sp) {
@@ -640,7 +587,6 @@ public final class AntiquityEvents {
                 level.playSound(null, pos, SoundEvents.WOOD_PLACE, SoundSource.BLOCKS, 0.9F, 1.0F);
                 if (level instanceof ServerLevel server) {
                     // setBlock skips EntityPlaceEvent, so register the Stockpile record by hand
-                    // (StockpileEvents.onStockpilePlace would never fire for this swap).
                     com.bannerbound.core.block.StockpileBlock.registerOnPlace(server, pos);
                     server.sendParticles(new BlockParticleOption(ParticleTypes.BLOCK, stockpile),
                         pos.getX() + 0.5, pos.getY() + 0.9, pos.getZ() + 0.5, 10, 0.3, 0.1, 0.3, 0.0);
@@ -651,13 +597,6 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /**
-     * Right-click a cobblestone block with plant string in hand → the cobblestone becomes a
-     * Fletching Station. A world-interaction craft (not a Crafting Stone recipe), mirroring the
-     * stockpile. Gated behind the same unlock the station's use-gate checks. Sneak-clicking falls
-     * through so the plant string can be used normally. Breaking the station returns its parts
-     * (cobblestone + plant string) via the block's loot table.
-     */
     @SubscribeEvent
     static void onFletchingStationCobblestone(PlayerInteractEvent.RightClickBlock event) {
         Player player = event.getEntity();
@@ -709,9 +648,6 @@ public final class AntiquityEvents {
         Level level = event.getLevel();
         BlockPos pos = event.getPos();
         BlockState source = level.getBlockState(pos);
-        // The potter's wheel base is raised from a clayed cobblestone (clay-bound stone), itself
-        // unlocked at Kilns — the node right before Pottery. Decoupled from the manufactured stone
-        // slab so pottery never depends on the Mason's Bench.
         if (!source.is(BannerboundAntiquity.CLAYED_COBBLESTONE.get())) return;
 
         if (!level.isClientSide) {
@@ -741,7 +677,6 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /** True if the player's settlement has completed the Kilns research. */
     private static boolean hasKilnResearch(Level level, Player player) {
         net.minecraft.server.MinecraftServer server = level.getServer();
         if (server == null) {
@@ -753,12 +688,6 @@ public final class AntiquityEvents {
         return s != null && s.hasCompletedResearch(KILN_RESEARCH);
     }
 
-    /**
-     * Right-click two adjacent logs on the ground with a saw to form a {@link WoodworkingTableBlock}
-     * (a 2-block multiblock). The clicked log becomes the MASTER; the adjacent log (first found among
-     * the horizontal neighbours) becomes the SECONDARY, and the table extends that way. The saw is the
-     * tool, not an ingredient — it isn't consumed, just takes 1 durability. Non-sneak only.
-     */
     @SubscribeEvent
     static void onFormWoodworkingTable(PlayerInteractEvent.RightClickBlock event) {
         Player player = event.getEntity();
@@ -775,7 +704,7 @@ public final class AntiquityEvents {
                 break;
             }
         }
-        if (dir == null) return; // needs two logs side by side
+        if (dir == null) return;
 
         if (!level.isClientSide) {
             BlockPos secondary = pos.relative(dir);
@@ -798,19 +727,10 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /** Base stones a mason's bench can be lashed up from (the clicked + one neighbour). */
     private static boolean isBenchStone(BlockState state) {
         return state.is(Blocks.STONE) || state.is(Blocks.COBBLESTONE);
     }
 
-    /**
-     * Right-click two adjacent stone/cobblestone blocks with a stone chisel to form a
-     * {@link com.bannerbound.antiquity.block.MasonsBenchBlock} (a 2-block multiblock) — the stone
-     * mirror of {@link #onFormWoodworkingTable}. The clicked block becomes the MASTER; the adjacent
-     * stone (first found among the horizontal neighbours) becomes the SECONDARY, and the bench
-     * extends that way. The chisel is the tool, not an ingredient — it isn't consumed, just takes 1
-     * durability. Non-sneak only.
-     */
     @SubscribeEvent
     static void onFormMasonsBench(PlayerInteractEvent.RightClickBlock event) {
         Player player = event.getEntity();
@@ -827,7 +747,7 @@ public final class AntiquityEvents {
                 break;
             }
         }
-        if (dir == null) return; // needs two stones side by side
+        if (dir == null) return;
 
         if (!level.isClientSide) {
             BlockPos secondary = pos.relative(dir);
@@ -850,12 +770,6 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /**
-     * Right-click a line of <b>3 thatch blocks</b> with an oar to lash them into a {@link RaftEntity}.
-     * The clicked thatch must be part of a straight run of ≥3 along one horizontal axis; the three
-     * blocks are consumed and a raft spawns centred on them, oriented along the line. The oar is the
-     * tool, not an ingredient — it isn't consumed. Non-sneak only, mirroring the other gestures.
-     */
     @SubscribeEvent
     static void onFormRaft(PlayerInteractEvent.RightClickBlock event) {
         Player player = event.getEntity();
@@ -870,10 +784,9 @@ public final class AntiquityEvents {
 
         if (!level.isClientSide) {
             for (BlockPos p : line) {
-                level.removeBlock(p, false); // consumed into the raft, no drops
+                level.removeBlock(p, false);
             }
             BlockPos center = line.get(1);
-            // The run lies along X or Z; point the raft's length down that axis.
             float yaw = line.get(0).getX() != line.get(2).getX() ? 90.0F : 0.0F;
             RaftEntity raft = new RaftEntity(level,
                 center.getX() + 0.5, center.getY(), center.getZ() + 0.5);
@@ -887,11 +800,6 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /**
-     * Find a straight horizontal run of ≥3 thatch through {@code clicked}, returned as exactly three
-     * blocks (clicked centred when it can be, else extended off the clicked end). Null if no axis has
-     * three in a row.
-     */
     private static List<BlockPos> findRaftLine(Level level, BlockPos clicked) {
         for (Direction.Axis axis : new Direction.Axis[] { Direction.Axis.X, Direction.Axis.Z }) {
             Direction pos = Direction.fromAxisAndDirection(axis, Direction.AxisDirection.POSITIVE);
@@ -910,7 +818,6 @@ public final class AntiquityEvents {
         return null;
     }
 
-    /** Count contiguous thatch (up to 2) stepping from {@code from} in {@code dir}, excluding from. */
     private static int countThatch(Level level, BlockPos from, Direction dir) {
         int n = 0;
         BlockPos p = from;
@@ -922,17 +829,6 @@ public final class AntiquityEvents {
         return n;
     }
 
-    /**
-     * Tie a rope-towed raft to a fence with a <b>fiber rope</b>. Leashing the raft to yourself (look
-     * at the bow notch, see RaftEntity#interactAt) makes you its leash holder; then right-click any
-     * fence-tagged block — a vanilla fence or one of our rope-fence posts (both carry the tag, so a
-     * vanilla leash knot survives on them) — to hitch it there. No rope-collision fillers are placed
-     * (that's the mod's post-to-post tie system; this is a plain leash knot). The vanilla lead does
-     * this for free via {@code LeadItem}; this handler is the fiber-rope equivalent.
-     * <p>
-     * Only fires when the player actually has a raft leashed — otherwise it passes through so a bare
-     * fiber-rope click on a rope-fence post still starts the normal post-to-post tie.
-     */
     @SubscribeEvent
     static void onTieRaftWithFiberRope(PlayerInteractEvent.RightClickBlock event) {
         ItemStack held = event.getItemStack();
@@ -943,7 +839,7 @@ public final class AntiquityEvents {
         Player player = event.getEntity();
         List<Leashable> rafts = LeadItem.leashableInArea(level, pos,
             l -> l instanceof RaftEntity && l.getLeashHolder() == player);
-        if (rafts.isEmpty()) return; // nothing leashed → let the rope-fence tie system handle it
+        if (rafts.isEmpty()) return;
 
         if (level instanceof ServerLevel server) {
             LeashFenceKnotEntity knot = LeashFenceKnotEntity.getOrCreateKnot(server, pos);
@@ -956,19 +852,10 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /**
-     * Knapping: plain right-click (NOT sneaking, so gravel can still be placed by sneak-clicking)
-     * a {@link #HARD_SURFACE} block while holding gravel / flint / bone.
-     * <ul>
-     *   <li>gravel → consume 1, {@value #GRAVEL_FLINT_CHANCE} chance to drop 1 flint (gravel break sound)</li>
-     *   <li>flint  → consume 1, give 1 flint_blade (knapping)</li>
-     *   <li>bone   → consume 1, give 2 bone_blade (knapping)</li>
-     * </ul>
-     */
     @SubscribeEvent
     static void onKnapHardSurface(PlayerInteractEvent.RightClickBlock event) {
         Player player = event.getEntity();
-        if (player.isSecondaryUseActive()) return; // sneak = place the block normally
+        if (player.isSecondaryUseActive()) return;
         ItemStack held = event.getItemStack();
         Level level = event.getLevel();
         BlockPos pos = event.getPos();
@@ -1009,12 +896,6 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /**
-     * Right-click a <b>lone</b> log (no log among its 6 neighbours) with any axe to carve a
-     * Chopping Stump in place — the start of the firewood → campfire path. Trees (connected logs)
-     * are excluded, so the vanilla axe-stripping gesture still works on them; only an isolated log
-     * converts. Costs the axe 1 durability. Non-sneak only, mirroring the knapping gestures.
-     */
     @SubscribeEvent
     static void onChopLoneLog(PlayerInteractEvent.RightClickBlock event) {
         Player player = event.getEntity();
@@ -1032,7 +913,6 @@ public final class AntiquityEvents {
         if (!level.isClientSide) {
             Block sourceLog = logState.getBlock();
             level.setBlock(pos, BannerboundAntiquity.CHOPPING_STUMP.get().defaultBlockState(), Block.UPDATE_ALL);
-            // Skin the stump with the log it was carved from (drives its render + break particles).
             if (level.getBlockEntity(pos) instanceof ChoppingStumpBlockEntity stump) {
                 stump.setLogType(sourceLog);
             }
@@ -1048,14 +928,6 @@ public final class AntiquityEvents {
         event.setCanceled(true);
     }
 
-    /**
-     * Log-chopping gate: logs can no longer be punched out by hand. Without an axe (and outside
-     * creative) the break speed is forced to zero, so the only way to fell a tree is with an axe —
-     * and the bone axe, craftable with zero wood, is the bootstrap that opens the tree → firewood →
-     * campfire → settlement path.
-     */
-    /** A player disconnecting mid-fletching forfeits the committed inputs (same as a cancel) and
-     *  the station's in-progress sprite is cleared. */
     @SubscribeEvent
     static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
         if (event.getEntity() instanceof net.minecraft.server.level.ServerPlayer sp) {
@@ -1072,18 +944,13 @@ public final class AntiquityEvents {
     @SubscribeEvent
     static void onLogBreakSpeed(PlayerEvent.BreakSpeed event) {
         Player player = event.getEntity();
-        if (player.hasInfiniteMaterials()) return; // creative is exempt
+        if (player.hasInfiniteMaterials()) return;
         if (!event.getState().is(BlockTags.LOGS)) return;
         if (player.getMainHandItem().getItem() instanceof AxeItem) return;
         event.setNewSpeed(0.0f);
         event.setCanceled(true);
     }
 
-    /**
-     * Cutting harvest: when a {@link #CUTTING_TOOLS} item breaks grass/ferns it may yield plant
-     * fibers; leaves may yield sticks. Additive to vanilla drops (the break isn't cancelled).
-     * Durable cutting tools (knives) take 1 durability; the durability-less blades don't.
-     */
     @SubscribeEvent
     static void onCuttingHarvest(BlockEvent.BreakEvent event) {
         Player player = event.getPlayer();
@@ -1109,11 +976,6 @@ public final class AntiquityEvents {
         }
     }
 
-    /**
-     * Snow-logging: when a snow-logged rock is broken, leave its snow layer behind. The break
-     * proceeds normally (the rock drops); we just restore the snow at that position next tick,
-     * once the block has actually become air.
-     */
     @SubscribeEvent
     static void onRockBreakKeepsSnow(BlockEvent.BreakEvent event) {
         BlockState state = event.getState();
@@ -1122,6 +984,7 @@ public final class AntiquityEvents {
         if (snow <= 0) return;
         if (!(event.getLevel() instanceof ServerLevel level)) return;
         BlockPos pos = event.getPos().immutable();
+        // defer to next tick: restore snow only once the broken block has actually become air
         level.getServer().execute(() -> {
             if (level.getBlockState(pos).isAir()) {
                 level.setBlockAndUpdate(pos,
@@ -1130,7 +993,6 @@ public final class AntiquityEvents {
         });
     }
 
-    /** Short grass / tall grass / ferns — the "grass" a blade snips for fiber. */
     private static boolean isGrassy(BlockState state) {
         return state.is(Blocks.SHORT_GRASS) || state.is(Blocks.TALL_GRASS)
             || state.is(Blocks.FERN) || state.is(Blocks.LARGE_FERN);
@@ -1158,20 +1020,12 @@ public final class AntiquityEvents {
         level.playSound(null, pos, BannerboundAntiquity.KNAPPING_SOUND.get(), SoundSource.BLOCKS, 0.9F, 1.0F);
     }
 
-    /** A small burst of block-dust particles off the top of the knapped surface — gravel grit for
-     *  gravel-smashing, stone chips for flint/bone shaping. Server-side; all viewers see it. */
     private static void spawnKnapParticles(Level level, BlockPos pos, BlockState dust) {
         if (!(level instanceof ServerLevel server)) return;
         server.sendParticles(new BlockParticleOption(ParticleTypes.BLOCK, dust),
             pos.getX() + 0.5, pos.getY() + 1.0, pos.getZ() + 0.5, 12, 0.25, 0.05, 0.25, 0.02);
     }
 
-    /*
-     * The two-rocks knapping gesture: right-clicking while holding a knappable rock (see
-     * {@link Knapping#KNAPPING_ROCKS}) in BOTH hands opens the knapping screen instead of placing a
-     * rock. Both the block-aimed and air right-clicks are intercepted (and both hands' events canceled,
-     * so neither rock is placed); the screen is opened once, server-side, on the main-hand event.
-     */
     @SubscribeEvent
     static void onRightClickBlock(PlayerInteractEvent.RightClickBlock event) {
         handle(event);
@@ -1188,7 +1042,7 @@ public final class AntiquityEvents {
                 || !player.getOffhandItem().is(Knapping.KNAPPING_ROCKS)) {
             return;
         }
-        // This gesture means "knap" — never place either rock (both subclasses are cancelable).
+        // cancel both hands' events so neither rock is placed by this "knap" gesture
         ((net.neoforged.bus.api.ICancellableEvent) event).setCanceled(true);
         if (event.getHand() == InteractionHand.MAIN_HAND && player instanceof ServerPlayer serverPlayer) {
             Knapping.tryOpen(serverPlayer);

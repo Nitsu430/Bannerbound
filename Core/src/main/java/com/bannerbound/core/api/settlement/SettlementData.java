@@ -19,16 +19,37 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.saveddata.SavedData;
 
 /**
- * Top-level {@link SavedData} for all bannerbound state on the server. Owns the table of
- * {@link Settlement}s, the playerâ†’settlement and chunkâ†’settlement reverse indices, and the
- * world-wide era (max of all settlement ages, or admin-set via /bannerbound world set_age).
+ * Top-level {@link SavedData} for all bannerbound server state: the {@link Settlement} table,
+ * the player->settlement and chunk->settlement reverse indices, the world-wide era (max of all
+ * settlement ages, or admin-set via /bannerbound world set_age), global research history,
+ * diplomacy relations, stolen standards, and war/leave cooldowns. Attached to the overworld's
+ * data storage -- call {@link #get(ServerLevel)} from anywhere server-side; every mutator calls
+ * {@link #setDirty()} so changes persist on the next save. The reverse indices (including
+ * workingChunkToSettlement, the index of outpost WORKING claims) are never saved -- they are
+ * rebuilt from each settlement's own lists in {@link #load}.
  * <p>
- * Attached to the overworld's data storage â€” call {@link #get(ServerLevel)} from anywhere
- * server-side. Mutators call {@link #setDirty()} so SavedData persists on next save.
+ * Working claims (outposts) are exclusive but unprotected and never territory: a chunk has at
+ * most ONE holder of any claim kind, so a foreign working claim blocks full claims and vice
+ * versa, while fully claiming your own outpost chunk upgrades it (the redundant working claim
+ * is dropped).
  * <p>
- * To add world-level state (active wars, world events, etc.) put it on this class next to
- * {@code worldAge}, save/load it, and add accessors. Per-settlement state belongs on
- * {@link Settlement} instead.
+ * Global research state is monotonic by design: globalResearchedIds holds every research id any
+ * settlement has ever completed and is never shrunk by gameplay (disband, era regression, even
+ * unresearch commands) so the world-year HUD only moves forward. globalResearchOrder is its
+ * append-only, duplicate-free first-completion order; the last entry is the world's tech
+ * frontier, and barbarian camps derive "everything but the last" from it (see
+ * com.bannerbound.core.barbarian.BarbarianData / campKnownTech). Only {@link #resetWorldAge}
+ * (the /bannerbound reset_world_age command) clears both, and its caller must broadcast the new
+ * era to clients afterwards. markGloballyResearched returns true only on a genuinely new global
+ * discovery so callers can gate HUD updates on it.
+ * <p>
+ * leaveCooldownUntil maps player -> game-time tick before which they may not leave their
+ * settlement; set on join/found (SettlementManager.LEAVE_COOLDOWN_TICKS) to stop rapid
+ * join/leave cycling, cleared when they actually leave. DiplomacyRelation keys are canonical
+ * via {@link #diplomacyKey} (lower UUID string first); removeRelationsInvolving prunes dead
+ * relations on disband/raze so unresolvable endpoints don't accumulate. New world-level state
+ * (active wars, world events, ...) belongs on this class next to worldAge with save/load and
+ * accessors; per-settlement state belongs on {@link Settlement}.
  */
 public class SettlementData extends SavedData {
     private static final String DATA_NAME = "bannerbound_settlements";
@@ -36,28 +57,14 @@ public class SettlementData extends SavedData {
     private final Map<UUID, Settlement> settlements = new HashMap<>();
     private final Map<UUID, UUID> playerToSettlement = new HashMap<>();
     private final Map<Long, UUID> chunkToSettlement = new HashMap<>();
-    /** Reverse index of outpost WORKING claims (exclusive, unprotected â€” see
-     *  {@link Settlement#workingClaims()}). Rebuilt from settlements on load, like
-     *  {@link #chunkToSettlement}. */
     private final Map<Long, UUID> workingChunkToSettlement = new HashMap<>();
     private Era worldAge = Era.ANCIENT;
-    /** Set of every research id ever completed by any settlement on this world. Monotonically
-     *  growing â€” entries are never removed by regular gameplay (settlement disband, era regression,
-     *  or even {@code unresearch} commands) so the world-year HUD can keep moving forward. The
-     *  {@code /bannerbound reset_world_age} command is the only thing that clears this. */
     private final Set<String> globalResearchedIds = new HashSet<>();
-    /** First-completion ORDER of {@link #globalResearchedIds} â€” append-only, no duplicates, same
-     *  monotonic lifetime (only {@code resetWorldAge} clears it). The last entry is the world's
-     *  most-recently-discovered research; barbarian camps know "everything but the last" (see
-     *  {@code com.bannerbound.core.barbarian.BarbarianData} / {@code campKnownTech}). */
     private final java.util.List<String> globalResearchOrder = new java.util.ArrayList<>();
     private final Map<String, DiplomacyRelation> diplomacyRelations = new HashMap<>();
     private final Map<UUID, StolenStandard> stolenStandards = new HashMap<>();
     private final Map<UUID, Long> winnerNoNewWarUntil = new HashMap<>();
     private final Set<UUID> rallyingSettlements = new HashSet<>();
-    /** Per-player game-time tick until which a member may NOT leave their settlement. Set when a
-     *  player joins or founds (see {@link SettlementManager#LEAVE_COOLDOWN_TICKS}) so they can't
-     *  cheese rapid join/leave cycles. Cleared when they actually leave. */
     private final Map<UUID, Long> leaveCooldownUntil = new HashMap<>();
 
     public SettlementData() {
@@ -94,9 +101,7 @@ public class SettlementData extends SavedData {
         if (chunkToSettlement.containsKey(packed)) {
             return false;
         }
-        // Another settlement's WORKING claim blocks a full claim too (exclusivity is the whole
-        // point of working claims); expanding onto your OWN outpost chunk upgrades it â€” the
-        // now-redundant working claim is dropped.
+        // Foreign WORKING claim blocks a full claim (exclusivity); own outpost chunk upgrades, dropping the working claim.
         UUID workOwner = workingChunkToSettlement.get(packed);
         if (workOwner != null) {
             if (!workOwner.equals(settlement.id())) return false;
@@ -120,16 +125,11 @@ public class SettlementData extends SavedData {
         setDirty();
     }
 
-    // â”€â”€â”€ Working claims (outposts): exclusive, unprotected, never territory expansions â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-    /** The settlement holding a WORKING claim on this chunk, or {@code null}. */
     public Settlement getByWorkingClaim(long packedChunkPos) {
         UUID id = workingChunkToSettlement.get(packedChunkPos);
         return id == null ? null : settlements.get(id);
     }
 
-    /** Grants a working claim. Fails if the chunk is fully claimed by anyone or working-claimed
-     *  by another settlement (a chunk has at most ONE holder of any claim kind). */
     public boolean claimWorkingChunk(Settlement settlement, ChunkPos pos) {
         long packed = pos.toLong();
         if (chunkToSettlement.containsKey(packed)) return false;
@@ -141,7 +141,6 @@ public class SettlementData extends SavedData {
         return true;
     }
 
-    /** Drops a working claim (outpost banner removed/conquered). No-op if not held. */
     public void unclaimWorkingChunk(Settlement settlement, ChunkPos pos) {
         long packed = pos.toLong();
         workingChunkToSettlement.remove(packed, settlement.id());
@@ -174,12 +173,10 @@ public class SettlementData extends SavedData {
         setDirty();
     }
 
-    /** Game-time tick before which {@code playerId} may not leave their settlement (0 if none). */
     public long leaveCooldownUntil(UUID playerId) {
         return leaveCooldownUntil.getOrDefault(playerId, 0L);
     }
 
-    /** Records that {@code playerId} cannot leave until {@code untilGameTime}. Set on join/found. */
     public void setLeaveCooldownUntil(UUID playerId, long untilGameTime) {
         leaveCooldownUntil.put(playerId, untilGameTime);
         setDirty();
@@ -200,26 +197,19 @@ public class SettlementData extends SavedData {
         setDirty();
     }
 
-    /** Records that {@code researchId} has been completed by some settlement at some point.
-     *  Returns true if this is the first time globally â€” callers can use that to trigger
-     *  HUD updates only on genuinely new discoveries (other completions are no-ops for the
-     *  world year). Marks the SavedData dirty when something actually changes. */
     public boolean markGloballyResearched(String researchId) {
         if (globalResearchedIds.add(researchId)) {
-            globalResearchOrder.add(researchId); // first-time only â†’ ordered, dup-free, monotonic
+            globalResearchOrder.add(researchId); // append ONLY inside first-add guard: order list must stay dup-free
             setDirty();
             return true;
         }
         return false;
     }
 
-    /** Read-only view of the global discovered-research set. Used by the world-year formula. */
     public Set<String> getGlobalResearchedIds() {
         return Collections.unmodifiableSet(globalResearchedIds);
     }
 
-    /** Read-only first-completion order of {@link #getGlobalResearchedIds()}. The last entry is the
-     *  frontier (most-recently-discovered research across all settlements). */
     public java.util.List<String> getGlobalResearchOrder() {
         return Collections.unmodifiableList(globalResearchOrder);
     }
@@ -239,9 +229,6 @@ public class SettlementData extends SavedData {
         return diplomacyRelations.get(diplomacyKey(first, second));
     }
 
-    /** Drops every diplomacy relation that touches {@code settlementId}. Called when a settlement
-     *  is disbanded/razed so dead relations (whose endpoint no longer resolves) don't accumulate
-     *  in the map forever. */
     public void removeRelationsInvolving(UUID settlementId) {
         if (settlementId == null) return;
         if (diplomacyRelations.values().removeIf(r -> r.involves(settlementId))) {
@@ -278,9 +265,6 @@ public class SettlementData extends SavedData {
         if (changed) setDirty();
     }
 
-    /** Wipes the discovered set + drops {@code worldAge} back to {@link Era#ANCIENT}. Backs
-     *  the {@code /bannerbound reset_world_age} command. Caller is responsible for broadcasting
-     *  the new era state to clients after this returns. */
     public void resetWorldAge() {
         globalResearchedIds.clear();
         globalResearchOrder.clear();
@@ -288,11 +272,6 @@ public class SettlementData extends SavedData {
         setDirty();
     }
 
-    /**
-     * Checks whether any settlement has a claimed chunk within {@code minDistance} chunks of the
-     * proposed new claim area. The new claim area is a (2*radius+1) x (2*radius+1) square centred
-     * on {@code center}. Returns true if the rule is violated (too close to another settlement).
-     */
     public boolean hasClaimsWithin(ChunkPos center, int radius, int minDistance) {
         for (Settlement s : settlements.values()) {
             for (long claim : s.claimedChunks()) {
@@ -397,8 +376,7 @@ public class SettlementData extends SavedData {
                 data.globalResearchOrder.add(order.getString(i));
             }
         } else {
-            // Pre-existing world saved before the order log existed: seed it from the set so camp
-            // tech derivation works (relative order is unknown but the set is complete).
+            // Save-format migration: pre-order-log worlds seed the order from the set (order unknown, set complete).
             data.globalResearchOrder.addAll(data.globalResearchedIds);
         }
         if (tag.contains("DiplomacyRelations")) {

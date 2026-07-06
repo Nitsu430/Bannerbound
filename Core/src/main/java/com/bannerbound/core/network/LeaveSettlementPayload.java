@@ -10,13 +10,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: an individual member is leaving their settlement (the Town Hall "Leave Settlement" button).
- * Server runs {@code SettlementManager.tryLeave}, which removes the player, drops their research
- * access, and collapses the settlement if they were the last member.
- *
- * <p>No fields — the actor is the {@code IPayloadContext}'s player. The server refuses a <b>seated
- * Chief</b> (CHIEFDOM): a chief must Step Down first (and serve the minimum term), mirroring the UI
- * where a chief sees the Step Down button in this slot instead of Leave.
+ * C->S: an individual member is leaving their settlement (the Town Hall "Leave Settlement" button).
+ * Server runs SettlementManager.tryLeave, which removes the player, drops their research access, and
+ * collapses the settlement if they were the last member. No fields -- the actor is the
+ * IPayloadContext player. The server refuses a seated Chief (CHIEFDOM): a chief must Step Down first
+ * and serve the minimum term, mirroring the UI where the chief sees Step Down in this slot instead.
  */
 @ApiStatus.Internal
 public record LeaveSettlementPayload() implements CustomPacketPayload {

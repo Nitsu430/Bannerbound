@@ -15,12 +15,14 @@ import net.minecraft.world.item.Rarity;
 
 /**
  * Fully-automatic trade valuation: a single abstract "worth" number per item, derived purely from
- * signals the game already carries — food value, material class (gems/ingots/ores/leather via the
+ * signals the game already carries - food value, material class (gems/ingots/ores/leather via the
  * common {@code c:} tags), tool/armor non-stackability, and rarity. No authored value table; the
- * numbers are relative, so only their ratios matter (10 wheat ≈ 1 iron, etc.).
+ * numbers are relative, so only their ratios matter (10 wheat ~ 1 iron, etc.).
  *
  * <p>Used by the barbarian barter system to score demands, generate fair offers, and judge a
  * player's counter-offer. Tune the constants here to reshape the whole economy at once.
+ * unitValue returns >= 1 for any real item and 0 for air/null; value(item,count) is unitValue x
+ * count; value(itemId,count) resolves a registry id and yields 0 for an unknown id.
  */
 @ApiStatus.Internal
 public final class ItemValue {
@@ -38,7 +40,6 @@ public final class ItemValue {
 
     private ItemValue() {}
 
-    /** Abstract worth of one unit of {@code item} (always ≥ 1 for a real item, 0 for air/null). */
     public static int unitValue(Item item) {
         if (item == null || item == Items.AIR) return 0;
         ItemStack stack = new ItemStack(item);
@@ -47,7 +48,6 @@ public final class ItemValue {
         float food = FoodValueLoader.base(item);
         if (food > 0) v = Math.max(v, food * 1.5);
 
-        // Material class via common tags — automatic, no per-item authoring.
         if (stack.is(GEMS)) v = Math.max(v, 9);
         else if (stack.is(STORAGE_BLOCKS)) v = Math.max(v, 9);
         else if (stack.is(INGOTS)) v = Math.max(v, 5);
@@ -55,7 +55,6 @@ public final class ItemValue {
         else if (stack.is(LEATHERS)) v = Math.max(v, 3);
         else if (stack.is(NUGGETS)) v = Math.max(v, 1.5);
 
-        // Tools / weapons / armor don't stack — they're labour-dense, so they're worth more.
         if (stack.getMaxStackSize() == 1) v = Math.max(v, 6);
 
         v *= switch (stack.getRarity()) {
@@ -68,12 +67,10 @@ public final class ItemValue {
         return Math.max(1, (int) Math.round(v));
     }
 
-    /** Worth of a stack — {@code unitValue × count}. */
     public static int value(Item item, int count) {
         return unitValue(item) * Math.max(0, count);
     }
 
-    /** Convenience: resolve a registry id string, then value it. Unknown id → 0. */
     public static int value(String itemId, int count) {
         ResourceLocation rl = ResourceLocation.tryParse(itemId);
         if (rl == null) return 0;

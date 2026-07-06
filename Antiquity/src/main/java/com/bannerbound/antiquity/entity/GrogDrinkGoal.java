@@ -22,35 +22,34 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
- * Leisure goal (GROG_PLAN.md Phase 4): an idle citizen wanders to a nearby {@link
- * FermentationTroughBlockEntity} holding finished grog within the settlement claims, drinks a serving,
- * and comes away with a brief positive {@link AntiquityThoughts#ENJOYED_GROG} mood plus a touch of
- * tipsy Slowness for flavour. Grog is entirely an Antiquity system — this goal lives here and is
- * attached to Core's {@link CitizenEntity} through the generic {@code CitizenGoalRegistry} (registered
- * in {@code BannerboundAntiquity} setup), so Core never references grog.
+ * Leisure goal (GROG_PLAN.md Phase 4): an idle adult citizen walks to the nearest claimed-chunk
+ * {@link FermentationTroughBlockEntity} holding a finished grog serving (within SEARCH_RADIUS), sips
+ * for ~3.5s with an audible gulp at the start and halfway (so it reads as drinking rather than
+ * staring), then takes the serving and gains a positive {@link AntiquityThoughts#ENJOYED_GROG}
+ * thought plus ~4s of ambient Slowness I as a tipsy flavour debuff. Grog is entirely an Antiquity
+ * system: this goal is attached to Core's {@link CitizenEntity} through the generic
+ * {@code CitizenGoalRegistry} (registered in {@code BannerboundAntiquity} setup), so Core never
+ * references grog.
  *
- * <p>Modelled on Core's {@code ConversationGoal}: think-tick-throttled scan and a long post-drink
- * cooldown so a settlement doesn't form a drinking heartbeat. Registered at priority 3 (the leisure
- * tier, alongside ConversationGoal) — NOT 4: a priority-4 goal can't preempt the running priority-4
- * SettlementPatrolGoal, so at 4 an idle citizen would patrol endlessly and rarely drink. At 3 a
- * running work goal still holds MOVE (drinks happen off-shift), but idle citizens reliably break for a
- * drink whether or not they're socializing.
+ * <p>Modelled on Core's {@code ConversationGoal}: the settlement-wide block-entity scan runs only on
+ * think ticks with an extra SCAN_INTERVAL throttle on top, and every attempt (success or failure)
+ * rolls a random cooldown of 5-12 in-game minutes (COOLDOWN_MIN..MAX) so a settlement never forms a
+ * drinking heartbeat. Must be registered at priority 3 (the leisure tier, alongside
+ * ConversationGoal) - NOT 4: a priority-4 goal cannot preempt the already-running priority-4
+ * SettlementPatrolGoal, so at 4 an idle citizen would patrol endlessly and rarely drink; at 3 a
+ * running work goal still holds MOVE, so drinks happen off-shift. Skipped for kids, passengers, and
+ * while a settlement crisis is active. DRINK_REACH_SQ is a generous 2.5 blocks squared so a citizen
+ * the pathfinder parks just shy of the trough starts drinking instead of shuffling/re-pathing in
+ * place; the walk gives up after WALK_TIMEOUT ticks, and the trough is re-validated every tick in
+ * case it breaks or another citizen drains it before we arrive.
  */
 public class GrogDrinkGoal extends Goal {
-    /** Only consider troughs within this many blocks of the citizen. */
     private static final int SEARCH_RADIUS = 24;
-    /** "At the trough" — within ~2.5 blocks. A bit generous so a citizen that the pathfinder parks
-     *  just shy of the block starts drinking immediately instead of shuffling/re-pathing in place. */
     private static final double DRINK_REACH_SQ = 6.25;
-    /** Sipping time once arrived (≈3.5s) — a deliberate drink, with an audible gulp at the start and
-     *  halfway so it reads as drinking the whole time rather than standing and staring. */
     private static final int DRINK_DURATION = 70;
-    /** Give up walking if we can't reach the trough in this long (path blocked / target gone). */
     private static final int WALK_TIMEOUT = 200;
-    /** Post-attempt cooldown range — 5 to 12 in-game minutes (drinking is occasional, not constant). */
     private static final int COOLDOWN_MIN = 6_000;
     private static final int COOLDOWN_MAX = 14_400;
-    /** Throttle the trough scan with a small extra interval on top of think ticks. */
     private static final int SCAN_INTERVAL = 40;
 
     private final CitizenEntity citizen;
@@ -74,11 +73,10 @@ public class GrogDrinkGoal extends Goal {
         if (cooldown > 0) { cooldown--; return false; }
         if (!(citizen.level() instanceof ServerLevel sl)) return false;
         if (!citizen.isAiActive()) return false;
-        if (citizen.isPassenger() || citizen.isChild()) return false;   // kids don't drink grog
+        if (citizen.isPassenger() || citizen.isChild()) return false;
         Settlement settlement = citizen.getSettlement();
         if (settlement == null) return false;
-        if (settlement.activeCrisis() != null) return false;            // no tavern runs mid-crisis
-        // Throttle the (settlement-wide) block-entity scan onto think ticks.
+        if (settlement.activeCrisis() != null) return false;
         if (!citizen.isThinkTick()) return false;
         if (scanCooldown > 0) { scanCooldown--; return false; }
         scanCooldown = SCAN_INTERVAL;
@@ -111,7 +109,7 @@ public class GrogDrinkGoal extends Goal {
         ticksRunning++;
 
         if (!(sl.getBlockEntity(targetTrough) instanceof FermentationTroughBlockEntity)) {
-            targetTrough = null;                            // trough broken / changed → bail
+            targetTrough = null;
             return;
         }
 
@@ -119,13 +117,13 @@ public class GrogDrinkGoal extends Goal {
             faceTrough();
             drinkTicks--;
             if (drinkTicks == DRINK_DURATION / 2) {
-                playSip(sl);                                // second gulp, mid-drink
+                playSip(sl);
             }
             if (drinkTicks <= 0) {
                 if (FermentationTroughBlock.takeServing(sl, targetTrough)) {
                     onDrank(sl);
                 }
-                targetTrough = null;                        // done (stop() rolls the cooldown)
+                targetTrough = null;
             }
             return;
         }
@@ -134,19 +132,19 @@ public class GrogDrinkGoal extends Goal {
             targetTrough.getX() + 0.5, targetTrough.getY() + 0.5, targetTrough.getZ() + 0.5);
         if (d2 <= DRINK_REACH_SQ) {
             if (!FermentationTroughBlock.hasReadyServing(sl, targetTrough)) {
-                targetTrough = null;                        // someone drained it before we arrived
+                targetTrough = null;
                 return;
             }
             citizen.getNavigation().stop();
             faceTrough();
             drinking = true;
             drinkTicks = DRINK_DURATION;
-            playSip(sl);                                    // first gulp, the moment they reach it
+            playSip(sl);
         } else if (citizen.getNavigation().isDone()) {
             citizen.getNavigation().moveTo(
                 targetTrough.getX() + 0.5, targetTrough.getY(), targetTrough.getZ() + 0.5, speedModifier);
         }
-        if (ticksRunning > WALK_TIMEOUT) {                  // couldn't get there — give up this round
+        if (ticksRunning > WALK_TIMEOUT) {
             targetTrough = null;
         }
     }
@@ -160,18 +158,13 @@ public class GrogDrinkGoal extends Goal {
         cooldown = rollCooldown();
     }
 
-    /** The morale + flavour payoff once the drink finishes: a positive mood and a little tipsy
-     *  Slowness. (The audible gulps play during the drink via {@link #playSip}.) */
     private void onDrank(ServerLevel sl) {
         long now = sl.getGameTime();
         citizen.getThoughts().add(AntiquityThoughts.ENJOYED_GROG, null, now, sl.random);
         citizen.recomputeHappiness();
-        // Light, brief "tipsy" debuff for flavour — Slowness I for ~4s, ambient, no swirl particles.
         citizen.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 80, 0, true, false));
     }
 
-    /** An audible gulp at the trough — played at the start and halfway through the drink so it reads
-     *  as actively drinking rather than staring. */
     private void playSip(ServerLevel sl) {
         if (targetTrough == null) return;
         sl.playSound(null, targetTrough, SoundEvents.GENERIC_DRINK, SoundSource.NEUTRAL,
@@ -184,7 +177,6 @@ public class GrogDrinkGoal extends Goal {
             targetTrough.getX() + 0.5, targetTrough.getY() + 0.5, targetTrough.getZ() + 0.5);
     }
 
-    /** Nearest claimed-chunk trough with a finished serving, within {@link #SEARCH_RADIUS}. */
     @Nullable
     private BlockPos findTrough(ServerLevel sl, Settlement settlement) {
         BlockPos origin = citizen.blockPosition();

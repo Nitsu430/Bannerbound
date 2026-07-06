@@ -22,8 +22,10 @@ import net.minecraft.world.level.block.Block;
 
 /**
  * Loads ore-disguise mappings from data/&lt;namespace&gt;/ore_disguises/*.json. Each file has a
- * {@code disguises} array of {@code {ore, as, flag}} objects. Modded ores can be added by any
- * datapack — the loader unions all files into a single keyed-by-ore map.
+ * {@code disguises} array of {@code {ore, as, flag}} objects: until a settlement unlocks the
+ * research flag, the ore block renders as (and drops as) the "as" stand-in. Modded ores can be
+ * added by any datapack - the loader unions all files into a single keyed-by-ore map, which
+ * SettlementManager syncs to clients (ClientOreState) for rendering.
  */
 public class OreDisguiseLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "ore_disguises";

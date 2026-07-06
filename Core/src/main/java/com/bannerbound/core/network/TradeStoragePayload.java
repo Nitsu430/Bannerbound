@@ -13,8 +13,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: live refresh of both trading pools for the open {@code TradeScreen}
- * (reply to {@link RequestTradeStoragePayload}).
+ * Server -> client: live refresh of both trading pools for the open TradeScreen (reply to
+ * {@link RequestTradeStoragePayload}).
  */
 @ApiStatus.Internal
 public record TradeStoragePayload(String targetId, List<BarterEntry> myPool,

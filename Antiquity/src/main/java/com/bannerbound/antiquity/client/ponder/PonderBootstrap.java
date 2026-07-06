@@ -16,22 +16,23 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * One-shot client bootstrap that wires Bannerbound: Antiquity into Create's Ponder library:
- * <ul>
- *   <li>Registers {@link BannerboundAntiquityPonderPlugin} with {@link PonderIndex}.</li>
- *   <li>Installs an opener on Core's {@link ResearchPonderBridge} so the research screen can
- *       launch a ponder for the item id stored in a node's {@code "ponder"} field.</li>
- * </ul>
- * <p>
- * IMPORTANT: this class imports {@code net.createmod.ponder.*}. It must only be class-loaded
- * after a positive {@code ModList.isLoaded("create")} check — otherwise systems without Create
- * will crash on the missing classes. See the call site in {@code BannerboundAntiquityClient}.
+ * One-shot client bootstrap (run once at client setup, only when Create is installed) that wires
+ * Bannerbound: Antiquity into Create's Ponder library: it registers
+ * {@link BannerboundAntiquityPonderPlugin} with {@link PonderIndex} and installs an opener on
+ * Core's {@link ResearchPonderBridge} so the research screen can launch a ponder for the id stored
+ * in a node's "ponder" field. IMPORTANT: this class imports {@code net.createmod.ponder.*} and
+ * must only be class-loaded after a positive {@code ModList.isLoaded("create")} check (see the
+ * call site in {@code BannerboundAntiquityClient}), or systems without Create crash on the missing
+ * classes. The opener resolves the id as a registered item first, opening its scenes via
+ * {@link PonderUI#of(ItemStack)} (the same UI as inventory hover-W); failing that it treats the id
+ * as a Ponder tag id and opens the first member item that actually has registered scenes. The
+ * intermediate PonderTagScreen is intentionally skipped either way, so W on a research node drops
+ * straight into the lesson with no extra click.
  */
 @OnlyIn(Dist.CLIENT)
 public final class PonderBootstrap {
     private PonderBootstrap() {}
 
-    /** Runs once at client setup, only when Create is installed. */
     public static void init() {
         PonderIndex.addPlugin(new BannerboundAntiquityPonderPlugin());
 
@@ -40,18 +41,6 @@ public final class PonderBootstrap {
         BannerboundAntiquity.LOGGER.info("Bannerbound: Antiquity → Ponder bridge installed.");
     }
 
-    /**
-     * Opens the Ponder UI for a research's {@code "ponder"} value, going straight into the
-     * scenes — no intermediate tag screen.
-     * <ul>
-     *   <li>If the id resolves to a registered item, opens that item's scenes via
-     *       {@link PonderUI#of(ItemStack)} (same UI as inventory hover-W).</li>
-     *   <li>Otherwise treats the id as a Ponder <em>tag</em> id, looks up the first item in
-     *       that tag that has registered scenes, and opens that item's PonderUI.</li>
-     * </ul>
-     * The tag's PonderTagScreen is intentionally skipped — the user wants W on the research
-     * to drop straight into the lesson, with no extra click required.
-     */
     private static void openForItemId(String id) {
         ResourceLocation rl = ResourceLocation.tryParse(id);
         if (rl == null) {
@@ -62,7 +51,6 @@ public final class PonderBootstrap {
         if (item != Items.AIR) {
             ui = PonderUI.of(new ItemStack(item));
         } else {
-            // Tag id — find the first member item that has scenes; open those directly.
             for (ResourceLocation memberItemId : PonderIndex.getTagAccess().getItems(rl)) {
                 if (!PonderIndex.getSceneAccess().doScenesExistForId(memberItemId)) {
                     continue;

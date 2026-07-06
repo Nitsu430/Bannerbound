@@ -24,16 +24,23 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Renders the Mason's Bench's dynamic <b>items</b> (the deposited stone pile, the spinning picker
- * result + browse arrows, and the chisel-strike animation) — the stone analogue of
- * {@code WoodworkingTableRenderer}. Everything is drawn at the master block's centre (x/z = 0.5).
- * All <b>text</b> (counts, names, the queue) is drawn separately by {@link StationReadoutEvents}.
+ * Renders the Mason's Bench's dynamic items - the deposited stone pile, the spinning picker result
+ * with its browse arrows, and the in-world chisel-strike animation - the stone analogue of
+ * WoodworkingTableRenderer. Everything is drawn at the master block's centre (x/z = 0.5); all text
+ * (counts, names, the queue) is drawn separately by StationReadoutEvents. While MasonChiselState
+ * is active for this bench the chisel scene fully replaces the pile and ghost: a worked stone
+ * block faces the player (sceneYaw snapped to the nearest cardinal toward the camera via
+ * snappedYawTowardCamera, whose offsets the readout helpers share), and the chisel JABS
+ * horizontally into the stone and springs back on each landed strike (MasonChiselState.toolY:
+ * 0 = drawn back, 1 = driven in) - a back-and-forth chiselling motion, deliberately not a vertical
+ * press - while accumulating stone chips make progress readable on the bench itself. The pile
+ * stays decorative and compact (max MAX_PILE_LAYERS per cell) because exact counts live on the
+ * readout.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class MasonsBenchRenderer implements BlockEntityRenderer<MasonsBenchBlockEntity> {
-    /** The model's bench top face sits at roughly 14px = 0.875; round up a touch for the pile. */
-    static final double TOP_Y = 0.90;
+    static final double TOP_Y = 0.90; // model's bench-top face sits at 14px = 0.875; rounded up for the pile
     static final double CELL = 0.16;
     static final int MAX_PILE_LAYERS = 2;
     private static final float BLOCK_SCALE = 0.16F;
@@ -50,13 +57,12 @@ public class MasonsBenchRenderer implements BlockEntityRenderer<MasonsBenchBlock
         if (MasonChiselState.activeFor(be.getBlockPos())) {
             MasonChiselState.animate();
             renderChisel(be, pose, buffers, light);
-            return; // the chisel animation takes over the bench top while it runs
+            return;
         }
         renderPile(be, partialTick, pose, buffers, light);
         renderGhost(be, partialTick, pose, buffers);
     }
 
-    /** Low deposited stones. Counts live on the bench readout, so this stays decorative and compact. */
     private void renderPile(MasonsBenchBlockEntity be, float partialTick, PoseStack pose,
                             MultiBufferSource buffers, int light) {
         List<ItemStack> contents = be.getStones();
@@ -93,8 +99,6 @@ public class MasonsBenchRenderer implements BlockEntityRenderer<MasonsBenchBlock
         }
     }
 
-    /** The picker: the selected output floats + spins above the master block, with browse arrows when
-     *  there are multiple offers. */
     private void renderGhost(MasonsBenchBlockEntity be, float partialTick, PoseStack pose,
                              MultiBufferSource buffers) {
         ItemStack ghost = be.getGhostResult();
@@ -112,8 +116,6 @@ public class MasonsBenchRenderer implements BlockEntityRenderer<MasonsBenchBlock
         GhostArrowRenderer.render(be, pose, buffers);
     }
 
-    /** The in-world chisel animation: a block of stone faces the player while the chisel drives down
-     *  on each landed strike, throwing stone chips. */
     private void renderChisel(MasonsBenchBlockEntity be, PoseStack pose, MultiBufferSource buffers, int light) {
         float pulse = MasonChiselState.pulseAmount();
         float toolY = MasonChiselState.toolY;
@@ -125,7 +127,6 @@ public class MasonsBenchRenderer implements BlockEntityRenderer<MasonsBenchBlock
         pose.translate(0.5, TOP_Y + 0.16, 0.5);
         pose.mulPose(Axis.YP.rotationDegrees(MasonChiselState.sceneYaw));
 
-        // The worked stone block, sitting on the bench.
         pose.pushPose();
         pose.translate(-0.05, 0.0, 0.0);
         pose.scale(0.62F, 0.62F, 0.62F);
@@ -134,14 +135,11 @@ public class MasonsBenchRenderer implements BlockEntityRenderer<MasonsBenchBlock
         pose.popPose();
         renderChips(be, pose, buffers, MasonChiselState.progress, pulse, light);
 
-        // The chisel: held to the right of the worked stone, tip pointing left toward it. Each strike
-        // JABS it horizontally into the stone and springs back — a back-and-forth chiselling motion,
-        // not a vertical press (toolY 0 = drawn back, 1 = driven into the stone).
         pose.pushPose();
         pose.translate(0.44 - toolY * 0.13, 0.14, 0.06);
         pose.scale(0.7F, 0.7F, 0.7F);
         pose.mulPose(Axis.YP.rotationDegrees(-28.0F));
-        pose.mulPose(Axis.ZP.rotationDegrees(130.0F)); // flip the tip to point toward the stone
+        pose.mulPose(Axis.ZP.rotationDegrees(130.0F)); // flips the chisel tip to point left at the stone
         itemRenderer.renderStatic(chisel, ItemDisplayContext.NONE, light,
             OverlayTexture.NO_OVERLAY, pose, buffers, be.getLevel(), 0);
         pose.popPose();
@@ -149,7 +147,6 @@ public class MasonsBenchRenderer implements BlockEntityRenderer<MasonsBenchBlock
         pose.popPose();
     }
 
-    /** Small physical stone chips around the cut point so progress reads on the bench itself. */
     private void renderChips(MasonsBenchBlockEntity be, PoseStack pose, MultiBufferSource buffers,
                              float progress, float pulse, int light) {
         ItemStack chip = new ItemStack(net.minecraft.world.level.block.Blocks.COBBLESTONE);

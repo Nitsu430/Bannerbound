@@ -9,6 +9,11 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ModelEvent;
 
+/**
+ * Client-only MOD-bus subscriber for research-related model wiring: registers the unknown-item
+ * "?" model as an extra bake target and clears {@link UnknownItemHelper}'s cache once baking
+ * completes (baked models change on every resource reload, so the cached handles must be dropped).
+ */
 @EventBusSubscriber(modid = BannerboundCore.MODID, bus = EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientResearchEvents {

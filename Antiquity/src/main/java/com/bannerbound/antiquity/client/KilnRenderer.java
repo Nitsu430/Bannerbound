@@ -35,10 +35,16 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.client.model.data.ModelData;
 
 /**
- * Block entity renderer for the Kiln — draws the authored {@code kiln} dome model (fetched as a
- * baked block model, since the block itself renders {@link net.minecraft.world.level.block.RenderShape#INVISIBLE})
- * from the controller cell, rotated about the centre of the 2×2×2 footprint so the mouth faces the
- * block's {@link KilnBlock#FACING}. The held item rests at the mouth, sliding in when freshly added.
+ * Block entity renderer for the Kiln - draws the authored {@code kiln} dome model (fetched as a
+ * baked block model, since the block itself renders
+ * {@link net.minecraft.world.level.block.RenderShape#INVISIBLE}) from the controller cell. The model
+ * is authored from the controller's min corner toward +x/+y/+z with the mouth at -Z, so it is rotated
+ * about the center of the 2x2x2 footprint (the translate(1,0,1) pivot) until authored-north lands on
+ * the block's {@link KilnBlock#FACING}. Lighting is deliberate: the dome draws at plain neighborhood
+ * light - only the mouth glows, via the block's light emission and flame particles - while the held
+ * item resting at the mouth goes full-bright whenever the fire is lit. The held stack slides in over
+ * {@code KilnBlockEntity.SLIDE_TICKS} when freshly added, block items render smaller and loose items
+ * lie flat, and stacks of more than one draw as two slightly-clipping copies, same as the bloomery.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -59,15 +65,12 @@ public class KilnRenderer implements BlockEntityRenderer<KilnBlockEntity> {
                        MultiBufferSource buffers, int light, int overlay) {
         BlockState state = be.getBlockState();
         Direction facing = state.getValue(KilnBlock.FACING);
-        // The cells are solid + invisible, so the controller's own light is dark — sample above the
-        // 2-tall dome instead so the model isn't rendered pitch black.
+        // Cells are solid+invisible -> local light is dark; sample above the 2-tall dome or the model renders black.
         int modelLight = be.getLevel() == null
             ? light
             : LevelRenderer.getLightColor(be.getLevel(), be.getBlockPos().above(2));
 
         pose.pushPose();
-        // The model is authored from the controller's min-corner toward +x/+y/+z (mouth at -Z); rotate
-        // it about the footprint centre (1,1) so authored-north lands on the block's facing.
         pose.translate(1.0, 0.0, 1.0);
         pose.mulPose(Axis.YP.rotationDegrees(180.0F - facing.toYRot()));
         pose.translate(-1.0, 0.0, -1.0);
@@ -79,8 +82,6 @@ public class KilnRenderer implements BlockEntityRenderer<KilnBlockEntity> {
         for (Direction cull : DIRECTIONS_AND_NULL) {
             List<BakedQuad> quads = model.getQuads(state, cull, RANDOM, ModelData.EMPTY, null);
             for (BakedQuad quad : quads) {
-                // The dome itself doesn't glow — only the mouth (its light emission + the flame
-                // particles) does. Draw it at its plain neighbourhood light.
                 vc.putBulkData(posePose, quad, 1.0F, 1.0F, 1.0F, 1.0F, modelLight, overlay);
             }
         }
@@ -88,13 +89,11 @@ public class KilnRenderer implements BlockEntityRenderer<KilnBlockEntity> {
 
         ItemStack held = be.getHeldItem();
         if (!held.isEmpty()) {
-            // The item sits in the mouth — render it hot/bright while the fire is lit.
             int heldLight = be.getLitTicks() > 0 ? LightTexture.FULL_BRIGHT : modelLight;
             renderHeldItem(be, held, facing, partialTick, pose, buffers, heldLight);
         }
     }
 
-    /** Draws the held stack resting at the kiln's mouth, with a short slide-in when freshly added. */
     private void renderHeldItem(KilnBlockEntity be, ItemStack stack, Direction facing,
                                 float partialTick, PoseStack pose, MultiBufferSource buffers, int light) {
         float slide = 0.0F;
@@ -107,20 +106,19 @@ public class KilnRenderer implements BlockEntityRenderer<KilnBlockEntity> {
         float scale = blockItem ? 0.35F : 0.5F;
 
         pose.pushPose();
-        pose.translate(1.0, 0.3 - 3.0 / 16.0, 1.0);              // footprint centre, lowered 3px into the mouth
-        pose.mulPose(Axis.YP.rotationDegrees(180.0F - facing.toYRot())); // orient with the dome
-        pose.translate(0.0, 0.0, -0.55 - slide);                 // out toward the (authored-north) mouth
+        pose.translate(1.0, 0.3 - 3.0 / 16.0, 1.0);
+        pose.mulPose(Axis.YP.rotationDegrees(180.0F - facing.toYRot()));
+        pose.translate(0.0, 0.0, -0.55 - slide);
         pose.scale(scale, scale, scale);
 
-        // One copy for a single item, two slightly-clipping copies for a stack — same as the bloomery.
         int copies = stack.getCount() > 1 ? 2 : 1;
         for (int i = 0; i < copies; i++) {
             pose.pushPose();
             if (i == 1) {
-                pose.translate(0.22, 0.14, 0.22); // second copy clips slightly into the first
+                pose.translate(0.22, 0.14, 0.22);
             }
             if (!blockItem) {
-                pose.mulPose(Axis.XP.rotationDegrees(90.0F)); // lay flat items down
+                pose.mulPose(Axis.XP.rotationDegrees(90.0F));
             }
             itemRenderer.renderStatic(stack, ItemDisplayContext.FIXED, light, OverlayTexture.NO_OVERLAY,
                 pose, buffers, be.getLevel(), 0);
@@ -131,8 +129,7 @@ public class KilnRenderer implements BlockEntityRenderer<KilnBlockEntity> {
 
     @Override
     public AABB getRenderBoundingBox(KilnBlockEntity be) {
-        // The dome spans the full 2×2×2 from the controller corner and rotates about the footprint
-        // centre — grow the cull box generously in every horizontal direction and up.
+        // Dome rotates about the footprint center -> the cull box must cover the 2x2x2 in EVERY facing.
         BlockPos pos = be.getBlockPos();
         return new AABB(pos.getX() - 1, pos.getY(), pos.getZ() - 1,
             pos.getX() + 3, pos.getY() + 3, pos.getZ() + 3);

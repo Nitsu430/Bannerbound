@@ -36,18 +36,22 @@ import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * The Tanning Rack — a tier-2 tannery work block. The model is 2 wide and 2 tall, so the block is a
- * <b>2×2 multiblock</b>: the bottom block on the rack's left (the {@link #PART} 0 "master", facing
- * the player) carries the single {@link TanningRackBlockEntity}; the other three cells are empty
- * shells that render nothing and resolve every interaction back to the master — so the rack holds
- * exactly one hide at a time. Lay a raw hide, right-click with a knife to scrape, cure at a clay
- * tank, then lay the cured hide back to dry into leather.
+ * The Tanning Rack - a tier-2 tannery work block. The model is 2 wide and 2 tall, so the block is a
+ * 2x2 multiblock: {@link #PART} encodes the cell (bit 0 = offset along the facing's clockwise width,
+ * bit 1 = up), and PART 0 - the bottom block on the rack's left, facing the player - is the master
+ * carrying the single {@link TanningRackBlockEntity}; the other three cells are empty shells that
+ * render nothing and resolve every interaction back to the master via masterPos, so the rack holds
+ * exactly one hide at a time. Collision is empty (a frame you walk through); the outline is the full
+ * cube. Flow: lay a raw hide, right-click with a knife (CUTTING_TOOLS) to open the scrape minigame
+ * (SCRAPE_SWIPES swipes - pure duration, not skill-scaled), cure at a clay tank, then lay the cured
+ * hide back on the rack to dry into leather. Every player interaction checks WorkBlockLocks against
+ * the MASTER pos (mirroring the pottery slab's station guard) so hides cannot be laid, yanked, or
+ * scraped while an NPC tanner or another player's session holds the station; breaking any cell aborts
+ * the session, pops the hide, and tears down the other three cells.
  */
 public class TanningRackBlock extends HorizontalDirectionalBlock implements EntityBlock {
     public static final MapCodec<TanningRackBlock> CODEC = simpleCodec(TanningRackBlock::new);
-    /** How many knife swipes the scrape minigame takes (non-skill — pure duration). */
     public static final int SCRAPE_SWIPES = 6;
-    /** Cell within the 2×2: bit 0 = offset along the width (facing's clockwise), bit 1 = up. 0 = master. */
     public static final IntegerProperty PART = IntegerProperty.create("part", 0, 3);
 
     private static final VoxelShape OUTLINE = Block.box(0, 0, 0, 16, 16, 16);
@@ -74,10 +78,8 @@ public class TanningRackBlock extends HorizontalDirectionalBlock implements Enti
 
     @Override
     protected VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext ctx) {
-        return Shapes.empty(); // a frame — walk through it
+        return Shapes.empty();
     }
-
-    // ─── 2×2 cell geometry ────────────────────────────────────────────────────────────────────────
 
     private static boolean widthBit(int part) {
         return (part & 1) != 0;
@@ -87,7 +89,6 @@ public class TanningRackBlock extends HorizontalDirectionalBlock implements Enti
         return (part & 2) != 0;
     }
 
-    /** The master (PART 0) position, resolved from any cell. */
     public static BlockPos masterPos(BlockPos pos, BlockState state) {
         if (!(state.getBlock() instanceof TanningRackBlock)) return pos;
         int part = state.getValue(PART);
@@ -114,7 +115,7 @@ public class TanningRackBlock extends HorizontalDirectionalBlock implements Enti
         for (int part = 1; part < 4; part++) {
             BlockPos cell = cellPos(base, facing, part);
             if (level.isOutsideBuildHeight(cell) || !level.getBlockState(cell).canBeReplaced(ctx)) {
-                return null; // not enough room for the full 2×2
+                return null;
             }
         }
         return defaultBlockState().setValue(FACING, facing).setValue(PART, 0);
@@ -153,20 +154,17 @@ public class TanningRackBlock extends HorizontalDirectionalBlock implements Enti
         TanningRackBlockEntity be = master(level, pos, state);
         if (be == null) return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
         BlockPos mPos = masterPos(pos, state);
-        // Lay a raw hide on an empty rack — unless an NPC tanner has the station claimed.
         if (be.getPhase() == TanningRackBlockEntity.Phase.EMPTY && Hides.isRawHide(stack.getItem())) {
             if (stationBusy(level, mPos, player)) return ItemInteractionResult.sidedSuccess(level.isClientSide);
             if (!level.isClientSide && be.placeRaw(stack) && !player.hasInfiniteMaterials()) stack.shrink(1);
             return ItemInteractionResult.sidedSuccess(level.isClientSide);
         }
-        // Lay a cured hide on an empty rack → starts drying (also blocked while an NPC works it).
         if (be.getPhase() == TanningRackBlockEntity.Phase.EMPTY
                 && stack.is(BannerboundAntiquity.CURED_HIDE.get())) {
             if (stationBusy(level, mPos, player)) return ItemInteractionResult.sidedSuccess(level.isClientSide);
             if (!level.isClientSide && be.placeCured() && !player.hasInfiniteMaterials()) stack.shrink(1);
             return ItemInteractionResult.sidedSuccess(level.isClientSide);
         }
-        // Knife on a raw hide → open the scrape minigame (driven from the master cell).
         if (be.isRaw() && stack.is(AntiquityEvents.CUTTING_TOOLS)) {
             if (!level.isClientSide && player instanceof ServerPlayer sp) {
                 if (com.bannerbound.core.api.workshop.WorkBlockLocks.isLockedByOther(mPos, sp.getUUID())) {
@@ -187,15 +185,12 @@ public class TanningRackBlock extends HorizontalDirectionalBlock implements Enti
         if (!player.getMainHandItem().isEmpty()) return InteractionResult.PASS;
         TanningRackBlockEntity be = master(level, pos, state);
         if (be == null || be.getPhase() == TanningRackBlockEntity.Phase.EMPTY) return InteractionResult.PASS;
-        // Don't let a player yank the hide off a rack an NPC tanner is mid-craft on.
         if (stationBusy(level, masterPos(pos, state), player)) return InteractionResult.CONSUME;
         ItemStack out = be.retrieve();
         if (!out.isEmpty() && !player.getInventory().add(out)) player.drop(out, false);
         return InteractionResult.CONSUME;
     }
 
-    /** True (and warns the player) when the rack work slot is locked by another worker — an NPC tanner
-     *  mid-craft, or another player's scrape session. Mirrors the pottery slab's station guard. */
     private static boolean stationBusy(Level level, BlockPos masterPos, Player player) {
         if (level.isClientSide) return false;
         if (com.bannerbound.core.api.workshop.WorkBlockLocks.isLockedByOther(masterPos, player.getUUID())) {
@@ -221,7 +216,7 @@ public class TanningRackBlock extends HorizontalDirectionalBlock implements Enti
                 ItemStack out = be.retrieve();
                 if (!out.isEmpty()) Block.popResource(level, mPos, out);
             }
-            // Tear down the other three cells (suppress their drops so breaking yields one rack).
+            // UPDATE_SUPPRESS_DROPS on the torn-down cells or breaking one rack drops several.
             for (int part = 0; part < 4; part++) {
                 BlockPos cell = cellPos(mPos, facing, part);
                 if (cell.equals(pos)) continue;

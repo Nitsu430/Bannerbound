@@ -11,9 +11,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: this player casts (or overrides) their pick in the active Choose-Government
+ * C->S: this player casts (or overrides) their pick in the active Choose-Government
  * vote. The {@code governmentOrdinal} maps to {@link com.bannerbound.core.api.settlement.Settlement.Government}:
- * 1 = COUNCIL, 2 = CHIEFDOM. 0 (NONE) is rejected server-side — that would be voting for
+ * 1 = COUNCIL, 2 = CHIEFDOM. 0 (NONE) is rejected server-side - that would be voting for
  * anarchy, which is the absence of a government, not a valid option.
  *
  * <p>Server-side handling lives in {@code SettlementManager.handleGovernmentVote} via

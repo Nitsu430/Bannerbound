@@ -16,42 +16,30 @@ import net.minecraft.world.phys.AABB;
 import java.util.EnumSet;
 
 /**
- * Anarchy-phase <b>flavour</b> behaviour. Self-organizing citizens do their real work through the
- * normal gatherer goals (auto-employed via {@link CitizenEntity#autoEmployIfAnarchy}); this goal
- * only adds the occasional reminder that a lawless band has no one keeping order:
+ * Anarchy-phase flavour behaviour. Self-organizing citizens do their real work through the normal
+ * gatherer goals (auto-employed via CitizenEntity.autoEmployIfAnarchy); this goal only adds the
+ * occasional reminder that a lawless band has no one keeping order. On a successful roll a citizen
+ * either squabbles - walks up to a settlement-mate, looks, and takes a small mutual relationship ding
+ * (NO damage) - or slacks: wanders to a nearby spot and idles for a few seconds.
  *
- * <ul>
- *   <li><b>Squabble</b> ({@link #SQUABBLE_CHANCE}): a citizen rarely walks up to a settlement-mate
- *       and has words — a brief look plus a small mutual relationship ding. <b>No damage.</b></li>
- *   <li><b>Slack</b> (otherwise): a citizen wanders to a nearby spot and idles for a few seconds —
- *       "nobody told me to keep working".</li>
- * </ul>
- *
- * <p>This deliberately replaces the old destructive anarchy behaviour (bare-handed block griefing,
- * arson, animal hunting, real punches). It's sparse on purpose — priority 4 alongside patrol, a low
- * canUse roll, and a long cooldown — so most of the time citizens just gather and patrol, and the
- * unrest is a rare bit of texture, not a wrecking crew. Yields the moment a government is enacted.
+ * This deliberately replaces the old destructive anarchy behaviour (block griefing, arson, animal
+ * hunting, real punches). It is sparse on purpose - priority 4 alongside patrol, a low canUse roll,
+ * and a long cooldown - so most of the time citizens just gather and patrol and the unrest is rare
+ * texture, not a wrecking crew. Yields the moment a government is enacted (canUse/canContinueToUse
+ * both bail unless governmentType is NONE). ANARCHY_RELATION_DELTA_PER_HIT is the per-squabble mutual
+ * relationship swing, the same constant CitizenEntity references for its brawl swing.
  */
 @ApiStatus.Internal
 public class AnarchyWorkGoal extends Goal {
-    /** Relationship swing per squabble — applied mutually (both citizens lose a little toward each
-     *  other). Kept on the same constant name {@link CitizenEntity} references for its brawl swing. */
     public static final int ANARCHY_RELATION_DELTA_PER_HIT = -5;
 
-    /** Scan radius for a squabble partner / slack wander point. */
     private static final int FLAVOUR_RADIUS = 10;
-    /** Per-canUse probability gate — trips feel occasional rather than every cooldown boundary. */
     private static final float CANUSE_ROLL_CHANCE = 0.05f;
-    /** Cooldown between flavour trips (decremented in canUse while > 0). ~30–60 s. */
     private static final int COOLDOWN_TICKS_MIN = 600;
     private static final int COOLDOWN_TICKS_MAX = 1200;
-    /** Probability a successful roll is a squabble (vs a slack idle). */
     private static final float SQUABBLE_CHANCE = 0.35f;
-    /** Hard cap on a squabble trip (walk to the partner + exchange words). */
     private static final int SQUABBLE_TICKS_MAX = 200;
-    /** Hard cap on a slack trip (walk to a spot + idle there). */
     private static final int SLACK_TICKS_MAX = 160;
-    /** Squared "close enough" radius to a squabble partner / slack point. */
     private static final double REACH_SQ = 9.0;
 
     private enum Mode { SQUABBLE, SLACK }
@@ -130,7 +118,6 @@ public class AnarchyWorkGoal extends Goal {
         }
     }
 
-    /** Walk up to the partner, look at them, exchange a small mutual relationship ding — no damage. */
     private void tickSquabble() {
         if (partner == null || !partner.isAlive()) { done = true; return; }
         citizen.getLookControl().setLookAt(partner, 30.0f, 30.0f);
@@ -146,15 +133,14 @@ public class AnarchyWorkGoal extends Goal {
         }
     }
 
-    /** Stroll to the chosen spot and idle there until the trip times out. */
     private void tickSlack() {
         if (slackPos == null) { done = true; return; }
         double distSq = citizen.distanceToSqr(
             slackPos.getX() + 0.5, slackPos.getY(), slackPos.getZ() + 0.5);
         if (distSq <= REACH_SQ) {
-            citizen.getNavigation().stop();   // loiter — the trip timer ends the idle
+            citizen.getNavigation().stop();
         } else if (citizen.getNavigation().isDone()) {
-            done = true;   // couldn't reach the spot → end the trip cleanly
+            done = true;
         }
     }
 
@@ -170,7 +156,6 @@ public class AnarchyWorkGoal extends Goal {
         citizen.getNavigation().stop();
     }
 
-    /** A living settlement-mate (not this citizen, not a child) within {@link #FLAVOUR_RADIUS}. */
     @Nullable
     private CitizenEntity findNearbyCitizen() {
         if (!(citizen.level() instanceof ServerLevel sl)) return null;
@@ -183,7 +168,6 @@ public class AnarchyWorkGoal extends Goal {
         return nearby.get(citizen.getRandom().nextInt(nearby.size()));
     }
 
-    /** A nearby ground spot to wander to and idle at while slacking off. */
     @Nullable
     private BlockPos pickSlackPos() {
         if (!(citizen.level() instanceof ServerLevel sl)) return null;

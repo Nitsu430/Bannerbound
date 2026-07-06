@@ -27,19 +27,25 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * A Rope Fence Post — one rope tie point (slot 0, its centre). Right-click two posts/gate-uprights in
- * turn with a {@code fiber_rope} to tie a rope between them; the rope is drawn client-side as a
- * leash-style catenary and faked as a fence by {@link RopeTies}. The {@link #ROPED} blockstate shows
- * the rope-wrap coil once it has a connection. One block class serves every wood type (the wood is
- * just the model); all rope-fence posts share one {@code ROPE_FENCE_POST_BE}.
+ * A Rope Fence Post - one rope tie point (slot 0, its centre). Right-click two posts/gate-uprights
+ * in turn with a {@code fiber_rope} to tie a rope between them; the rope is drawn client-side as a
+ * leash-style catenary and faked as a fence by {@link RopeTies}, and the block sits in
+ * {@code minecraft:fences} so vanilla lead/livestock logic treats it as a fence. ROPED selects the
+ * rope-wrap coil model once at least one connection exists (flipping it re-fires onRemove, hence
+ * the same-block guard there). One block class serves every wood type (the wood is just the model);
+ * all posts share one {@code ROPE_FENCE_POST_BE}. Outline SHAPE is the model's 4x16x4 column;
+ * collision is 24px (1.5 blocks, vanilla fence height - jump-proof, natural standing on top), and
+ * it is un-pathfindable like a vanilla fence post so mobs route around instead of being shoved by
+ * the analytical rope collision. In useItemOn, shift or non-rope items fall through so fiber rope's
+ * shift+right-click spear reel still works; if the player is leading animals on a rope, the click
+ * ties THEM to this post (vanilla lead-to-fence, leash holder is synced so both sides agree)
+ * instead of starting a post-to-post tie. Breaking the post breaks and drops all its ropes
+ * server-side.
  */
 public class RopeFencePostBlock extends Block implements EntityBlock {
     public static final MapCodec<RopeFencePostBlock> CODEC = simpleCodec(RopeFencePostBlock::new);
-    /** True once roped to at least one other tie point — selects the roped post model. */
     public static final BooleanProperty ROPED = BooleanProperty.create("roped");
-    /** Visual outline: a 4×16×4 post, matching the model's main column ([6,0,6]→[10,16,10]). */
     public static final VoxelShape SHAPE = Block.box(6.0, 0.0, 6.0, 10.0, 16.0, 10.0);
-    /** Collision: 1.5 tall (vanilla fence height) — jump-proof, with natural standing on top. */
     public static final VoxelShape COLLISION_SHAPE = Block.box(6.0, 0.0, 6.0, 10.0, 24.0, 10.0);
 
     public RopeFencePostBlock(BlockBehaviour.Properties properties) {
@@ -72,23 +78,17 @@ public class RopeFencePostBlock extends Block implements EntityBlock {
         return new RopeFencePostBlockEntity(pos, state);
     }
 
-    /** Impassable to pathfinding, like a vanilla fence post — mobs route around it instead of walking
-     *  into the rope and getting shoved by the analytical collision (it's also in {@code minecraft:fences}). */
     @Override
     protected boolean isPathfindable(BlockState state, PathComputationType type) {
         return false;
     }
 
-    /** Non-shift right-click with fiber rope ties from this post; shift/other items fall through (so
-     *  fiber rope's shift+right-click spear reel still works). */
     @Override
     protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
                                               Player player, InteractionHand hand, BlockHitResult hit) {
         if (!stack.is(BannerboundAntiquity.FIBER_ROPE.get()) || player.isShiftKeyDown()) {
             return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
         }
-        // Leading animals on the rope? Tie them to this post (vanilla lead-to-fence) instead of
-        // starting a post-to-post rope tie — the leash holder is synced, so both sides agree.
         if (HerdingEvents.hasLedAnimalsNear(player, pos)) {
             if (!level.isClientSide) {
                 HerdingEvents.tieLedAnimalsToFence(player, level, pos);
@@ -108,7 +108,7 @@ public class RopeFencePostBlock extends Block implements EntityBlock {
 
     @Override
     protected void onRemove(BlockState oldState, Level level, BlockPos pos, BlockState newState, boolean moved) {
-        // Only on an actual break/replace (not our own roped-property flip, where the block is unchanged).
+        // Same-block guard: a ROPED property flip also fires onRemove and must NOT break the ropes.
         if (!oldState.is(newState.getBlock()) && !level.isClientSide
                 && level.getBlockEntity(pos) instanceof RopeFencePostBlockEntity be) {
             RopeTies.breakAllAndDrop(level, pos, be);

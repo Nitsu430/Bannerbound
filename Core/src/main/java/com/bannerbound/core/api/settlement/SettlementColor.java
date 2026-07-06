@@ -4,9 +4,11 @@ import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 
 /**
- * Eight banner-aligned colors a player can pick when founding a settlement. Order matters
- * (saved as an ordinal in {@link Settlement#save()}) — append new colors at the end if you
- * extend the palette.
+ * Eight banner-aligned colors a player can pick when founding a settlement, each carrying its
+ * ChatFormatting, packed RGB, and translation key. Declaration order is a save-format invariant:
+ * the color persists as an ordinal in {@link Settlement#save()}, so append new colors at the end
+ * and never reorder or remove. {@link #byIndex(int)} falls back to WHITE for out-of-range
+ * indices so stale saves degrade safely.
  */
 public enum SettlementColor {
     WHITE(ChatFormatting.WHITE, 0xFFFFFF, "bannerbound.color.white"),

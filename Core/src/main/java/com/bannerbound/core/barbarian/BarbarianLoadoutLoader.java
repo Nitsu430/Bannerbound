@@ -19,12 +19,12 @@ import net.minecraft.util.profiling.ProfilerFiller;
 /**
  * Loads barbarian capability tiers from {@code data/<namespace>/barbarian_loadout/*.json} (shipped
  * by Antiquity, but loaded here in Core so raid/squad code can {@link #resolve} without a
- * Core→Antiquity dependency — same arrangement as {@link
+ * Core->Antiquity dependency -- same arrangement as {@link
  * com.bannerbound.core.api.research.data.ResearchTreeLoader} loading Antiquity research).
  *
- * <p>The camp's MELEE weapon tier now comes from its TOOL AGE (see {@code BarbarianTech.capability} —
- * the research tree already orders bone→wood→stone→iron via {@code set_tool_age}). These loadout
- * files only supply the barbarian-specific RANGED weapons the tool-age data lacks — the archery bow:
+ * <p>The camp's MELEE weapon tier now comes from its TOOL AGE (see {@code BarbarianTech.capability} --
+ * the research tree already orders bone->wood->stone->iron via {@code set_tool_age}). These loadout
+ * files only supply the barbarian-specific RANGED weapons the tool-age data lacks -- the archery bow:
  * <pre>
  * { "research": "bannerboundantiquity:archery",
  *   "grants": { "ranged": true, "weapon_item": "bannerboundantiquity:primitive_bow",
@@ -41,7 +41,6 @@ public class BarbarianLoadoutLoader extends SimpleJsonResourceReloadListener {
         super(GSON, FOLDER);
     }
 
-    /** One loadout row: knowing {@code research} grants this weapon/behaviour. */
     public record Entry(String research, String weapon, String weaponItem, String meleeWeaponItem,
                         int tier, double damage, double attackSpeed, boolean ranged, String projectile,
                         String behavior, int squadWeight) {
@@ -76,9 +75,6 @@ public class BarbarianLoadoutLoader extends SimpleJsonResourceReloadListener {
         BannerboundCore.LOGGER.info("Loaded {} barbarian ranged-loadout entries", map.size());
     }
 
-    /** The highest-tier RANGED loadout entry whose gating research is known (the archery bow), or
-     *  null. The melee weapon tier itself comes from the tool age (see {@code BarbarianTech.capability});
-     *  these entries only add the barbarian-specific ranged weapons (bows) the tool-age data lacks. */
     public static Entry rangedOverride(Set<String> known) {
         if (known == null) return null;
         Entry best = null;

@@ -14,15 +14,17 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Ponder storyboards for the Stone Anvil — cast molten metal in moulds and cold-hammer parts into
- * tools. Scenes registered under {@code bannerboundantiquity:stone_anvil}.
+ * Ponder storyboards for the Stone Anvil - dressed from a plain Stone block with a hammer, it
+ * casts molten metal poured from a Crucible into fired moulds and cold-hammers the cast parts
+ * into tools. Scenes registered under {@code bannerboundantiquity:stone_anvil}. Built at runtime
+ * on the shared blank platform (see PonderUtil.basePlate); mould, fill and cooling states are
+ * faked by rewriting the BE's MoldShape / FillMb / MetalId / Molten / CoolTicks NBT.
  */
 @OnlyIn(Dist.CLIENT)
 public final class StoneAnvilScenes {
     private static final int X = PonderUtil.CX, Y = PonderUtil.CY, Z = PonderUtil.CZ;
     private static final Direction FACING = Direction.NORTH;
-    /** Copper-coloured molten tint (ARGB). */
-    private static final int COPPER_TINT = 0xFFB87333;
+    private static final int COPPER_TINT = 0xFFB87333; // ARGB molten-copper tint
 
     private StoneAnvilScenes() {}
 
@@ -55,7 +57,6 @@ public final class StoneAnvilScenes {
             .setValue(BlockStateProperties.HORIZONTAL_FACING, FACING), false);
         scene.idle(10);
 
-        // Place a mould.
         scene.overlay().showControls(util.vector().topOf(pos), Pointing.DOWN, 50)
             .rightClick().withItem(PonderUtil.stack("bannerboundantiquity:fired_clay_mold_ingot"));
         scene.idle(5);
@@ -68,7 +69,6 @@ public final class StoneAnvilScenes {
             .placeNearTarget();
         scene.idle(80);
 
-        // Pour molten metal from a crucible.
         scene.overlay().showControls(util.vector().topOf(pos), Pointing.DOWN, 60)
             .rightClick().withItem(PonderUtil.stack("bannerboundantiquity:crucible"));
         scene.idle(5);
@@ -87,7 +87,6 @@ public final class StoneAnvilScenes {
             .placeNearTarget();
         scene.idle(80);
 
-        // Let it cool, then extract.
         modify(scene, util, tag -> { tag.putBoolean("Molten", false); tag.putInt("CoolTicks", 0); });
         scene.idle(10);
         scene.overlay().showText(80)
@@ -99,7 +98,6 @@ public final class StoneAnvilScenes {
         modify(scene, util, tag -> { tag.putString("MoldShape", ""); tag.putInt("FillMb", 0); tag.putString("MetalId", ""); });
         scene.idle(10);
 
-        // Cold-hammer path.
         scene.overlay().showText(90)
             .text("Cast parts can then be cold-hammered here: stack them on the anvil and strike with a Hammer to forge a tool.")
             .pointAt(util.vector().topOf(pos))

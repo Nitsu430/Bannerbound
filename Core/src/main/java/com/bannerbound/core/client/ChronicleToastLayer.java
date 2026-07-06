@@ -15,7 +15,12 @@ import net.minecraft.world.item.Items;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-/** Top-right "New Chronicle entry" notification. */
+/**
+ * HUD layer ({@link LayeredDraw.Layer}) that draws the top-right "New Chronicle entry" toast.
+ * Each frame it peeks the current ToastEntry from {@link ClientChronicleState}, slides it in
+ * (easeOutCubic over ~220ms) and fades it out after ~3.9s; multiple pending entries collapse
+ * into a "N new Chronicle entries" count. Singleton via INSTANCE.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ChronicleToastLayer implements LayeredDraw.Layer {

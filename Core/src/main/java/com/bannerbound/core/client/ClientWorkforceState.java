@@ -7,9 +7,10 @@ import org.jetbrains.annotations.ApiStatus;
 import com.bannerbound.core.network.WorkforceStatsPayload;
 
 /**
- * Client-side cache of the latest {@link WorkforceStatsPayload} — the per-citizen roster (name, job,
- * work-status) the Town Hall Statistics tab renders. Updated once a second for members of a settlement
- * that has unlocked Mathematics; stays empty otherwise.
+ * Client-side cache of the latest WorkforceStatsPayload: the per-citizen roster (name, job,
+ * work-status) the Town Hall Statistics tab renders. The volatile snapshot is replaced wholesale once
+ * a second for members of a settlement that has unlocked Mathematics, and stays empty otherwise (also
+ * empty until the first broadcast).
  */
 @ApiStatus.Internal
 public final class ClientWorkforceState {
@@ -21,7 +22,6 @@ public final class ClientWorkforceState {
         entries = newEntries == null ? List.of() : List.copyOf(newEntries);
     }
 
-    /** Latest roster snapshot (empty until the first broadcast / if statistics aren't unlocked). */
     public static List<WorkforceStatsPayload.Entry> getEntries() {
         return entries;
     }

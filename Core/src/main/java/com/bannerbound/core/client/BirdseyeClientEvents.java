@@ -19,35 +19,30 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
-/** Client-side event handlers for the birdseye chunk-claim view (merged subscriber class). */
+/**
+ * Client-side handlers for the birdseye chunk-claim view (merged subscriber class). Two subscribers:
+ *
+ * onClientTickPost is a belt-and-suspenders camera guard. While {@link ClientBirdseyeState} is active
+ * it slams the camera entity back onto our ghost if anything steals it; once the state goes inactive it
+ * restores the camera to the local player if it is still bound to the stale ghost -- this is what saves
+ * "ESC closed the GUI but I'm still in birdseye" when the screen's lifecycle hooks get bypassed. The
+ * last ghost is tracked in this class, NOT in ClientBirdseyeState, because state.exit() wipes its
+ * reference before we get the chance to detect the stale binding.
+ *
+ * onRenderLevelStage draws the in-world overlay (AFTER_TRANSLUCENT_BLOCKS): one translucent slab plus a
+ * top-face outline per visible chunk so chunks are pickable straight off the terrain. Own chunks fill
+ * with the faction PRIMARY and outline with the SECONDARY accent (two-tone identity, driven by the live
+ * banner dye via ClientIdentityState, not the founding color slot); foreign chunks are grey; purchasable
+ * chunks are white-blue, brightening on hover and fading when unaffordable. The slab Y comes from
+ * ClientBirdseyeState (player-relative); tall mountains can occlude it, which is acceptable.
+ */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
 public final class BirdseyeClientEvents {
 
     private BirdseyeClientEvents() {}
 
-    // ------------------------------------------------------------------
-    // From BirdseyeClientEvents
-    // ------------------------------------------------------------------
-
-    /*
-     * Belt-and-suspenders enforcement for the birdseye camera. Runs every client tick and:
-     * <ul>
-     *   <li>If {@link ClientBirdseyeState} is active and something stole the camera entity away
-     *       from our ghost, slams it back. Keeps the camera locked even if another mod or vanilla
-     *       code path resets it.</li>
-     *   <li>If the state has gone inactive (screen closed / removed fired) but the camera entity
-     *       is still our last-known ghost (i.e. {@code removed()} didn't propagate cleanly), forces
-     *       it back to the local player. This is what saves us from "ESC closed the GUI but I'm
-     *       still in birdseye view" — a problem the screen alone can't solve if its lifecycle
-     *       hooks get bypassed.</li>
-     * </ul>
-     * We track the last ghost outside of {@link ClientBirdseyeState} because state.exit() wipes
-     * its reference; this guard needs to remember "this is the entity I should NOT let stay
-     * bound" until the next frame after exit.
-     */
-    /** Last ghost we saw bound while state was active. Cleared once we've restored the camera
-     *  away from it; survives state.exit() so we can detect a stale binding. */
+    // Tracked here, not in ClientBirdseyeState, so it survives state.exit() (which wipes the ref).
     private static Entity lastKnownGhost;
 
     @SubscribeEvent
@@ -63,7 +58,6 @@ public final class BirdseyeClientEvents {
                 mc.setCameraEntity(ghost);
             }
         } else if (lastKnownGhost != null) {
-            // State is inactive but camera might still point at our stale ghost — restore it.
             if (mc.getCameraEntity() == lastKnownGhost) {
                 mc.setCameraEntity(mc.player);
             }
@@ -71,27 +65,7 @@ public final class BirdseyeClientEvents {
         }
     }
 
-    // ------------------------------------------------------------------
-    // From BirdseyeClientEvents
-    // ------------------------------------------------------------------
-
-    /*
-     * Renders the in-world chunk-claim overlay while {@link ClientBirdseyeState} is active. Each
-     * chunk in the visible window gets a solid translucent slab plus a thin outline so the player
-     * can pick chunks directly off the terrain — no GUI panel needed. Roles:
-     * <ul>
-     *   <li>Own chunks → settlement color (subtler alpha, no hover).</li>
-     *   <li>Foreign chunks → dim grey.</li>
-     *   <li>Purchasable unclaimed → bright white-blue. Brightens to near-white when the cursor's
-     *       world-projected position falls inside this chunk. Faded when unaffordable.</li>
-     * </ul>
-     * The slab Y is fixed at {@link #SLAB_Y} — high enough that camera is always above, low enough
-     * that most overworld terrain is below. Tall mountains can occlude (acceptable).
-     */
-    /** Slab thickness — thin enough not to obscure terrain features, thick enough to draw
-     *  cleanly without z-fighting. */
     private static final float SLAB_HEIGHT = 0.5f;
-    // Alphas kept on the lower side so terrain reads clearly through the overlay.
     private static final float FILL_ALPHA_OWN = 0.28f;
     private static final float FILL_ALPHA_FOREIGN = 0.22f;
     private static final float FILL_ALPHA_PURCH = 0.32f;
@@ -106,9 +80,6 @@ public final class BirdseyeClientEvents {
         Minecraft mc = Minecraft.getInstance();
         if (mc.level == null) return;
 
-        // Identity, not founding slot: a re-dyed banner recolors the territory overlay too.
-        // Own chunks fill with the primary and OUTLINE with the secondary accent — the two-tone
-        // faction identity, read straight off the terrain from above.
         int ord = ClientBirdseyeState.colorOrdinal();
         int rgb = ClientIdentityState.primaryRgb(ord);
         float ownR = ((rgb >> 16) & 0xFF) / 255f;
@@ -153,19 +124,12 @@ public final class BirdseyeClientEvents {
         pose.popPose();
     }
 
-    /** Renders one chunk as a filled translucent slab + a brighter line outline on its top
-     *  face. Slab Y is read from {@link ClientBirdseyeState} so it tracks whatever the screen
-     *  computed for this session (player-relative). */
     private static void drawChunk(PoseStack pose, MultiBufferSource buffer, long packed,
                                    float r, float g, float b, float a) {
-        // Default outline: a brighter shade of the fill (foreign / purchasable chunks).
         drawChunk(pose, buffer, packed, r, g, b, a,
             Math.min(1.0f, r * 1.4f), Math.min(1.0f, g * 1.4f), Math.min(1.0f, b * 1.4f));
     }
 
-    /** As {@link #drawChunk(PoseStack, MultiBufferSource, long, float, float, float, float)}
-     *  but with an explicit outline color — own chunks pass the faction's secondary accent so
-     *  the territory reads two-tone (primary fill, accent border). */
     private static void drawChunk(PoseStack pose, MultiBufferSource buffer, long packed,
                                    float r, float g, float b, float a,
                                    float lineR, float lineG, float lineB) {

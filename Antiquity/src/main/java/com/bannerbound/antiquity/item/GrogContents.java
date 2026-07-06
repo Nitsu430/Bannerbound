@@ -11,17 +11,14 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.world.effect.MobEffectInstance;
 
 /**
- * The grog held by a filled vessel (mug / horn) — a snapshot of the {@code GrogRecipe} it was poured
+ * The grog held by a filled vessel (mug / horn) - a snapshot of the {@code GrogRecipe} it was poured
  * from (GROG_PLAN.md Phase 3). Stored as a {@code DataComponentType} on the vessel item; its presence
  * means "full" (drives the {@code filled} model override + the tinted alcohol layer), its absence
- * means an empty vessel. Drinking applies {@code foodValue} + the {@code effects}, bumps intoxication
- * by {@code strength}, then clears it.
- *
- * @param name      lang key for the grog's display name (e.g. {@code grog.berry})
- * @param tint      packed 0xRRGGBB liquid colour (tints the vessel's alcohol layer)
- * @param strength  drink potency — intoxication added per sip (and saturation)
- * @param foodValue hunger restored per drink
- * @param effects   per-sip mob effects (e.g. regeneration), snapshotted from the recipe
+ * means an empty vessel. Drinking applies {@code foodValue} (hunger restored) + the per-sip
+ * {@code effects} (snapshotted from the recipe), bumps intoxication by {@code strength} (which also
+ * scales saturation), then clears the component. {@code name} is the lang key for the grog's display
+ * name (e.g. {@code grog.berry}); {@code tint} is the packed 0xRRGGBB liquid colour for the vessel's
+ * alcohol layer.
  */
 public record GrogContents(String name, int tint, int strength, int foodValue,
                            List<MobEffectInstance> effects) {

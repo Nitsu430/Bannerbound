@@ -8,7 +8,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: start researching a faith-tree node (left-click on the FAITH tab). */
+/** C->S: start researching a faith-tree node (left-click on the FAITH tab). */
 public record StartFaithResearchPayload(String researchId) implements CustomPacketPayload {
 
     public static final CustomPacketPayload.Type<StartFaithResearchPayload> TYPE =

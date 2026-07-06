@@ -27,12 +27,14 @@ import net.neoforged.api.distmarker.OnlyIn;
 import org.joml.Matrix4f;
 
 /**
- * Draws what a placed crucible holds: the raw charge items piled in the bowl, or — once molten — a
- * glowing tinted liquid surface. The bowl itself is the block's own model.
+ * Draws what a placed crucible holds: the raw charge items piled in the bowl (laid flat, each with
+ * a deterministic scatter rotation so the pile does not z-fight), or - once molten - a glowing
+ * full-bright tinted liquid quad. The bowl itself is the block's own model; this only draws the
+ * contents. MIN/MAX are the bowl's interior bounds derived from the block model (a box spanning
+ * 4..12 horizontally and 0..6 vertically), with the liquid surface at 5.5/16.
  */
 @OnlyIn(Dist.CLIENT)
 public class CrucibleRenderer implements BlockEntityRenderer<CrucibleBlockEntity> {
-    /** Bowl interior bounds (the block is box 4..12, 0..6). */
     private static final float MIN = 5.0F / 16.0F;
     private static final float MAX = 11.0F / 16.0F;
 
@@ -57,7 +59,7 @@ public class CrucibleRenderer implements BlockEntityRenderer<CrucibleBlockEntity
             pose.pushPose();
             pose.translate(0.5, 0.16 + i * 0.03, 0.5);
             pose.scale(0.34F, 0.34F, 0.34F);
-            pose.mulPose(Axis.XP.rotationDegrees(90.0F)); // lay flat in the bowl
+            pose.mulPose(Axis.XP.rotationDegrees(90.0F));
             pose.mulPose(Axis.ZP.rotationDegrees(((i * 73) % 41) - 20));
             itemRenderer.renderStatic(s, ItemDisplayContext.GROUND, light, OverlayTexture.NO_OVERLAY,
                 pose, buffers, be.getLevel(), 0);
@@ -65,7 +67,6 @@ public class CrucibleRenderer implements BlockEntityRenderer<CrucibleBlockEntity
         }
     }
 
-    /** A glowing tinted surface for a molten crucible. */
     private void renderLiquid(CrucibleContents c, PoseStack pose, MultiBufferSource buffers, int light) {
         TextureAtlasSprite sprite = Minecraft.getInstance().getTextureAtlas(InventoryMenu.BLOCK_ATLAS)
             .apply(ResourceLocation.fromNamespaceAndPath("bannerboundantiquity", "block/crucible/molten_metal"));

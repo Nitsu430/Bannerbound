@@ -9,11 +9,9 @@ import com.bannerbound.core.client.ChatLineAlpha;
 import net.minecraft.client.GuiMessage;
 
 /**
- * Carries a proximity-chat text alpha on the persistent {@link GuiMessage} (the entry kept in
- * {@code allMessages}). Storing it here — not just on the transient display {@code Line} — means
- * the alpha survives a chat rescale, which rebuilds every {@code Line} from its {@code GuiMessage}.
- *
- * <p>Default {@code 0} == "unset → opaque"; see {@link ChatLineAlpha}.
+ * Carries a proximity-chat text alpha on the persistent GuiMessage (the entry kept in allMessages).
+ * It must live here, not just on the transient display Line, so the alpha survives a chat rescale,
+ * which rebuilds every Line from its GuiMessage. Default 0 means "unset -> opaque"; see ChatLineAlpha.
  */
 @Mixin(GuiMessage.class)
 @ApiStatus.Internal

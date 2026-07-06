@@ -20,10 +20,13 @@ import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.item.Item;
 
 /**
- * Datapack loader for knapping shapes — reads every JSON under
- * {@code data/<namespace>/knapping_shapes/}. Server-side only (registered as a reload listener in
- * {@code AntiquityEvents}); the shapes are pushed to the client inside the {@code OpenKnappingPayload}
- * when a knapping session starts, so the client screen is self-contained.
+ * Datapack loader for knapping shapes - reads every JSON under
+ * {@code data/<namespace>/knapping_shapes/}. Registered as a server reload listener in
+ * {@code AntiquityEvents}; the shapes are pushed to the client inside the
+ * {@code OpenKnappingPayload} when a knapping session starts, so the client screen is
+ * self-contained, and {@code applyEntries} is public so {@code ClientDatapackRecipes} can re-read
+ * the same JSONs on remote clients, where server datapacks don't reach. {@code byHead} is the
+ * server-side validation lookup when a COMPLETE comes back from the client.
  */
 @ApiStatus.Internal
 public class KnappingShapeManager extends SimpleJsonResourceReloadListener {
@@ -40,8 +43,6 @@ public class KnappingShapeManager extends SimpleJsonResourceReloadListener {
         applyEntries(entries);
     }
 
-    /** Parse + store the loaded entries. Public so the client-side jar loader can reuse it on remote
-     *  clients, where server datapacks don't reach (see {@code ClientDatapackRecipes}). */
     public static void applyEntries(Map<ResourceLocation, JsonElement> entries) {
         List<KnappingShape> loaded = new ArrayList<>();
         for (Map.Entry<ResourceLocation, JsonElement> entry : entries.entrySet()) {
@@ -54,12 +55,10 @@ public class KnappingShapeManager extends SimpleJsonResourceReloadListener {
         BannerboundAntiquity.LOGGER.info("Loaded {} knapping shape(s).", shapes.size());
     }
 
-    /** Every loaded shape (sent to the client when a knapping session opens). */
     public static List<KnappingShape> all() {
         return shapes;
     }
 
-    /** The shape producing {@code head}, or {@code null} (server validation of a COMPLETE). */
     @Nullable
     public static KnappingShape byHead(Item head) {
         for (KnappingShape s : shapes) {

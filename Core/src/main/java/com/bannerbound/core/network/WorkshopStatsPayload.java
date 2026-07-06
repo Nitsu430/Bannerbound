@@ -11,9 +11,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client per-workshop snapshot for the Town Hall Statistics tab (Phase 2). Broadcast once a
- * second to members of a settlement that has unlocked statistics, so the tab can show each workshop's
- * staffing, output rate, and pending order backlog (and a derived "expected supply" ETA).
+ * Server -> client per-workshop snapshot for the Town Hall Statistics tab (Phase 2). Broadcast once
+ * a second to members of a settlement that has unlocked statistics, so the tab can show each
+ * workshop's staffing, output rate (items/sec, smoothed), and pending order backlog (and a derived
+ * "expected supply" ETA). An Entry's name is "" when the workshop has no custom name.
  */
 @ApiStatus.Internal
 public record WorkshopStatsPayload(
@@ -21,8 +22,6 @@ public record WorkshopStatsPayload(
     java.util.List<Entry> entries
 ) implements CustomPacketPayload {
 
-    /** One workshop: custom name ("" if none), derived type id, staffing, status ordinal,
-     *  output rate (items/sec, smoothed), and total pending order count. */
     public record Entry(String name, String typeId, int workers, int capacity,
                         int statusOrdinal, double outputRate, int pendingOrders) {}
 

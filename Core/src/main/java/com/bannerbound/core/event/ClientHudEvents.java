@@ -17,6 +17,13 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RegisterGuiLayersEvent;
 
+/**
+ * Client-only registration of every Bannerbound HUD overlay via RegisterGuiLayersEvent. Each
+ * layer is registered above all vanilla layers so the settlement indicators, era/year readout,
+ * pantheon, warnings, journal, chronicle toasts, and debug/profiler overlays paint on top.
+ * This is the single place a new HUD layer gets wired in. Must stay Dist.CLIENT - these layer
+ * instances are client classes.
+ */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientHudEvents {

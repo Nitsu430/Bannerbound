@@ -10,7 +10,8 @@ import net.minecraft.util.StringRepresentable;
 
 /**
  * The nine greyscale trim shapes the paint brush can stamp onto a block face (square / triangle /
- * wave families). {@link #sprite()} is the block-atlas sprite (art under {@code textures/block/trims/};
+ * wave families); declaration order (ALL) is the brush's selection-cycle order. {@link #sprite()} is
+ * the block-atlas sprite for the shape's greyscale texture (art under {@code textures/block/trims/};
  * stitched via {@code assets/minecraft/atlases/blocks.json}). The serialized name is the lang-key
  * suffix. The wave top/middle/bottom variants stack vertically into a continuous wave.
  */
@@ -25,7 +26,6 @@ public enum TrimShape implements StringRepresentable {
     WAVE_MIDDLE("wave_middle", "wave_middle_horizontal"),
     WAVE_BOTTOM("wave_bottom", "wave_bottom_horizontal");
 
-    /** All shapes in selection order (matches the paint brush's cycle). */
     public static final TrimShape[] ALL = values();
 
     public static final Codec<TrimShape> CODEC = StringRepresentable.fromEnum(TrimShape::values);
@@ -45,7 +45,6 @@ public enum TrimShape implements StringRepresentable {
         return this.name;
     }
 
-    /** Block-atlas sprite location for this shape's greyscale texture. */
     public ResourceLocation sprite() {
         return ResourceLocation.fromNamespaceAndPath("bannerboundantiquity", "block/trims/" + this.texture);
     }

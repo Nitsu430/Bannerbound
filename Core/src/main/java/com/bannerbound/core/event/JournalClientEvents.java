@@ -15,7 +15,11 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 
-/** Registers and handles the Chronicle hotkey and journal tracker collapse hotkey. */
+/**
+ * Client-only (Dist.CLIENT) key-mapping registration and per-tick handling for the Chronicle open
+ * hotkey and the journal-tracker collapse hotkey. Drains consumeClick each tick so queued presses
+ * each fire exactly once.
+ */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
 public final class JournalClientEvents {

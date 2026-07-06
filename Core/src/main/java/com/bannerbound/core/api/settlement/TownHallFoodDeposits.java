@@ -14,17 +14,20 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.ChunkPos;
 
-/** Food deposit helper for the campfire town-center interaction. */
+/**
+ * Server-side helper for the shift-right-click food deposit at a settlement's town-hall (campfire)
+ * block. tryDepositFood validates ownership (the clicker's settlement must own the clicked chunk
+ * and the click must land on the town-hall pos), converts the held stack to larder food value, tops
+ * the settlement food store up to its cap, plays feedback, and broadcasts immigration state. It
+ * returns true whenever the click is consumed -- INCLUDING rejected deposits (wrong owner, store
+ * full, non-larder item) -- so the interaction never falls through to vanilla eating; only a
+ * non-food item or a click that is not the town-hall block returns false to let vanilla proceed.
+ */
 @ApiStatus.Internal
 public final class TownHallFoodDeposits {
     private TownHallFoodDeposits() {
     }
 
-    /**
-     * Handles a shift-right-click food deposit at a settlement's town-hall position.
-     * Returns true when the click was consumed, including rejected deposits that should not
-     * fall through to vanilla eating.
-     */
     public static boolean tryDepositFood(ServerPlayer serverPlayer, ServerLevel level,
                                          BlockPos pos, ItemStack stack) {
         float baseValue = com.bannerbound.core.api.settlement.data.FoodValueLoader.base(stack.getItem());

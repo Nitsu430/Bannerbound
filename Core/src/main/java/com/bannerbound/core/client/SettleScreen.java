@@ -22,9 +22,18 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Two-page settlement founding screen. Page 1 (IDENTITY) picks a name + banner color and leads
- * to page 2 (STYLE), where the player picks the settlement's culture style. The style governs
- * which blocks the settlement finds appealing (see the chunk-beauty / culture system).
+ * Two-page settlement founding screen (client-only). Page 1 (IDENTITY) picks a name + banner color;
+ * page 2 (STYLE) picks the settlement's culture style, which governs which blocks the settlement
+ * finds appealing (see the chunk-beauty / culture system). Confirm sends a SettleRequestPayload to
+ * the server.
+ *
+ * Widgets are rebuilt on every init() (page switch), so the name / color / style picks are held in
+ * fields to survive the rebuild. Banner colors are unique per server: colors already flown by an
+ * existing settlement are derived from the client's mirror of the claim map (each claim carries its
+ * settlement color), so no extra packet is needed - taken colors are greyed out and unselectable,
+ * and if the player's pick is taken (or on first build) the picker snaps to the first still-available
+ * color. The identity page also shows a server-assessed site report: a green all-clear, or one
+ * warning line per poor-terrain finding.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -40,7 +49,6 @@ public class SettleScreen extends PolishedScreen {
 
     private Page page = Page.IDENTITY;
 
-    // Persisted across page switches (widgets are rebuilt each time).
     private String nameText = "";
     private int selectedColor = 0;
     private String selectedStyleId = "";
@@ -48,7 +56,6 @@ public class SettleScreen extends PolishedScreen {
     private EditBox nameField;
     private Button confirmButton;
 
-    /** Site warnings assessed server-side at the founding spot, shown on the identity page. */
     private final List<SiteWarning> siteWarnings;
 
     public SettleScreen(int siteWarningMask) {
@@ -64,8 +71,6 @@ public class SettleScreen extends PolishedScreen {
             initStylePage();
         }
     }
-
-    // ─── Page 1: name + color ───────────────────────────────────────────────────────────────
 
     private void initIdentityPage() {
         final int panelX = (this.width - PANEL_WIDTH) / 2;
@@ -92,10 +97,6 @@ public class SettleScreen extends PolishedScreen {
         this.addRenderableWidget(this.nameField);
         this.setInitialFocus(this.nameField);
 
-        // Colors are unique per server: a color already flown by another settlement is greyed
-        // out and unselectable. Derived from the claims the client already mirrors (each claim
-        // carries its settlement's color), so no extra packet is needed. If the player's current
-        // pick is taken (or this is the first build), snap to the first still-available color.
         java.util.Set<Integer> takenColors = takenColorIndices();
         if (takenColors.contains(selectedColor)) {
             for (int i = 0; i < SettlementColor.count(); i++) {
@@ -158,8 +159,6 @@ public class SettleScreen extends PolishedScreen {
                 controlsX + 12, panelY + 72, 0xFFCCCCCC);
         });
 
-        // Site assessment, drawn just below the panel: a green all-clear, or one warning line per
-        // poor-terrain finding so the player isn't surprised by a starved settlement later.
         final int reportCenterX = panelX + PANEL_WIDTH / 2;
         final int reportTop = panelY + IDENTITY_PANEL_HEIGHT + 8;
         this.addRenderableOnly((graphics, mouseX, mouseY, partialTick) -> {
@@ -183,8 +182,6 @@ public class SettleScreen extends PolishedScreen {
 
         updateConfirmButton();
     }
-
-    // ─── Page 2: culture style ──────────────────────────────────────────────────────────────
 
     private void initStylePage() {
         List<ClientCultureStyleState.Entry> styles = ClientCultureStyleState.styles();
@@ -220,8 +217,7 @@ public class SettleScreen extends PolishedScreen {
             int x = panelX + 12 + col * (colWidth + 8);
             int y = panelY + gridTop + row * STYLE_ROW_H;
             Button styleButton = PolishButton.polished(
-                // Culture-style display names live in the style's JSON ("name"), not in lang —
-                // so render the string literally rather than as a translation key.
+                // Display names come from the style JSON, not lang -> render literally, not as a key.
                 Component.literal(entry.nameKey()),
                 btn -> {
                     selectedStyleId = entry.id();
@@ -229,7 +225,6 @@ public class SettleScreen extends PolishedScreen {
                 })
                 .bounds(x, y, colWidth, 20)
                 .build();
-            // The selected style renders as inactive (the standard "this one is chosen" cue).
             styleButton.active = !entry.id().equals(selectedStyleId);
             this.addRenderableWidget(styleButton);
         }
@@ -251,9 +246,6 @@ public class SettleScreen extends PolishedScreen {
             .build());
     }
 
-    /** Color indices already claimed by an existing settlement, derived from the client's mirror
-     *  of the claim map (each claimed chunk carries its settlement's color). These are greyed out
-     *  and unselectable in the picker — colors are unique per server. */
     private static java.util.Set<Integer> takenColorIndices() {
         java.util.Set<Integer> taken = new java.util.HashSet<>();
         for (com.bannerbound.core.network.ClaimEntry e : ClientClaimState.all().values()) {
@@ -309,7 +301,6 @@ public class SettleScreen extends PolishedScreen {
             this.color = color;
             this.isSelected = isSelected;
             this.taken = taken;
-            // A taken color can't be picked — disabling the button also blocks its click handler.
             this.active = !taken;
         }
 
@@ -321,7 +312,6 @@ public class SettleScreen extends PolishedScreen {
             int h = this.getHeight();
 
             if (taken) {
-                // Dim the swatch and draw an X so it reads clearly as "already claimed".
                 int dim = 0xFF000000 | (((color.rgb() & 0xFEFEFE) >> 1));
                 graphics.fill(x, y, x + w, y + h, dim);
                 graphics.renderOutline(x, y, w, h, 0xFF222222);

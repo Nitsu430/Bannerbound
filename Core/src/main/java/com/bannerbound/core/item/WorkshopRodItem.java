@@ -35,41 +35,30 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 
 /**
- * Workshop Orders rod — the Home Marker Rod's crafter-workshop sibling (see CRAFTER_PLAN.md).
- * Key difference from homes: workshops have NO anchor block, so the rod binds to a workshop
- * <em>id</em> and the FIRST committed box <b>creates</b> the workshop (it must contain a
- * registered work block so we know the building is meant to be one).
+ * Workshop Orders rod - the crafter-workshop sibling of the Housing Orders rod (see
+ * CRAFTER_PLAN.md). Workshops have NO anchor block, so the rod binds to a workshop id and the
+ * FIRST committed box (which must contain a registered work block) creates the workshop; each
+ * later box ADDS to its union and must stay connected.
  *
- * <p>Interaction map:
- * <ul>
- *   <li><b>Right-click a block (unbound)</b> — A→B cycle; committing the first box creates a new
- *       workshop, binds the rod to it, and opens nothing (keep drawing boxes to grow it).</li>
- *   <li><b>Right-click a block (bound)</b> — A→B cycle; each box ADDS to the bound workshop's
- *       union (must stay connected — no skipping blocks).</li>
- *   <li><b>Shift-right-click a block inside an existing workshop</b> — bind the rod to it and
- *       open its menu.</li>
- *   <li><b>Shift-right-click in air</b> — unbind (clears the in-progress A too).</li>
- *   <li><b>Shift-left-click a block inside a workshop box</b> — remove that box (the smallest
- *       one containing the click when boxes overlap). Removing the last box deletes the
- *       workshop and unassigns its workers.</li>
- * </ul>
+ * Interaction map: right-click a block cycles A->B (unbound: first commit creates + binds a
+ * workshop; bound: grows it). Shift-right-click inside an existing workshop you belong to binds
+ * the rod and opens its menu; shift-right-click in air unbinds. Shift-left-click a block removes
+ * the box under the cursor (the smallest, when boxes overlap); removing the last box deletes the
+ * workshop and unassigns its crafter workers (the citizen job field is the source of truth).
  *
- * Caps mirror the Home Marker Rod: per-axis box cap {@link #MAX_BOX_DIM}, per-workshop box count
- * {@link #MAX_BOXES_PER_WORKSHOP}, and the whole union must fit in {@link #MAX_UNION_SPAN} per
- * axis (workshops have no anchor block to anchor a radius to).
+ * Left-click has no vanilla item hook, so that gesture arrives via PlayerInteractEvent.LeftClickBlock
+ * (Events); it is cancelled so the rod never mines the block. Caps: per-axis box MAX_BOX_DIM,
+ * per-workshop box count MAX_BOXES_PER_WORKSHOP, and the whole union must fit MAX_UNION_SPAN per
+ * axis (the no-anchor stand-in for the home rod's radius-from-House-Block cap).
  */
 public class WorkshopRodItem extends Item {
     public static final int MAX_BOX_DIM = 32;
     public static final int MAX_BOXES_PER_WORKSHOP = 128;
-    /** Max per-axis span of the whole box union — the no-anchor stand-in for the home rod's
-     *  radius-from-House-Block cap. */
     public static final int MAX_UNION_SPAN = 48;
 
     public WorkshopRodItem(Properties properties) {
         super(properties);
     }
-
-    // ─── Shift-right-click in air → unbind ──────────────────────────────────────────────────
 
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
@@ -93,8 +82,6 @@ public class WorkshopRodItem extends Item {
         return InteractionResultHolder.pass(stack);
     }
 
-    // ─── Right-click on a block ───────────────────────────────────────────────────────────────
-
     @Override
     public InteractionResult useOn(UseOnContext context) {
         Level level = context.getLevel();
@@ -106,7 +93,6 @@ public class WorkshopRodItem extends Item {
         BlockPos clicked = context.getClickedPos();
 
         if (player.isShiftKeyDown()) {
-            // Shift-right-click inside an existing workshop → bind + open its menu.
             Workshops.Hit hit = Workshops.findAt(sl, clicked);
             if (hit != null && hit.settlement().members().contains(sp.getUUID())) {
                 stack.set(BannerboundCore.BOUND_WORKSHOP_ID.get(), hit.workshop().id().toString());
@@ -120,7 +106,6 @@ public class WorkshopRodItem extends Item {
             return InteractionResult.CONSUME;
         }
 
-        // Non-shift: A→B cycle (bound = grow that workshop; unbound = first commit creates one).
         BlockPos a = stack.get(BannerboundCore.MARKER_POINT_A.get());
         if (a == null) {
             stack.set(BannerboundCore.MARKER_POINT_A.get(), clicked.immutable());
@@ -135,18 +120,14 @@ public class WorkshopRodItem extends Item {
         return InteractionResult.CONSUME;
     }
 
-    /** Caps + overlap + connectivity checks; creates the workshop on the first box; registers the
-     *  box, broadcasts, and re-validates so the player sees the new status immediately. */
     private static void tryCommitBox(ServerLevel sl, ServerPlayer sp, ItemStack stack,
                                       BlockPos a, BlockPos b) {
-        // Per-axis box cap.
         int worstAxis = Math.max(Math.abs(b.getX() - a.getX()) + 1,
             Math.max(Math.abs(b.getY() - a.getY()) + 1, Math.abs(b.getZ() - a.getZ()) + 1));
         if (worstAxis > MAX_BOX_DIM) {
             reject(sp, "bannerbound.workshop_rod.too_long", worstAxis, MAX_BOX_DIM);
             return;
         }
-        // The clicked area must belong to a settlement (the workshop's owner).
         SettlementData data = SettlementData.get(sl.getServer().overworld());
         Settlement owner = data.getByChunk(new ChunkPos(b).toLong());
         if (owner == null) {
@@ -154,7 +135,6 @@ public class WorkshopRodItem extends Item {
             return;
         }
 
-        // Resolve (or mint) the workshop this box belongs to.
         UUID boundId = boundWorkshopId(stack);
         Workshop workshop = boundId == null ? null : owner.getWorkshop(boundId);
         boolean creating = workshop == null;
@@ -176,7 +156,6 @@ public class WorkshopRodItem extends Item {
             return;
         }
 
-        // Prospective union: solids present, connected, within the union span cap.
         List<BlockSelection> prospective = new ArrayList<>(registry.findByWorkshop(workshopId));
         prospective.add(candidate);
         Set<BlockPos> marked = Homes.collectMarkedSolids(sl, prospective);
@@ -192,8 +171,6 @@ public class WorkshopRodItem extends Item {
             reject(sp, "bannerbound.workshop_rod.too_big", MAX_UNION_SPAN);
             return;
         }
-        // The first box must contain a registered work block — that's what makes the building a
-        // workshop rather than an arbitrary marking.
         if (creating && !containsWorkBlock(sl, marked)) {
             reject(sp, "bannerbound.workshop_rod.no_work_block");
             return;
@@ -221,12 +198,6 @@ public class WorkshopRodItem extends Item {
             true);
     }
 
-    // ─── Shift-left-click on a block → remove the box under the cursor ──────────────────────
-
-    /** Routed in from {@link Events#onLeftClickBlock}: removes the workshop box containing
-     *  {@code pos} (the smallest, when boxes overlap — so a sliver can be deleted without
-     *  swallowing the big box around it). Removing the last box deletes the workshop record
-     *  and unassigns its workers. */
     private static void removeBoxAt(ServerLevel sl, ServerPlayer sp, BlockPos pos) {
         BlockSelectionRegistry registry = BlockSelectionRegistry.get(sl);
         BlockSelection target = null;
@@ -254,8 +225,6 @@ public class WorkshopRodItem extends Item {
                 ? Component.translatable(WorkBlockRegistry.displayKey(workshop.derivedTypeId())).getString()
                 : workshop.customName();
         if (workshop != null && registry.findByWorkshop(workshop.id()).isEmpty()) {
-            // Last box gone → the workshop itself is deleted; its workers go back to unemployed
-            // (same path as a menu unassign — the citizen field is the source of truth).
             for (UUID workerId : List.copyOf(workshop.workers())) {
                 if (sl.getEntity(workerId) instanceof com.bannerbound.core.entity.CitizenEntity ce
                         && com.bannerbound.core.entity.CrafterWorkGoal.JOB_TYPE_ID.equals(ce.getJobType())) {
@@ -278,8 +247,6 @@ public class WorkshopRodItem extends Item {
         SelectionBroadcaster.broadcast(sl.getServer());
     }
 
-    /** Left-click routing for the rod: vanilla has no item hook for attack, so the gesture comes
-     *  in through the event. Cancelled on both sides so the rod never mines the clicked block. */
     @net.neoforged.fml.common.EventBusSubscriber(modid = BannerboundCore.MODID)
     public static final class Events {
         private Events() {
@@ -293,8 +260,7 @@ public class WorkshopRodItem extends Item {
             event.setCanceled(true);
             if (!(event.getLevel() instanceof ServerLevel sl)
                     || !(player instanceof ServerPlayer sp)) return;
-            // LeftClickBlock re-fires while the button is held — a short item cooldown turns the
-            // gesture into one-removal-per-click instead of chewing through stacked boxes.
+            // LeftClickBlock re-fires while held; the cooldown makes it one removal per click.
             if (sp.getCooldowns().isOnCooldown(rod)) return;
             sp.getCooldowns().addCooldown(rod, 8);
             removeBoxAt(sl, sp, event.getPos());
@@ -324,7 +290,6 @@ public class WorkshopRodItem extends Item {
             Component.translatable(key, args).withStyle(ChatFormatting.RED), true);
     }
 
-    /** The rod's bound workshop id, or null when unbound / malformed. */
     @Nullable
     public static UUID boundWorkshopId(ItemStack stack) {
         String raw = stack.get(BannerboundCore.BOUND_WORKSHOP_ID.get());

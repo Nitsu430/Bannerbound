@@ -27,11 +27,17 @@ import net.minecraft.world.item.Items;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Server-authoritative driver for hand-knapping (the two-rocks gesture → {@code KnappingScreen}). No
- * station and no pos — a pure hand-craft — so the session is keyed on the player alone: it tracks
- * only whether the rock has been committed (consumed). One rock is consumed at the first chip
- * (COMMIT); a successful knap yields a head stamped with the rolled {@link QualityTier}, while
- * chipping the whole stone away ("broke the stone") just forfeits the already-consumed rock.
+ * Server-authoritative driver for hand-knapping (the two-rocks gesture -> {@code KnappingScreen}). No
+ * station and no pos -- a pure hand-craft -- so the session is keyed on the player alone (SESSIONS,
+ * touched on the server thread only): it tracks only whether the rock has been committed (consumed).
+ * One rock is consumed at the first chip (COMMIT); a successful knap yields a head stamped with the
+ * rolled {@link QualityTier}, while chipping the whole stone away ("broke the stone") just forfeits
+ * the already-consumed rock. Creative players keep their rocks and skip the research gate.
+ *
+ * <p>The research gate keys on the player's OWN settlement knowing stone tools, not their position, so
+ * this portable hand-craft works wherever they stand -- exactly like the vanilla crafting grid
+ * (CraftingMenuMixin). {@code rollTier} is shared by the server roll and the client's live estimate so
+ * the two never disagree, and it caps at FINE because a hand-craft cannot exceed FINE quality.
  *
  * <p>The knapped head is the skill output; its quality later rides onto the finished tool when the
  * head is hafted at the Crafting Stone (see {@code CraftingStoneBlockEntity#craft} +
@@ -42,7 +48,6 @@ public final class Knapping {
     private Knapping() {
     }
 
-    /** Items that count as a knappable rock (held in BOTH hands to start a session). */
     public static final TagKey<Item> KNAPPING_ROCKS = TagKey.create(Registries.ITEM,
         ResourceLocation.fromNamespaceAndPath(BannerboundAntiquity.MODID, "knapping_rocks"));
 
@@ -55,21 +60,14 @@ public final class Knapping {
         }
     }
 
-    /** Active sessions keyed by player UUID (server thread only). */
     private static final Map<UUID, Session> SESSIONS = new HashMap<>();
 
-    /** True if {@code player} is holding a knappable rock in each hand. */
     public static boolean holdingTwoRocks(ServerPlayer player) {
         return player.getMainHandItem().is(KNAPPING_ROCKS) && player.getOffhandItem().is(KNAPPING_ROCKS);
     }
 
-    /** Validates research + two rocks, then opens the knapping screen carrying every loaded shape. */
     public static void tryOpen(ServerPlayer player) {
         if (!holdingTwoRocks(player)) return;
-        // Research gate: knapping is unlocked by the Knapping research (which unlocks stone tools).
-        // Gate on the PLAYER'S OWN settlement knowing stone tools — not their position — so this
-        // portable hand-craft works wherever they stand, exactly like the vanilla crafting grid
-        // (CraftingMenuMixin). Creative players are exempt inside isUnknownForPlayer.
         if (UnknownItemBlocker.isUnknownForPlayer(player, Items.STONE_PICKAXE)) {
             player.displayClientMessage(Component.translatable("bannerbound.knapping.no_research")
                 .withStyle(ChatFormatting.YELLOW), true);
@@ -88,7 +86,6 @@ public final class Knapping {
         PacketDistributor.sendToPlayer(player, new OpenKnappingPayload(views));
     }
 
-    /** Handles a client knapping step (COMMIT / COMPLETE / BROKE / CANCEL). */
     public static void handleAction(ServerPlayer player, KnappingActionPayload payload) {
         Session session = SESSIONS.get(player.getUUID());
         if (session == null) return;
@@ -98,7 +95,7 @@ public final class Knapping {
                     if (consumeOneRock(player)) {
                         session.committed = true;
                     } else {
-                        SESSIONS.remove(player.getUUID()); // rocks vanished from hand → abort
+                        SESSIONS.remove(player.getUUID());
                     }
                 }
             }
@@ -113,7 +110,7 @@ public final class Knapping {
     }
 
     private static boolean consumeOneRock(ServerPlayer player) {
-        if (player.hasInfiniteMaterials()) return true; // creative: don't eat the rock
+        if (player.hasInfiniteMaterials()) return true;
         ItemStack off = player.getOffhandItem();
         if (off.is(KNAPPING_ROCKS)) {
             off.shrink(1);
@@ -127,9 +124,6 @@ public final class Knapping {
         return false;
     }
 
-    /** The tier a set of per-tap scores earns: total score as a percentage of the possible
-     *  {@code reps * 100}, against the shape's data-driven thresholds. Caps at FINE (hand-craft).
-     *  Shared by the server roll and the client's live estimate so they never disagree. */
     public static QualityTier rollTier(int percentage_standard, int percentage_fine, List<Integer> scores, int reps) {
         int total_score = scores.stream().mapToInt(Integer::intValue).sum();
         double percentage = (total_score / (double) (reps * 100)) * 100;
@@ -149,9 +143,9 @@ public final class Knapping {
     private static void complete(ServerPlayer player, Session session, KnappingActionPayload payload) {
         Item headItem = BuiltInRegistries.ITEM.get(payload.head());
         KnappingShape shape = KnappingShapeManager.byHead(headItem);
-        if (shape == null) return; // unknown/forged head id — ignore
-        if (UnknownItemBlocker.isUnknownForPlayer(player, headItem)) return; // shape not unlocked
-        int reps = 9 - shape.keep().size();  // one rhythm rep per chipped-away cell
+        if (shape == null) return;
+        if (UnknownItemBlocker.isUnknownForPlayer(player, headItem)) return;
+        int reps = 9 - shape.keep().size();  // 3x3 grid: one rhythm rep per chipped-away cell
         if (payload.scores().size() != reps) return;
         if (!MinigameGuard.elapsedOk(player, session.startTime, reps, 6)) return;
         List<Integer> scores = new ArrayList<>(reps);

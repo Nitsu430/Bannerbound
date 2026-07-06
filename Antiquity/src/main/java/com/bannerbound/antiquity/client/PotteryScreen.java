@@ -22,8 +22,15 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Transparent pottery-wheel minigame. Hold left click and move the mouse in circles around the
- * guide ring until the recipe's spin count is complete.
+ * Transparent pottery-wheel minigame: hold left click and move the mouse in circles around the
+ * guide ring until the recipe's spin count is complete. Opened client-side from
+ * {@link OpenPotteryPayload}; completing sends {@link PotteryActionPayload#COMPLETE} to the server
+ * and closes, while closing early sends {@link PotteryActionPayload#CANCEL}. While open it mirrors
+ * hold/angle/progress into {@link PotterySpinState} so {@link PotterySlabRenderer} can spin the
+ * in-progress clay in the world beneath the GUI; that state is cleared in {@code removed()}.
+ * Angle deltas are wrapped to (-pi, pi] and only their magnitude counts, so spinning either
+ * direction works; tiny deltas below MIN_ANGLE_DELTA and drags inside MIN_RADIUS_FACTOR of the
+ * guide radius are ignored to filter jitter near the centre.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal

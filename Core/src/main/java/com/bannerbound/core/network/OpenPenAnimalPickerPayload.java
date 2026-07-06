@@ -14,9 +14,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client. Opens the {@code PenAnimalPickerScreen} for a pen the player just marked with the
- * Foreman's Rod. Carries the pen's marker position (round-tripped back so the server commits the right
- * pen) and the list of animal entity ids the player may choose (basics always; horse only on a horse chunk).
+ * S->C: opens the PenAnimalPickerScreen for a pen the player just marked with the Foreman's Rod.
+ * Carries the pen's marker position (round-tripped back so the server commits the right pen) and the
+ * list of animal entity ids the player may choose (basics always; horse only on a horse chunk).
  */
 @ApiStatus.Internal
 public record OpenPenAnimalPickerPayload(BlockPos penPos, List<String> animalIds) implements CustomPacketPayload {

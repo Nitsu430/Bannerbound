@@ -15,14 +15,30 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 
 /**
- * The walls system's server-side verbs, shared by the {@code /bannerbound walls} commands and
- * the wall-preview screen's payload handlers — one code path for layout, construct, cancel and
- * gate toggling (WALLS_PLAN.md Phase 2/3). All methods assume the caller already resolved the
- * player's settlement.
+ * The walls system's server-side verbs, shared by the {@code /bannerbound walls} commands and the
+ * wall-preview screen's payload handlers - one code path for layout, construct, cancel and gate
+ * toggling (WALLS_PLAN.md Phase 2/3). All methods assume the caller already resolved the player's
+ * settlement.
+ *
+ * <p>{@link #resolver} is the design lookup to use everywhere a plan that may reference custom
+ * designs gets expanded (NOT {@code DefaultWallDesigns::byId}): it prefers a settlement's saved
+ * library design over the built-in default so frozen plans keep expanding after edits, and it is
+ * variant-aware, so {@code <id>#steps} / {@code <id>#steps_r} resolve to auto-derived step
+ * variants of the base design.
+ *
+ * <p>{@link #computeRefined} layers the player's per-slot refinements (saved design variant,
+ * wall-top override, foundation suppression) over the auto layout - the auto chain is only the
+ * first draft, and refinements whose footprint no longer matches are silently ignored. Refinements
+ * key off a kind-aware per-piece anchor (y = kind.ordinal() + 1, so a corner and a segment sharing
+ * a start column stay distinct); that encoding must match {@code PieceLite.refineAnchor()} on the
+ * client.
+ *
+ * <p>Block memory across plan changes lives in {@link #carryObsolete}: the Phase 4 demolition
+ * queue is (previous blueprint + previous obsolete + builtWall) minus the new blueprint (reused
+ * positions are live wall again) minus world-air (nothing left to demolish).
  */
 public final class WallService {
 
-    /** Construct outcome: {@code error} is null on success. */
     public record ConstructResult(@Nullable String error, @Nullable WallLayoutEngine.LayoutResult layout) {
         public boolean ok() {
             return error == null;
@@ -32,11 +48,6 @@ public final class WallService {
     private WallService() {
     }
 
-    /**
-     * The settlement's ACTIVE design set: per kind, the library design the player saved as
-     * active, falling back to the built-in default. The returned set's {@code byId} also
-     * resolves library ids, so frozen plans keep expanding correctly after later edits.
-     */
     public static WallDesignSet designs(ServerLevel level, Settlement settlement) {
         WallData walls = WallData.get(level);
         return new WallDesignSet(
@@ -53,23 +64,15 @@ public final class WallService {
         return design == null ? fallback : design;
     }
 
-    /**
-     * Design resolver for expanding a settlement's plans/blueprints: library first, then the
-     * built-in defaults. Use THIS (not {@code DefaultWallDesigns::byId}) wherever a plan that
-     * may reference custom designs gets expanded.
-     */
     public static java.util.function.Function<String, WallDesign> resolver(ServerLevel level,
                                                                            Settlement settlement) {
         WallData walls = WallData.get(level);
-        // VARIANT-AWARE: <id>#steps / <id>#steps_r resolve to auto-derived step variants of
-        // the base design (per-piece overrides, playtest 2026-06-12).
         return id -> WallVariants.resolve(id, baseId -> {
             WallDesign design = walls.libraryDesign(settlement.id(), baseId);
             return design != null ? design : DefaultWallDesigns.byId(baseId);
         });
     }
 
-    /** Computes the current layout WITHOUT committing: preview, dump command, gate validation. */
     public static WallLayoutEngine.LayoutResult computeLayout(ServerLevel level, Settlement settlement) {
         WallDesignSet designs = designs(level, settlement);
         WallData walls = WallData.get(level);
@@ -77,11 +80,6 @@ public final class WallService {
         return computeRefined(level, settlement, designs, walls);
     }
 
-    /**
-     * The auto layout with the player's REFINEMENTS applied (Phase 5.5): per-slot wall-top
-     * overrides replace the chain's choice — the auto chain is only the first draft. Anchors
-     * that no longer match a slot are silently ignored (gate-anchor stability rule).
-     */
     private static WallLayoutEngine.LayoutResult computeRefined(ServerLevel level, Settlement settlement,
                                                                 WallDesignSet designs, WallData walls) {
         WallLayoutEngine.LayoutResult result = WallLayoutEngine.compute(level, settlement, designs,
@@ -98,9 +96,6 @@ public final class WallService {
             long key = BlockPos.asLong(piece.startX(), piece.kind().ordinal() + 1, piece.startZ());
             WallPiece out = piece;
             if (!piece.waterGap()) {
-                // 1. Design variant — a PLAYER-SAVED library design of the same kind and
-                //    footprint (run tiling stays intact). Footprint mismatches (the variant
-                //    or active design changed since) are silently ignored.
                 String variantId = piece.kind() == WallDesign.Kind.GATE ? null : variants.get(key);
                 if (variantId != null) {
                     WallDesign variant = resolver.apply(variantId);
@@ -110,7 +105,6 @@ public final class WallService {
                         out = out.withDesignId(variantId);
                     }
                 }
-                // 2. Wall-top override (absolute Y).
                 Integer topY = tops.get(key);
                 if (topY != null) {
                     WallDesign design = resolver.apply(out.designId());
@@ -118,7 +112,6 @@ public final class WallService {
                         out = out.withBaseY(topY - design.height() + 1);
                     }
                 }
-                // 3. Foundation suppression.
                 if (fndOff.contains(key)) {
                     out = out.withNoFoundation();
                 }
@@ -129,17 +122,10 @@ public final class WallService {
             new WallPlan(refined, result.plan().obsolete()), result.stats(), result.warnings());
     }
 
-    /** The kind-aware per-piece refinement key (matches PieceLite.refineAnchor()). */
     private static long refineKey(WallPiece piece) {
         return BlockPos.asLong(piece.startX(), piece.kind().ordinal() + 1, piece.startZ());
     }
 
-    /**
-     * Cycles the selected piece's design among the PLAYER-SAVED library designs of the same
-     * kind and footprint (active design = "Default"; variants are editable designs the player
-     * authored in the Designer — 2 steps, 3 steps, 10 steps, whatever they saved). Returns
-     * the NEW design's name prefixed with "ok:", else an error reason.
-     */
     public static String cycleVariant(ServerLevel level, Settlement settlement, long anchor) {
         WallData walls = WallData.get(level);
         WallLayoutEngine.LayoutResult result = computeLayout(level, settlement);
@@ -147,12 +133,11 @@ public final class WallService {
             if (refineKey(piece) != anchor) continue;
             if (piece.waterGap()) return "Water gaps have no blocks to vary.";
             if (piece.kind() == WallDesign.Kind.GATE) return "Gates have no variants.";
-            // The slot was tiled with the ACTIVE design's footprint — candidates must match.
             WallDesignSet designs = designs(level, settlement);
             WallDesign active = piece.kind() == WallDesign.Kind.CORNER
                 ? designs.corner() : designs.wall();
             java.util.List<String> candidates = new ArrayList<>();
-            candidates.add(""); // "" = base / no override
+            candidates.add("");
             for (WallDesign d : walls.library(settlement.id())) {
                 if (d.kind() == piece.kind() && !d.id().equals(active.id())
                     && d.length() == active.length() && d.depth() == active.depth()) {
@@ -176,10 +161,6 @@ public final class WallService {
         return "That wall piece no longer exists — reopen the preview.";
     }
 
-    /**
-     * Toggles the selected piece's bottom-course continuation. Returns "ok:on"/"ok:off" on
-     * success, else an error reason.
-     */
     public static String toggleFoundation(ServerLevel level, Settlement settlement, long anchor) {
         WallData walls = WallData.get(level);
         WallLayoutEngine.LayoutResult result = computeLayout(level, settlement);
@@ -192,11 +173,6 @@ public final class WallService {
         return "That wall piece no longer exists — reopen the preview.";
     }
 
-    /**
-     * Moves one slot's wall top by {@code delta} (0 = reset to the auto height). Returns null
-     * on success, else a player-facing reason. Clamped: ≥1 course above the slot's crest,
-     * ≤8 foundation courses below its lowest ground.
-     */
     @Nullable
     public static String refineTop(ServerLevel level, Settlement settlement, long anchor, int delta) {
         WallData walls = WallData.get(level);
@@ -208,7 +184,6 @@ public final class WallService {
         for (WallPiece piece : result.plan().pieces()) {
             if (piece.waterGap()) continue;
             if (BlockPos.asLong(piece.startX(), piece.kind().ordinal() + 1, piece.startZ()) != anchor) continue;
-            // Variant-aware lookup — the piece may carry a #steps designId by now.
             WallDesign design = resolver(level, settlement).apply(piece.designId());
             if (design == null) return "Unknown design.";
             int currentTop = piece.baseY() + design.height() - 1;
@@ -221,10 +196,6 @@ public final class WallService {
         return "That wall piece no longer exists — reopen the preview.";
     }
 
-    /**
-     * Recomputes the layout, enforces the ≥1-gate rule, freezes the plan (carrying obsolete
-     * wall blocks forward) and pushes blueprints to online members.
-     */
     public static ConstructResult construct(ServerLevel level, Settlement settlement) {
         WallDesignSet designs = designs(level, settlement);
         WallData walls = WallData.get(level);
@@ -247,11 +218,6 @@ public final class WallService {
         return new ConstructResult(null, result);
     }
 
-    /**
-     * Forgets the PLAN, never the BLOCKS: standing wall retires into the obsolete demolition
-     * queue and the placement memory persists. Returns the leftover-block count, or -1 when
-     * there was no plan to cancel.
-     */
     public static int cancel(ServerLevel level, Settlement settlement) {
         WallData walls = WallData.get(level);
         WallPlan previous = walls.plan(settlement.id());
@@ -268,11 +234,6 @@ public final class WallService {
         return leftovers.size();
     }
 
-    /**
-     * Toggles a gate anchor if it lands on a valid slot. Validated by recomputing the layout
-     * with the toggle applied: the anchor must match an emitted GATE piece start (set) or have
-     * matched one before (unset). Returns null on success, else a player-facing reason.
-     */
     @Nullable
     public static String toggleGate(ServerLevel level, Settlement settlement, long packedAnchor) {
         WallData walls = WallData.get(level);
@@ -290,7 +251,6 @@ public final class WallService {
         return null;
     }
 
-    /** Every position the settlement considers WALL — blueprint ∪ obsolete ∪ builtWall. */
     public static LongSet committedWallPositions(ServerLevel level, Settlement settlement,
                                                  WallDesignSet designs) {
         WallData walls = WallData.get(level);
@@ -303,11 +263,6 @@ public final class WallService {
         return positions;
     }
 
-    /**
-     * The wall-block memory carried across plan changes: (previous blueprint ∪ previous
-     * obsolete ∪ builtWall) − the new blueprint (reused positions are live wall again) −
-     * world-air positions (nothing left to demolish). This is the Phase 4 demolition queue.
-     */
     public static LongSet carryObsolete(ServerLevel level, @Nullable WallPlan previous,
                                         LongSet builtWall,
                                         java.util.function.Function<String, WallDesign> resolver,

@@ -5,7 +5,14 @@ import com.bannerbound.core.api.settlement.Settlement;
 
 import net.minecraft.network.chat.Component;
 
-/** Public label helpers for controlled, name-like custom-language surfaces. */
+/**
+ * Public helpers that render controlled, name-like surfaces (job labels, citizen names) in a
+ * settlement's generated "Tongue". Given names are styled ONCE at citizen creation (styleGiven) so
+ * the stored name already IS the in-language name that chat / recall / roster / workshop surfaces
+ * read; detached citizens (null settlement) keep the base verbatim. compose appends the
+ * separately-styled earned surname per-call, using the baked given name verbatim. clientJob mirrors
+ * job() off a synced seed for client-only rendering.
+ */
 public final class CustomLanguageLabel {
     private CustomLanguageLabel() {
     }
@@ -24,19 +31,12 @@ public final class CustomLanguageLabel {
         return Component.literal(capitalize(label));
     }
 
-    /** Styles a freshly-drawn base given name into the settlement's language. Called ONCE at citizen
-     *  creation so the stored name IS the in-language name (and so chat / recall / workshop / roster
-     *  surfaces all read an already-styled name). Detached citizens (null settlement) keep the base
-     *  verbatim. */
     public static String styleGiven(Settlement settlement, String base, String salt) {
         if (base == null) return null;
         if (settlement == null) return base;
         return SettlementLanguage.citizenName(settlement, base, null, null, salt);
     }
 
-    /** Composes a citizen's full display name from an already-language-styled given name plus the
-     *  (separately styled) earned surname. The given name is baked at creation, so it is used
-     *  verbatim here — only the earned surname is resolved per-call. */
     public static String compose(Settlement settlement, String styledGiven, String surnameConcept,
                                  String surnameJob, String salt) {
         if (styledGiven == null) return "";

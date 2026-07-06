@@ -27,38 +27,34 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity for the Fletching Station. Holds a loose pile of items placed one-at-a-time (mixed
- * types allowed, capped at {@link #MAX_ITEMS}), exactly like the Crafting Stone. When the pile
- * matches a {@link FletchingRecipe}, {@link #cachedResult} holds the BASE output (no quality — that
- * is rolled by the stretch minigame at completion) so the renderer shows a floating spinning
- * preview; shift-clicking opens the minigame instead of crafting instantly.
+ * Block entity for the Fletching Station: a loose pile of items placed one at a time (mixed types,
+ * capped at MAX_ITEMS; one grid cell per distinct stack, slide-in animation over SLIDE_TICKS),
+ * behaving exactly like CraftingStoneBlockEntity -- including the whole ghost-preview mechanic
+ * (still-missing ingredients of a researched candidate, browse arrows at >= 2 candidates, sticky
+ * ghostChoice, explicit-pick ghostLocked that hides rather than jumps, incidental-match result
+ * floated above a kept locked ghost, choice/lock cleared only when the pile empties). Differences:
+ * cachedResult is the BASE output only -- quality is rolled by the stretch minigame at completion,
+ * and shift-clicking opens that minigame instead of crafting instantly (consumePile() runs when
+ * the minigame commits on the first stretch). While a session runs, inProgress holds a
+ * display-only work-in-progress sprite lying on the table (set on commit from the recipe's
+ * in_progress item, cleared on complete/cancel). Matching falls back to the free-mix modular
+ * arrow assembly (one tip + one shaft + one back, ModularArrow.tryMatch) when no JSON recipe
+ * matches, and ModularArrow.ghostCandidate adds a "could become an arrow" ghost for a partial
+ * part pile; all outputs are gated by CraftGating research. Mutators are server-side only;
+ * setChanged() pushes a full block-update sync to clients.
  */
 @ApiStatus.Internal
 public class FletchingStationBlockEntity extends BlockEntity implements GhostRecipeWorkstation {
-    /** Max total items (sum of counts) the station can hold. */
     public static final int MAX_ITEMS = 9;
-    /** Ticks the just-placed item's slide-in animation runs (matches the crafting stone). */
     public static final int SLIDE_TICKS = 6;
 
     private final List<ItemStack> contents = new ArrayList<>();
-    /** Server-computed BASE result for the current pile (EMPTY = no valid recipe). Synced for the renderer. */
     private ItemStack cachedResult = ItemStack.EMPTY;
-    /** Display-only "work in progress" sprite lying on the table while a minigame session runs
-     *  (set on commit from the recipe's {@code in_progress} item, cleared on complete/cancel). */
     private ItemStack inProgress = ItemStack.EMPTY;
-    /** Server-picked "could become" preview: the STILL-MISSING ingredients of the first researched
-     *  candidate recipe (count = how many more of that item), plus its result. Both empty whenever
-     *  the pile is empty, junk, or an exact match. Synced for the renderer's ghost silhouettes. */
     private List<ItemStack> ghostIngredients = List.of();
     private ItemStack ghostResult = ItemStack.EMPTY;
-    /** How many researched candidates the pile could become (synced; browse arrows show when ≥2). */
     private int ghostCandidateCount = 0;
-    /** Sticky browse selection — result item of the candidate the player last cycled to. Keeps the
-     *  chosen recipe selected while ingredients land (the candidate list shrinks underneath it). */
     private Item ghostChoice = null;
-    /** True once the player explicitly picked (cycled the arrows / clicked the ghost result): the
-     *  selection stops auto-switching, and the preview hides instead of jumping recipes if the
-     *  pile turns incompatible. Cleared when the pile empties. */
     private boolean ghostLocked = false;
     private int insertAnimTicks = 0;
     private Direction insertDir = Direction.NORTH;
@@ -108,8 +104,6 @@ public class FletchingStationBlockEntity extends BlockEntity implements GhostRec
         return lastSlideCell;
     }
 
-    /** The recipe currently matched by the pile (null if none / output not researched). Falls back to
-     *  the free-mix modular arrow assembly (one tip + one shaft + one back) when no JSON recipe matches. */
     public FletchingRecipe matchedRecipe() {
         FletchingRecipe recipe = FletchingRecipeManager.find(contents);
         if (recipe == null) recipe = com.bannerbound.antiquity.recipe.ModularArrow.tryMatch(contents);
@@ -121,7 +115,6 @@ public class FletchingStationBlockEntity extends BlockEntity implements GhostRec
         return recipe;
     }
 
-    /** Ticker — drains the slide-in timer so the freshly placed item settles. Both sides. */
     public static void tick(net.minecraft.world.level.Level level, BlockPos pos, BlockState state,
                             FletchingStationBlockEntity be) {
         if (be.insertAnimTicks > 0) {
@@ -135,14 +128,10 @@ public class FletchingStationBlockEntity extends BlockEntity implements GhostRec
         return n;
     }
 
-    /** Adds ONE of {@code held} to the pile (merging into an existing same-item stack). Returns
-     *  true if it fit. Server-side only. */
     public boolean insertOne(ItemStack held, Direction from) {
         if (held.isEmpty() || totalCount() >= MAX_ITEMS) return false;
         insertAnimTicks = SLIDE_TICKS;
         insertDir = from == null ? Direction.NORTH : from;
-        // One grid cell per distinct stack: merging grows the existing pile in place; a new kind
-        // takes the next free cell. The slide animates the touched stack's top item.
         for (int i = 0; i < contents.size(); i++) {
             ItemStack s = contents.get(i);
             if (ItemStack.isSameItemSameComponents(s, held)) {
@@ -160,7 +149,6 @@ public class FletchingStationBlockEntity extends BlockEntity implements GhostRec
         return true;
     }
 
-    /** Removes ONE item from the most-recently-touched stack and returns it. Server-side only. */
     public ItemStack removeOne() {
         if (contents.isEmpty()) return ItemStack.EMPTY;
         ItemStack last = contents.get(contents.size() - 1);
@@ -172,7 +160,6 @@ public class FletchingStationBlockEntity extends BlockEntity implements GhostRec
         return out;
     }
 
-    /** Consumes the whole pile (called when the minigame commits on the first stretch). */
     public void consumePile() {
         contents.clear();
         cachedResult = ItemStack.EMPTY;
@@ -188,7 +175,6 @@ public class FletchingStationBlockEntity extends BlockEntity implements GhostRec
         return inProgress;
     }
 
-    /** Sets/clears the work-in-progress display sprite (EMPTY clears). Server-side only. */
     public void setInProgress(ItemStack stack) {
         inProgress = stack;
         setChanged();
@@ -204,14 +190,12 @@ public class FletchingStationBlockEntity extends BlockEntity implements GhostRec
             recomputeGhost();
             return;
         }
-        // The pile incidentally matches a DIFFERENT recipe than the locked one: keep the locked
-        // ghost showing — the renderer floats the incidental result ABOVE it (see crafting stone).
+        // Pile incidentally completes a recipe other than the locked choice: keep the locked ghost showing.
         if (ghostLocked && ghostChoice != null && !cachedResult.is(ghostChoice)) {
             recomputeGhost();
         }
     }
 
-    /** All candidates the pile could still become whose output the owning civ has researched. */
     private List<FletchingRecipe> researchedCandidates() {
         List<FletchingRecipe> out = new ArrayList<>();
         for (FletchingRecipe candidate : FletchingRecipeManager.candidates(contents)) {
@@ -220,7 +204,6 @@ public class FletchingStationBlockEntity extends BlockEntity implements GhostRec
                 out.add(candidate);
             }
         }
-        // Free-mix arrow assembly: a "could become an arrow" ghost for a partial part pile.
         FletchingRecipe modular = com.bannerbound.antiquity.recipe.ModularArrow.ghostCandidate(contents);
         if (modular != null && com.bannerbound.core.api.research.CraftGating.canProduceAt(
                 level, getBlockPos(), modular.result().getItem())) {
@@ -229,9 +212,6 @@ public class FletchingStationBlockEntity extends BlockEntity implements GhostRec
         return out;
     }
 
-    /** Re-selects a candidate for the ghost preview: keeps the player's sticky choice if it's
-     *  still reachable from the pile, else falls back to the first candidate — unless the choice
-     *  is LOCKED, in which case the preview just hides rather than jumping to another recipe. */
     private void recomputeGhost() {
         List<FletchingRecipe> researched = researchedCandidates();
         ghostCandidateCount = researched.size();
@@ -240,15 +220,13 @@ public class FletchingStationBlockEntity extends BlockEntity implements GhostRec
             ghostLocked = false;
             return;
         }
-        // Junk pile: keep the choice + lock — removing the offending item restores the preview.
+        // Junk pile: keep choice + lock so removing the offending item restores the preview.
         if (researched.isEmpty()) return;
         int idx = indexOfChoice(researched);
         if (idx < 0 && ghostLocked) return;
         applyGhost(researched.get(Math.max(0, idx)));
     }
 
-    /** Cycles the ghost preview to the previous/next researched candidate (browse-arrow click).
-     *  Cycling is an explicit choice, so it locks the selection. */
     @Override
     public void cycleGhost(int dir) {
         if (ghostResult.isEmpty()) return;
@@ -273,15 +251,13 @@ public class FletchingStationBlockEntity extends BlockEntity implements GhostRec
         return -1;
     }
 
-    /** Stores {@code candidate}'s missing ingredients + result for the renderer's ghost preview. */
     private void applyGhost(FletchingRecipe candidate) {
         ghostChoice = candidate.result().getItem();
         Map<Item, Integer> placed = new HashMap<>();
         for (ItemStack s : contents) {
             if (!s.isEmpty()) placed.merge(s.getItem(), s.getCount(), Integer::sum);
         }
-        // Walk the JSON ingredient order (not the merged map) so ghost cells don't shuffle
-        // between recomputes; the map only supplies merged counts for duplicate entries.
+        // Walk JSON ingredient order (not the merged map) so ghost cells don't shuffle between recomputes.
         Map<Item, Integer> required = candidate.requiredCounts();
         List<ItemStack> missing = new ArrayList<>();
         for (FletchingRecipe.Ing ing : candidate.ingredients()) {

@@ -21,11 +21,14 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Baked model for the Mortar and Pestle block, drawn by {@link MortarAndPestleRenderer}.
- * <p>
- * Geometry is the Blockbench "Modded Entity" export of {@code MortarandPestle.bbmodel}, cleaned
- * up for Minecraft 1.21.1. Extends {@link HierarchicalModel} so {@code KeyframeAnimations.animate}
- * can drive the pestle's "Mix" grind animation by bone name.
+ * Baked model for the Mortar and Pestle block, drawn by {@link MortarAndPestleRenderer}. Geometry
+ * is the Blockbench "Modded Entity" export of {@code MortarandPestle.bbmodel}, cleaned up for
+ * Minecraft 1.21.1 - re-export from Blockbench rather than hand-editing cubes. Extends
+ * {@link HierarchicalModel} so {@code KeyframeAnimations.animate} can drive the pestle's "Mix"
+ * grind by bone name ("Pestle"; the renderer may stack a press offset on top). Bone contract:
+ * apply master()'s transform before drawing anything in model space; liquidHolder()'s authored
+ * position marks where the liquid surface sits, and renderBody() hides that part so the renderer
+ * can draw the liquid surface separately from the base/bowl/pestle body.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -99,27 +102,23 @@ public final class MortarAndPestleModel extends HierarchicalModel<Entity> {
     @Override
     public void setupAnim(Entity entity, float limbSwing, float limbSwingAmount, float ageInTicks,
                           float netHeadYaw, float headPitch) {
-        // Animation is driven by the block entity renderer, not entity state.
+        // Intentionally empty: the block entity renderer drives animation, not entity state.
     }
 
-    /** Renders the mortar body (base, bowl, pestle) — everything except the liquid surface. */
     public void renderBody(PoseStack pose, VertexConsumer vc, int light, int overlay) {
         liquidHolder.visible = false;
         master.render(pose, vc, light, overlay, 0xFFFFFFFF);
         liquidHolder.visible = true;
     }
 
-    /** The Master bone — apply its transform before drawing anything in model space. */
     public ModelPart master() {
         return master;
     }
 
-    /** The Pestle bone — the "Mix" animation drives it; a press offset can be added on top. */
     public ModelPart pestle() {
         return pestle;
     }
 
-    /** The Liquid Holder bone — its authored position is where the liquid surface sits. */
     public ModelPart liquidHolder() {
         return liquidHolder;
     }

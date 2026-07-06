@@ -58,30 +58,45 @@ import net.neoforged.neoforge.client.event.RenderLivingEvent;
 import net.neoforged.neoforge.client.event.ScreenEvent;
 import net.neoforged.neoforge.event.entity.player.ItemTooltipEvent;
 
-/** Client game-bus handlers for the local player's status effects (poison, stun, drunkenness, curare). */
+/**
+ * Client game-bus hub for every status effect the local player can suffer: poison, blunt-crit stun,
+ * grog drunkenness (GROG_PLAN.md Phase 3.5) and curare. Poison senses: crossfades four per-stage
+ * ambience drones per poison, drives the wolfsbane world-muffle + steady FOV pull, belladonna's
+ * false vanilla-mob sounds (the mobs are stripped from Antiquity but their sound events remain) and
+ * phantom figures, oleander's accelerating heartbeat off the synced cardiac-clock deadline, and the
+ * antidote heal-flash (fires whenever any poison clears). Every screen post-process here (poison
+ * vision, stun blur, drunk swim, pass-out eyelids, hangover vignette, vomit goo, DrunkText glyph
+ * jumble) runs at RenderGuiEvent.Pre -- after the world and shaders, before the HUD -- so it is
+ * Iris-safe and the HUD stays crisp. Also swaps the vanilla death screen for a poison-flavoured one
+ * (the lethal hit leaves the synced PoisonState set; dying of something else while poisoned still
+ * shows it -- intended, and a handy fast way to test the screens), and reveals a laced food's
+ * poison on its tooltip ONLY to the poisoner and whoever shares their settlement (a pure display
+ * gate over the stack's PoisonedFoodData; the enemy sees a clean item). Belladonna's phantoms are
+ * pure client-side hallucinations (no entity, no collision, no sound of their own): faint
+ * translucent player models wearing phantom.png at the edge of vision that dissolve when looked at,
+ * spawning at stage^2 x 0.004 per tick so stage 1 is rare (~1 per 12s) and stage 4 near-constant.
+ * Curare rendering lays an unconscious body flat generically for players, citizens and animals: it
+ * rolls the model 90 degrees onto its SIDE about its own facing axis, pivoting at the feet and
+ * lifting by half the body width so it rests on the ground -- a forward face-plant would stand
+ * quadrupeds on their nose (tune the 0.5 lift if a model floats or clips). The kidnap drag rope
+ * mirrors RopeRenderEvents: it reads the synced DRAGGED_BY entity id off any rendered LivingEntity
+ * (so no Core import is needed) and draws the same plant-fibre ribbon the herder/spear use via
+ * RopeRenderer.drawRibbon, tied at ~60% of each body's height.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID, value = Dist.CLIENT)
 public final class StatusClientEffects {
 
-    /*
-     * Client game-bus driver for the local player's poison senses: crossfades the four stage ambience
-     * drones of whichever poison is active, drives the wolfsbane world-muffle + FOV pull, the belladonna
-     * false-sounds + phantom figures, the screen post-process, and the antidote heal-flash.
-     */
-    /** The four stage drones for the currently-afflicting poison (recreated when the poison changes). */
     private static final PoisonAmbienceSound[] LAYERS = new PoisonAmbienceSound[4];
     private static PoisonType ambiencePoison = null;
 
-    /** Random vanilla sounds belladonna plays from nowhere — threats that aren't there. (Antiquity's
-     *  vanilla mobs are gone, but their sound events still exist.) */
     private static final SoundEvent[] FALSE_SOUNDS = {
         SoundEvents.ZOMBIE_AMBIENT, SoundEvents.SKELETON_AMBIENT, SoundEvents.SPIDER_AMBIENT,
         SoundEvents.ENDERMAN_AMBIENT, SoundEvents.CREEPER_PRIMED, SoundEvents.WITHER_SKELETON_AMBIENT,
         SoundEvents.HUSK_AMBIENT, SoundEvents.AMBIENT_CAVE.value(), SoundEvents.ZOMBIE_VILLAGER_AMBIENT
     };
 
-    /** Duration of the antidote relief-flash (1.5s). */
     private static final float FLASH_TICKS = 30.0F;
     private static int lastStage = 0;
     private static long healFlashStart = Long.MIN_VALUE;
@@ -105,7 +120,6 @@ public final class StatusClientEffects {
         PoisonType type = s.active() ? s.type() : null;
         int stage = s.active() ? s.stage() : 0;
 
-        // Heal-flash fires when ANY poison clears.
         if (lastStage > 0 && stage == 0 && mc.level != null) {
             healFlashStart = mc.level.getGameTime();
         }
@@ -113,11 +127,9 @@ public final class StatusClientEffects {
 
         driveAmbience(mc, type, stage);
 
-        // Wolfsbane: world recedes (muffle). Belladonna: no muffle.
         int wolfsbaneStage = (type == PoisonType.WOLFSBANE) ? stage : 0;
         SoundMuffle.set(wolfsbaneStage <= 0 ? 1.0F : Math.max(0.36F, 1.0F - wolfsbaneStage * 0.16F));
 
-        // Belladonna: false sounds + phantom figures.
         if (type == PoisonType.BELLADONNA && stage > 0) {
             RandomSource rng = player.getRandom();
             if (rng.nextFloat() < stage * 0.004F) {
@@ -128,7 +140,6 @@ public final class StatusClientEffects {
             StatusClientEffects.clear();
         }
 
-        // Oleander: an accelerating heartbeat as the cardiac clock runs down.
         if (type == PoisonType.OLEANDER && stage > 0) {
             PoisonHeartbeat.tick(oleanderFraction(player, player.level().getGameTime()));
         } else {
@@ -136,8 +147,6 @@ public final class StatusClientEffects {
         }
     }
 
-    /** How far oleander's fixed cardiac clock has run: 0 at infection → 1 at arrest. Reads the synced
-     *  deadline attachment and the (server-synced) clock-length config. 0 when no clock is set. */
     private static float oleanderFraction(LocalPlayer player, long now) {
         long deadline = player.getData(BannerboundAntiquity.POISON_CARDIAC_AT.get());
         if (deadline <= 0L) {
@@ -160,12 +169,11 @@ public final class StatusClientEffects {
         double x = player.getX() + Math.cos(angle) * dist;
         double z = player.getZ() + Math.sin(angle) * dist;
         double y = player.getY() + rng.nextDouble() * 2.0 - 0.4;
-        // playLocalSound = only this client hears it (it's in your head).
+        // playLocalSound: only this client hears it (it's in your head).
         mc.level.playLocalSound(x, y, z, sound, SoundSource.HOSTILE,
             0.5F + rng.nextFloat() * 0.4F, 0.7F + rng.nextFloat() * 0.5F, false);
     }
 
-    /** Heal-flash envelope (0 = inactive): a quick rise then a soft fade over {@link #FLASH_TICKS}. */
     public static float healFlash(float time) {
         if (healFlashStart == Long.MIN_VALUE) {
             return 0.0F;
@@ -185,8 +193,7 @@ public final class StatusClientEffects {
             ambiencePoison = null;
             return;
         }
-        // A different poison than the loaded drones → fade the old set out and start fresh (a layer
-        // can't change which OGG it plays).
+        // A sound instance cannot switch OGGs: on a poison change fade the old drones out and rebuild.
         if (ambiencePoison != type) {
             stopAll();
             for (int i = 0; i < LAYERS.length; i++) {
@@ -205,7 +212,7 @@ public final class StatusClientEffects {
                 }
                 snd.setTarget(1.0F);
             } else if (snd != null && !snd.isStopped()) {
-                snd.setTarget(0.0F); // crossfade out (self-stops at silence)
+                snd.setTarget(0.0F);
             }
         }
     }
@@ -235,8 +242,6 @@ public final class StatusClientEffects {
         };
     }
 
-    /** Run the poison-vision post-process after the world renders but before the HUD (so the HUD
-     *  stays crisp). Iris-safe — this is the GUI stage, after the world/shaders are done. */
     @SubscribeEvent
     static void onRenderGuiPre(RenderGuiEvent.Pre event) {
         Minecraft mc = Minecraft.getInstance();
@@ -256,10 +261,6 @@ public final class StatusClientEffects {
         }
     }
 
-    /** Swap the vanilla death screen for a poison-flavoured one when the local player died while
-     *  poisoned. Reads the still-set synced poison attachment (the lethal hit doesn't clear it). The
-     *  poisoned-but-killed-by-something-else case still shows the poison screen — intended (it's a handy
-     *  fast way to test the screens: fall off a cliff at a high stage instead of waiting out the clock). */
     @SubscribeEvent
     static void onDeathScreenOpening(ScreenEvent.Opening event) {
         if (!(event.getNewScreen() instanceof DeathScreen) || event.getNewScreen() instanceof PoisonDeathScreen) {
@@ -285,18 +286,12 @@ public final class StatusClientEffects {
         }
         PoisonState s = mc.player.getData(BannerboundAntiquity.POISON_STATE.get());
         if (!s.active() || s.type() != PoisonType.WOLFSBANE) {
-            return; // FOV pull is wolfsbane's numbing; belladonna leaves FOV alone
+            return;
         }
-        float narrow = 1.0F - Math.min(0.12F, s.stage() * 0.035F); // up to ~-12% FOV, steady
+        float narrow = 1.0F - Math.min(0.12F, s.stage() * 0.035F);
         event.setNewFovModifier(event.getNewFovModifier() * narrow);
     }
 
-    /*
-     * Reveals a laced food's poison on its tooltip — but ONLY to players in the SAME settlement that
-     * poisoned it (so your own people know which rations to avoid, while the enemy you're feeding it to
-     * sees a perfectly normal apple). The poison data rides the stack everywhere; this is purely a
-     * display gate, comparing the stored poisoner-settlement to the local player's synced settlement id.
-     */
     @SubscribeEvent
     static void onTooltip(ItemTooltipEvent event) {
         PoisonedFoodData laced = event.getItemStack().get(BannerboundAntiquity.POISONED_FOOD.get());
@@ -313,9 +308,8 @@ public final class StatusClientEffects {
         } catch (IllegalArgumentException e) {
             return;
         }
-        // Reveal only to the poisoner themselves, or to whoever currently shares their settlement.
         if (!me.getUUID().equals(poisoner) && !ClientPopulationState.isMember(poisoner)) {
-            return; // looks like a clean apple to you
+            return;
         }
         PoisonType type = PoisonType.fromId(laced.poisonId());
         Component name = Component.translatable("poison.bannerboundantiquity."
@@ -325,19 +319,13 @@ public final class StatusClientEffects {
             .withStyle(ChatFormatting.DARK_GREEN));
     }
 
-    /*
-     * Belladonna's phantom dread — featureless black FIGURES (a translucent humanoid model wearing the
-     * {@code phantom.png} skin) that appear at the EDGE of the player's vision and vanish the instant
-     * they're looked at directly. Pure client-side hallucination: no real entity, no collision, no sound
-     * of their own. Driven each client tick by {@link StatusClientEffects} while belladonna-poisoned.
-     */
     private static final class Phantom {
         final double x;
         final double y;
         final double z;
         final long spawnTick;
         final long expireTick;
-        long lookFadeStart = -1L; // game-time the player looked at it (-1 = not yet dissolving)
+        long lookFadeStart = -1L;
 
         Phantom(double x, double y, double z, long spawnTick, long expireTick) {
             this.x = x;
@@ -350,11 +338,8 @@ public final class StatusClientEffects {
 
     private static final List<Phantom> PHANTOMS = new ArrayList<>();
     private static final int MAX = 2;
-    /** Looking within this cosine of a phantom (≈ this side-angle) makes it begin to dissolve. */
-    private static final double LOOK_VANISH_DOT = 0.86; // ~31°
-    /** How long a phantom takes to fade out once you look at it (≈ 0.2s) — a quick dissolve, not a pop. */
+    private static final double LOOK_VANISH_DOT = 0.86; // cos of the ~31 deg look half-angle that starts a dissolve
     private static final long LOOK_FADE_TICKS = 4L;
-    /** Peak opacity (0-255) — kept low so the figures are faint/ghostly. */
     private static final float MAX_ALPHA = 105.0F;
     private static final ResourceLocation PHANTOM_TEX =
         ResourceLocation.fromNamespaceAndPath(BannerboundAntiquity.MODID, "textures/entity/phantom.png");
@@ -365,16 +350,12 @@ public final class StatusClientEffects {
         PHANTOMS.clear();
     }
 
-    /** Cull figures that expired or that the player turned to face; occasionally spawn a new one at
-     *  the edge of view (more often at higher stages). */
     public static void tick(LocalPlayer player, int stage, RandomSource rng) {
         long now = player.level().getGameTime();
         Vec3 eye = player.getEyePosition();
         Vec3 lookFlat = horiz(player.getViewVector(1.0F));
-        // Drop figures that naturally expired or that have finished dissolving from a look.
         PHANTOMS.removeIf(p -> now >= p.expireTick
             || (p.lookFadeStart >= 0 && now - p.lookFadeStart >= LOOK_FADE_TICKS));
-        // Looking at one BEGINS its dissolve (a smooth fade, not an instant pop).
         for (Phantom p : PHANTOMS) {
             if (p.lookFadeStart < 0) {
                 Vec3 to = horiz(new Vec3(p.x - eye.x, 0.0, p.z - eye.z));
@@ -383,8 +364,6 @@ public final class StatusClientEffects {
                 }
             }
         }
-        // Steep per-stage curve so low stages are rare and stage 4 is frequent: stage² × 0.004 →
-        // ~1 every 12s at stage 1, ~1 every 4s at stage 2, climbing to ~1 per second at stage 4.
         if (PHANTOMS.size() < MAX && rng.nextFloat() < stage * stage * 0.004F) {
             spawn(player, rng, now);
         }
@@ -392,15 +371,15 @@ public final class StatusClientEffects {
 
     private static void spawn(LocalPlayer player, RandomSource rng, long now) {
         double side = rng.nextBoolean() ? 1.0 : -1.0;
-        double offset = Math.toRadians(48.0 + rng.nextDouble() * 34.0); // 48-82° off to the side
+        double offset = Math.toRadians(48.0 + rng.nextDouble() * 34.0);
         double yaw = Math.toRadians(player.getYRot()) + side * offset;
         double dx = -Math.sin(yaw);
         double dz = Math.cos(yaw);
         double dist = 6.0 + rng.nextDouble() * 7.0;
         double x = player.getX() + dx * dist;
         double z = player.getZ() + dz * dist;
-        double y = player.getY(); // stands at the player's feet height (fine on roughly level ground)
-        long life = 40L + rng.nextInt(60); // 2–5 s
+        double y = player.getY();
+        long life = 40L + rng.nextInt(60);
         PHANTOMS.add(new Phantom(x, y, z, now, now + life));
     }
 
@@ -414,7 +393,7 @@ public final class StatusClientEffects {
             try {
                 ModelPart root = Minecraft.getInstance().getEntityModels().bakeLayer(ModelLayers.PLAYER);
                 model = new PlayerModel<>(root, false);
-                model.young = false; // EntityModel.young defaults TRUE → baby proportions; force adult
+                model.young = false; // EntityModel.young defaults TRUE -> baby proportions; force adult
             } catch (Exception e) {
                 return null;
             }
@@ -448,13 +427,12 @@ public final class StatusClientEffects {
             if (alpha <= 0) {
                 continue;
             }
-            // Body yaw to face the player.
             float faceYaw = (float) Math.toDegrees(Math.atan2(p.x - player.getX(), player.getZ() - p.z));
             pose.pushPose();
             pose.translate(p.x - camPos.x, p.y - camPos.y, p.z - camPos.z);
             pose.mulPose(Axis.YP.rotationDegrees(faceYaw));
-            pose.scale(-1.0F, -1.0F, 1.0F);   // entity-model space (Y/X flipped)
-            pose.translate(0.0F, -1.501F, 0.0F); // feet to the ground
+            pose.scale(-1.0F, -1.0F, 1.0F);
+            pose.translate(0.0F, -1.501F, 0.0F); // vanilla entity-model ground offset (magic 1.501)
             int color = (alpha << 24) | 0xFFFFFF;
             m.renderToBuffer(pose, vc, LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY, color);
             pose.popPose();
@@ -462,7 +440,6 @@ public final class StatusClientEffects {
         buf.endBatch(rt);
     }
 
-    /** Fade in over the first ~8 ticks, hold, fade out over the last ~8 — and dissolve when looked at. */
     private static int phantomAlpha(Phantom p, long now) {
         long age = now - p.spawnTick;
         long left = p.expireTick - now;
@@ -474,12 +451,6 @@ public final class StatusClientEffects {
         return (int) (Math.max(0.0F, Math.min(1.0F, fade)) * MAX_ALPHA);
     }
 
-    /*
-     * Client driver for the blunt-weapon crit DAZE: while the local player is mid-stun, blur their vision
-     * in and out for the 1s stagger. Reads the synced {@link BannerboundAntiquity#STUN_UNTIL} deadline and
-     * drives the shared {@link PoisonPostProcessor} blur pass. Run at the GUI stage (after the world +
-     * shaders, before the HUD) so it's Iris-safe and the HUD stays crisp — same as the poison vision.
-     */
     @SubscribeEvent
     static void onStunRenderGuiPre(RenderGuiEvent.Pre event) {
         Minecraft mc = Minecraft.getInstance();
@@ -490,32 +461,18 @@ public final class StatusClientEffects {
         if (until <= 0L) {
             return;
         }
-        // Smooth game time (with the partial tick) so the fade doesn't step at 20 Hz.
         float now = mc.level.getGameTime() + event.getPartialTick().getGameTimeDeltaPartialTick(false);
         float remaining = until - now;
         if (remaining <= 0.0F || remaining > BluntStun.STUN_TICKS) {
             return;
         }
-        // Fade IN over the first ~0.2s, then OUT over the rest of the 1s — a quick daze that lifts.
-        float elapsed = BluntStun.STUN_TICKS - remaining;             // 0 → 20 ticks
-        float p = elapsed / BluntStun.STUN_TICKS;                     // 0 → 1
+        float elapsed = BluntStun.STUN_TICKS - remaining;
+        float p = elapsed / BluntStun.STUN_TICKS;
         float envelope = p < 0.2F ? p / 0.2F : 1.0F - (p - 0.2F) / 0.8F;
         PoisonPostProcessor.renderStun(envelope, now);
     }
 
-    /*
-     * Client driver for grog drunkenness (GROG_PLAN.md Phase 3.5), at the GUI stage (after the world +
-     * shaders, before the HUD) so it's Iris-safe and the HUD stays crisp:
-     * <ul>
-     *   <li>the swimming drunk shader, eased off the synced intoxication level;</li>
-     *   <li>a fade-to-black while you're {@link BannerboundAntiquity#PASS_OUT_UNTIL black-out} cold;</li>
-     *   <li>a pounding, throbbing vignette for the morning-after {@link BannerboundAntiquity#HANGOVER_UNTIL
-     *       hangover}.</li>
-     * </ul>
-     */
-    /** Level at which the drunk visuals peak — L7, right before the L8 black-out, so 5→6→7 ramp up hard. */
     private static final float FULL_LEVEL = 7.0F;
-    /** Smoothed visual intensity 0→1, eased toward the level each frame so it fades in/out cleanly. */
     private static float smooth = 0.0F;
 
     @SubscribeEvent
@@ -526,24 +483,19 @@ public final class StatusClientEffects {
         }
         float now = mc.level.getGameTime() + event.getPartialTick().getGameTimeDeltaPartialTick(false);
 
-        // Hangover: pounding vignette, fading over the 30s (a touch stronger near the start).
         long hangoverUntil = mc.player.getData(BannerboundAntiquity.HANGOVER_UNTIL.get());
         if (hangoverUntil > now) {
             float frac = Math.min(1.0F, (hangoverUntil - now) / (float) Intoxication.HANGOVER_TICKS);
             PoisonPostProcessor.renderHangover(0.55F + 0.45F * frac, now);
         }
 
-        // Vomited on: green goo splattered across the screen, fading over the 10s (sober or not).
         long gooUntil = mc.player.getData(BannerboundAntiquity.VOMIT_OVERLAY_UNTIL.get());
         if (gooUntil > now) {
-            // Seed off the deadline: constant for this splat, different for the next → unique blob layout.
             float seed = (gooUntil % 9973L) * 0.0137F;
             PoisonPostProcessor.renderGoo((gooUntil - now) / (float) Intoxication.VOMIT_OVERLAY_TICKS, seed, now);
         }
 
-        // Drunk swim, eased so a sip fades it in and sobering fades it out.
         int level = mc.player.getData(BannerboundAntiquity.INTOXICATION_LEVEL.get());
-        // Jumble a growing fraction of glyphs once drunk (text goes weird) — set for the font mixin.
         DrunkText.setChance(level < 4 ? 0.0F : Math.min(0.55F, 0.11F * (level - 3)));
         float target = Math.min(1.0F, level / FULL_LEVEL);
         smooth += (target - smooth) * 0.06F;
@@ -553,16 +505,13 @@ public final class StatusClientEffects {
             smooth = 0.0F;
         }
 
-        // Black-out: heavy eyelids droop shut (curare-style), slowly — not a snap to black. Two black
-        // bars close from top + bottom to the centre; fully shut while out cold, then open as you come to.
         long passOutUntil = mc.player.getData(BannerboundAntiquity.PASS_OUT_UNTIL.get());
         if (passOutUntil > now) {
             float remaining = passOutUntil - now;
             float elapsed = Intoxication.PASS_OUT_TICKS - remaining;
-            float closeIn = Math.min(1.0F, elapsed / 35.0F);    // ~1.7s for the eyes to droop shut
-            float openOut = Math.min(1.0F, remaining / 28.0F);  // ~1.4s for them to crack back open
+            float closeIn = Math.min(1.0F, elapsed / 35.0F);
+            float openOut = Math.min(1.0F, remaining / 28.0F);
             float cover = Math.max(0.0F, Math.min(closeIn, openOut));
-            // Heavy-lidded flutter as you fight it (only while not yet fully shut).
             cover = Math.min(1.0F, cover + 0.05F * (float) Math.sin(now * 0.5F) * (1.0F - cover));
             int w = mc.getWindow().getGuiScaledWidth();
             int h = mc.getWindow().getGuiScaledHeight();
@@ -575,22 +524,12 @@ public final class StatusClientEffects {
         }
     }
 
-    /*
-     * Lays a curare-UNCONSCIOUS entity flat on the ground (passed out). One {@link RenderLivingEvent.Pre}
-     * handler covers players, citizens and animals alike — it tips the whole model 90° about its forward
-     * axis before the renderer draws the body, so it works generically without per-model code. Reads the
-     * synced curare deadlines, so no Core import is needed (citizens included).
-     */
     @SubscribeEvent
     static void onRenderLivingPre(RenderLivingEvent.Pre<?, ?> event) {
         LivingEntity entity = event.getEntity();
         if (!Poisons.isCurareUnconscious(entity, entity.level().getGameTime())) {
             return;
         }
-        // Roll the model 90° onto its SIDE about its own facing axis, pivoting at the feet — works for
-        // bipeds (fall on side) AND quadrupeds (knocked over), unlike a forward face-plant which would
-        // stand a four-legged mob on its nose. Lift by half the body width first so the side-lying body
-        // rests on the ground instead of half-sinking. (Tune the 0.5 if a model floats or clips.)
         PoseStack ps = event.getPoseStack();
         double yaw = Math.toRadians(entity.yBodyRot);
         float fx = (float) -Math.sin(yaw);
@@ -599,13 +538,6 @@ public final class StatusClientEffects {
         ps.mulPose(new Quaternionf().rotationAxis((float) Math.toRadians(90.0), fx, 0.0F, fz));
     }
 
-    /*
-     * The kidnap rope — a fibre ribbon from a dragger to whatever curare-unconscious creature they're
-     * towing. Mirrors {@link RopeRenderEvents} exactly, but reads the synced {@code DRAGGED_BY} claim
-     * (the dragger's entity id) off any rendered {@link LivingEntity} (players, citizens, animals), so it
-     * draws the same plant-fibre green ribbon ({@link RopeRenderer#drawRibbon}) the herder/spear use.
-     */
-    /** Rope attaches at ~60% of each entity's height (chest-ish), like a held lead. */
     private static final double TIE_FRACTION = 0.6;
 
     @SubscribeEvent

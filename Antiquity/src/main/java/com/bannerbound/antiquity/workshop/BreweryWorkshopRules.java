@@ -17,8 +17,15 @@ import com.bannerbound.core.api.world.BlockSelectionRegistry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 
-/** Structure rules for Antiquity brewery workshops: a brewery needs a Mortar & Pestle inside —
- *  the brewer pestles raw fermentables (berries) there before charging the troughs. */
+/**
+ * Structure rules for Antiquity brewery workshops. A valid brewery needs a Mortar and Pestle
+ * inside its marked boxes - the brewer pestles raw fermentables (berries) there before charging
+ * the troughs; findMortar resolves it from the workshop's marked boxes as the brewer's stand-spot
+ * for PESTLE crafts (the validator guarantees one exists in a valid brewery). unchargedPools
+ * counts trough pools holding plain water or nothing - not fermenting, not holding finished grog;
+ * work blocks are pool anchors (one per connected run) so it is a straight count, and it sizes
+ * the brewer's standing pestled-item demand in {@code BrewerExecutor}: one charge item per pool.
+ */
 @ApiStatus.Internal
 public final class BreweryWorkshopRules {
     private BreweryWorkshopRules() {
@@ -40,8 +47,6 @@ public final class BreweryWorkshopRules {
         return null;
     }
 
-    /** The workshop's Mortar & Pestle, resolved from its marked boxes, or {@code null}. The brewer
-     *  stands here for PESTLE crafts (the validator guarantees one exists in a valid brewery). */
     @Nullable
     public static BlockPos findMortar(ServerLevel sl, Workshop workshop) {
         List<BlockSelection> boxes = BlockSelectionRegistry.get(sl).findByWorkshop(workshop.id());
@@ -49,9 +54,6 @@ public final class BreweryWorkshopRules {
         return findMortarIn(sl, Homes.collectMarkedSolids(sl, boxes));
     }
 
-    /** How many of this workshop's trough pools are UNCHARGED (plain water / empty — not fermenting,
-     *  not holding finished grog). Work blocks are pool anchors (one per connected run), so this is a
-     *  straight count; it sizes the brewer's standing pestled-item demand: one charge item per pool. */
     public static int unchargedPools(ServerLevel sl, Workshop workshop) {
         int count = 0;
         for (BlockPos p : workshop.workBlocks()) {

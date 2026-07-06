@@ -18,11 +18,13 @@ import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
- * Datapack loader for carpentry output rows — reads every JSON under
- * {@code data/<namespace>/carpentry_outputs/}. Each row is a templated variant ({@code stairs},
- * {@code slab}, …) resolved per wood family at runtime. Server-side only (registered as a reload
- * listener in {@code AntiquityEvents}); the resolved, affordable offers are synced to clients on the
- * block entity itself. Sorted by variant name so the picker's browse order is stable.
+ * Datapack loader for carpentry output rows that reads every JSON under
+ * {@code data/<namespace>/carpentry_outputs/}. Each row is a templated variant (stairs, slab, ...)
+ * resolved per wood family at runtime. Registered as a server reload listener in AntiquityEvents; the
+ * resolved, affordable offers are synced to clients on the block entity itself, but applyEntries() is
+ * public so the client-side jar loader (ClientDatapackRecipes) can reuse it on remote clients, where
+ * server datapacks don't reach. Rows are sorted by variant name so the picker's browse order is
+ * stable. Mirrors {@link CarpentryAssemblyManager}.
  */
 @ApiStatus.Internal
 public class CarpentryOutputManager extends SimpleJsonResourceReloadListener {
@@ -39,8 +41,6 @@ public class CarpentryOutputManager extends SimpleJsonResourceReloadListener {
         applyEntries(entries);
     }
 
-    /** Parse + store the loaded entries. Public so the client-side jar loader can reuse it on remote
-     *  clients, where server datapacks don't reach (see {@code ClientDatapackRecipes}). */
     public static void applyEntries(Map<ResourceLocation, JsonElement> entries) {
         List<CarpentryOutput> loaded = new ArrayList<>();
         for (Map.Entry<ResourceLocation, JsonElement> entry : entries.entrySet()) {
@@ -54,7 +54,6 @@ public class CarpentryOutputManager extends SimpleJsonResourceReloadListener {
         BannerboundAntiquity.LOGGER.info("Loaded {} carpentry output(s).", outputs.size());
     }
 
-    /** Every loaded output row, sorted by variant name. */
     public static List<CarpentryOutput> all() {
         return outputs;
     }

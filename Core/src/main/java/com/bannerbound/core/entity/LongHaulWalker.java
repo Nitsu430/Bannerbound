@@ -9,37 +9,35 @@ import net.minecraft.world.phys.Vec3;
 
 /**
  * Reusable long-distance traveller for citizens: drives a worker toward a far target in short,
- * vanilla-pathable <b>hops</b> instead of one cross-map {@code moveTo} that truncates at the mob's
- * {@code FOLLOW_RANGE} search radius (64 blocks). Each hop is a ~{@value #HOP}-block straight step
- * toward the target, ground-snapped to loaded terrain, so a single A* search always succeeds and the
- * route stays roughly straight trip-to-trip (which also lets the stocker's trample-a-road pass
- * reuse one road instead of laying a fresh meandering strip every haul).
+ * vanilla-pathable hops instead of one cross-map moveTo that truncates at the mob's FOLLOW_RANGE
+ * search radius (64 blocks). Each hop is a ~20-block (HOP) straight step toward the target,
+ * ground-snapped to loaded terrain, so a single A* search always succeeds and the route stays
+ * roughly straight trip-to-trip (which also lets the stocker's trample-a-road pass reuse one road
+ * instead of laying a fresh meandering strip every haul). HOP is deliberately well under the
+ * 64-block FOLLOW_RANGE so vanilla nav never gives up mid-hop.
  *
- * <p>Stateful — one instance per traveller, reused across legs. The caller calls
- * {@link #stepToward} each tick while the target is far and takes over the precise final approach
- * once it returns {@link Status#ARRIVED} (vanilla nav handles the last stretch inside its search
- * radius). {@link Status#WAITING} means the corridor ahead is unloaded — the caller should idle and
- * retry; we never path or teleport into ungenerated space.
+ * <p>Stateful -- one instance per traveller, reused across legs. The caller calls stepToward each
+ * tick while the target is far and takes over the precise final approach once it returns ARRIVED
+ * (vanilla nav handles the last stretch inside its search radius, so we leave its navigation
+ * untouched there and aren't fought). WAITING means the corridor ahead is unloaded -- idle and
+ * retry; we never path or teleport into ungenerated space (groundAt returns null when a column's
+ * chunk isn't loaded, gating every move).
  *
- * <p>Shared by {@link OutpostCommuteGoal} (workers commuting to a remote site) and
- * {@link StockerWorkGoal} (haulers supplying an outpost). No A*, no chunk force-loading.
+ * <p>Off-screen rescue: a stuck, unwatched traveller (no player within WATCH_RANGE 48) may
+ * abstract-advance one short ABSTRACT_STEP (8 blocks, kept short so it still reads as travel if a
+ * player loads in) onto loaded solid ground only, never water/void. Shared by OutpostCommuteGoal
+ * (workers commuting to a remote site) and StockerWorkGoal (haulers supplying an outpost). No A*,
+ * no chunk force-loading.
  */
 @ApiStatus.Internal
 public final class LongHaulWalker {
     public enum Status { WALKING, WAITING, ARRIVED }
 
-    /** Per-segment hop length — well under the 64-block FOLLOW_RANGE search radius. */
     private static final int HOP = 20;
-    /** Squared "reached this hop waypoint" tolerance. */
     private static final double HOP_REACHED_SQ = 4.0;
-    /** Ticks of no headway toward the current hop before re-path / (off-screen) skip-ahead. */
     private static final int STUCK_TICKS = 50;
-    /** A player within this range = "watched" → only ever walk, never abstract-advance. */
     private static final double WATCH_RANGE = 48.0;
-    /** Length of one off-screen abstract step — short, so it still reads as travel if a player loads
-     *  in right after. */
     private static final int ABSTRACT_STEP = 8;
-    /** Min ticks between re-issuing a path to the same hop after vanilla nav gives up early. */
     private static final int REPATH_COOLDOWN = 10;
 
     private BlockPos hop;
@@ -47,8 +45,6 @@ public final class LongHaulWalker {
     private int stuck;
     private int repathCooldown;
 
-    /** Clears hop state AND stops the worker's navigation — call at an explicit leg end (goal stop,
-     *  switching haul legs). */
     public void reset(CitizenEntity c) {
         clear();
         if (c != null) c.getNavigation().stop();
@@ -61,12 +57,6 @@ public final class LongHaulWalker {
         repathCooldown = 0;
     }
 
-    /**
-     * Advance one tick toward {@code target}. Returns {@link Status#ARRIVED} once within
-     * {@code handoffDist} blocks (XZ) — the caller then does its own precise approach (we leave its
-     * navigation untouched so it isn't fought). {@link Status#WAITING} = corridor unloaded ahead.
-     * {@code allowAbstract} permits an off-screen, stuck traveller to skip a short ground step.
-     */
     public Status stepToward(CitizenEntity c, BlockPos target, double speed,
                              double handoffDist, boolean allowAbstract) {
         if (target == null || !(c.level() instanceof ServerLevel sl)) return Status.WAITING;
@@ -74,19 +64,19 @@ public final class LongHaulWalker {
 
         if (hop == null) {
             hop = nextHop(sl, c, target, speed);
-            if (hop == null) return Status.WAITING;   // hop column unloaded — idle and retry
+            if (hop == null) return Status.WAITING;
         }
         c.getLookControl().setLookAt(hop.getX() + 0.5, hop.getY() + 1.0, hop.getZ() + 0.5);
 
         double d = horizDistSq(c, hop);
-        if (d <= HOP_REACHED_SQ) { hop = null; return Status.WALKING; }   // reached waypoint — next hop next tick
+        if (d <= HOP_REACHED_SQ) { hop = null; return Status.WALKING; }
 
         if (d + 0.05 < bestHopDistSq) {
             bestHopDistSq = d;
             stuck = 0;
         } else if (++stuck > STUCK_TICKS) {
             if (allowAbstract && !isWatched(c)) abstractAdvance(sl, c, target);
-            hop = null;   // re-aim from wherever we ended up
+            hop = null;
             return Status.WALKING;
         }
         if (c.getNavigation().isDone() && --repathCooldown <= 0) {
@@ -96,8 +86,6 @@ public final class LongHaulWalker {
         return Status.WALKING;
     }
 
-    /** Aim ~{@value #HOP} blocks toward the target, ground-snapped to loaded terrain; null if the hop
-     *  column's chunk isn't loaded. Issues the navigation toward the chosen hop. */
     private BlockPos nextHop(ServerLevel sl, CitizenEntity c, BlockPos target, double speed) {
         bestHopDistSq = Double.MAX_VALUE;
         stuck = 0;
@@ -121,16 +109,12 @@ public final class LongHaulWalker {
         return g;
     }
 
-    /** Topmost standable ground at (x,z) from the loaded heightmap, or null if that column's chunk
-     *  isn't loaded (so we never path or teleport into ungenerated space). */
     private static BlockPos groundAt(ServerLevel sl, int x, int z) {
         if (!sl.hasChunk(x >> 4, z >> 4)) return null;
         int y = sl.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
         return new BlockPos(x, y, z);
     }
 
-    /** Off-screen rescue: reposition the worker one short step toward the target, only onto loaded
-     *  solid ground (never water/void). Invisible because {@link #isWatched} is false when called. */
     private static void abstractAdvance(ServerLevel sl, CitizenEntity c, BlockPos target) {
         Vec3 from = c.position();
         double dx = (target.getX() + 0.5) - from.x;
@@ -144,8 +128,7 @@ public final class LongHaulWalker {
         if (g == null || !WorkerPathing.hasFloor(sl, g.below())) return;
         c.getNavigation().stop();
         c.moveTo(g.getX() + 0.5, g.getY(), g.getZ() + 0.5, c.getYRot(), c.getXRot());
-        // Without the tag the rope-fence clamp cancels this exact rescue (step lands across a rope →
-        // shoved back → stuck counter rebuilds → repeat forever).
+        // Without the tag the rope-fence clamp cancels this rescue -> shoved back -> stuck forever.
         CitizenEntity.tagDeliberateTeleport(c);
     }
 

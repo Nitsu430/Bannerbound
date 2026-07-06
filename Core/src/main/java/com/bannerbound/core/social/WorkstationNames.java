@@ -8,11 +8,10 @@ import com.bannerbound.core.api.settlement.Settlement;
 import net.minecraft.network.chat.Component;
 
 /**
- * Resolves the <b>display name</b> of a Foreman's-Rod worker type, which can change with research.
- * The "digger" unit is shown as <i>Digger</i> until the Quarry research, then as <i>Quarryworker</i>.
- * <p>
- * Server-safe (no client-only references). The client equivalent lives next to the rod UI and reads
- * {@code ClientResearchState} instead of a {@link Settlement}.
+ * Resolves the display name of a Foreman's-Rod worker type, which can change with research: the
+ * "digger" unit reads as Digger until the Quarry research (FLAG_QUARRY), then as Quarryworker. This is
+ * the server-safe path (no client-only references); the client equivalent lives next to the rod UI and
+ * reads ClientResearchState instead of a Settlement.
  */
 @ApiStatus.Internal
 public final class WorkstationNames {
@@ -22,7 +21,6 @@ public final class WorkstationNames {
     private WorkstationNames() {
     }
 
-    /** The worker-type label for {@code wsType} given this settlement's research. */
     public static Component dynamic(Settlement settlement, String wsType) {
         if (DIGGER.equals(wsType) && settlement != null
                 && ResearchManager.hasFlag(settlement, FLAG_QUARRY)) {

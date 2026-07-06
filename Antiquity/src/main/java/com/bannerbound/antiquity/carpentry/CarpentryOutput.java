@@ -7,14 +7,10 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 
 /**
  * One data-driven carpentry output row, written ONCE per variant and resolved per wood family by
- * {@link WoodFamily#variant(String)}. Loaded from {@code data/<namespace>/carpentry_outputs/*.json}.
- *
- * <p>Example — {@code .../carpentry_outputs/stairs.json}:
- * <pre>{ "variant": "stairs", "log_cost": 1, "yield": 6 }</pre>
- *
- * @param variant the family variant suffix ({@code planks}, {@code stairs}, {@code slab}, {@code door}…)
- * @param logCost theoretical logs this output costs from the budget per crafted unit
- * @param yield   how many output items one crafted unit produces
+ * {@link WoodFamily#variant(String)}. Loaded from {@code data/<namespace>/carpentry_outputs/*.json},
+ * e.g. <pre>{ "variant": "stairs", "log_cost": 1, "yield": 6 }</pre>
+ * "variant" is the family variant suffix (planks, stairs, slab, door, ...), "log_cost" the logs one
+ * crafted unit costs from the table's budget, and "yield" how many output items it produces.
  */
 @ApiStatus.Internal
 public record CarpentryOutput(String variant, int logCost, int yield) {

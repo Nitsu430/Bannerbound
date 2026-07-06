@@ -2,7 +2,14 @@ package com.bannerbound.core.codex;
 
 import java.util.List;
 
-/** A data-authored Chronicle article loaded from data/<namespace>/codex_entries. */
+/**
+ * A data-authored Chronicle article, one JSON file under data/<namespace>/codex_entries.
+ * The canonical constructor null-normalizes every field so partial or malformed JSON never
+ * yields nulls downstream (missing category -> getting_started, blank title -> id, absent
+ * unlock -> unlockedByDefault, absent tutorial -> empty). Loaded by CodexEntryLoader;
+ * searchableText() feeds the Chronicle search box a lowercased blob of title, subtitle, and
+ * every page's text and caption.
+ */
 public record CodexEntry(
     String id,
     String category,

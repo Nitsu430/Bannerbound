@@ -27,17 +27,21 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.level.BlockEvent;
 
 /**
- * Resource deposits are permanent chunk identity markers, so players can never DESTROY
- * their blocks, only work them the way miners/diggers do. Breaking a boulder ORE face with a
- * tier-correct pickaxe cancels the vanilla break and applies the <b>chip cycle</b> instead:
- * the block swaps to its worked state, the resource item pops, and the regen ticker restores
- * the face later (player parity — "if a player can do it..."). Body/worked deposit blocks
- * simply refuse to break. Creative players bypass everything (builders/testing).
+ * Resource deposits are permanent chunk identity markers, so players can never DESTROY their
+ * blocks, only work them the way miners/diggers do. On the cancelable BlockEvent.BreakEvent (which
+ * fires BEFORE the block is destroyed, so the disguise system's BlockDropsEvent path never sees a
+ * deposit break), breaking a boulder ORE face with a tier-correct pickaxe cancels the vanilla break
+ * and applies the chip cycle instead: the block swaps to its worked state, the resource item pops
+ * (knowledge-gated through SettlementDropFilter), and the regen ticker restores the face later
+ * (player parity -- "if a player can do it..."). Body/worked/legacy-stand-in deposit blocks simply
+ * refuse to break; creative players bypass everything (builders/testing).
  *
- * <p>Runs on the cancelable {@link BlockEvent.BreakEvent}, which fires BEFORE the block is
- * destroyed — so the disguise system's {@code BlockDropsEvent} path never sees a deposit break.
- * While an ore is still perception-gated for the breaker's civ ({@link OreDisguiseLoader}), the
- * face won't chip either: the "rock" just doesn't break, and no drop leaks what's inside.
+ * <p>A cheap pre-filter rejects anything outside the chunk's +8,+8 column +/- radius, the only
+ * place a boulder or material deposit can sit. Ore-bearing chunks (BoulderLayout) chip via
+ * chipForPlayer; the other "material" chunks (stone/clay/sand/... via MaterialDepositLayout) run the
+ * parallel workMaterialForPlayer path. While an ore is still perception-gated for the breaker's civ
+ * (OreDisguiseLoader) the face refuses to break and no drop leaks what is inside; revealedFor treats
+ * a block with no disguise entry as always revealed.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -50,11 +54,10 @@ public final class BoulderProtection {
         if (!(event.getLevel() instanceof ServerLevel sl)) return;
         if (sl.dimension() != Level.OVERWORLD) return;
         Player player = event.getPlayer();
-        if (player == null || player.isCreative()) return;   // creative = deliberate edits allowed
+        if (player == null || player.isCreative()) return;
 
         BlockPos pos = event.getPos();
         ChunkPos cp = new ChunkPos(pos);
-        // Cheap pre-filter: boulders only ever occupy the chunk's +8,+8 column ± RADIUS.
         int cx = cp.getMinBlockX() + 8;
         int cz = cp.getMinBlockZ() + 8;
         int radius = Math.max(BoulderLayout.RADIUS, MaterialDepositLayout.MAX_RADIUS);
@@ -76,19 +79,17 @@ public final class BoulderProtection {
         for (BoulderLayout.Spot s : BoulderLayout.spots(sl.getSeed(), cp, baseY)) {
             if (s.pos().equals(pos)) { spot = s; break; }
         }
-        if (spot == null) return;   // not a boulder position (e.g. never carved here)
+        if (spot == null) return;
 
         BlockState state = sl.getBlockState(pos);
         if (spot.ore() && state.is(BoulderLayout.oreBlock(type).getBlock())) {
+            // Cancel BEFORE the reveal/tool gates: an unrevealed or wrong-tier face must not break.
             event.setCanceled(true);
-            // Perception-gated for this civ → the rock just refuses to break; nothing leaks.
             if (!revealedFor(sl, player, state.getBlock())) return;
-            // Player parity with the miner's tier gate: wrong-tier pick can't bite the face.
             if (!player.getMainHandItem().isCorrectToolForDrops(state)) return;
             chipForPlayer(sl, player, pos, type, state);
             return;
         }
-        // Boulder mass (body / chipped / legacy stand-in states) is indestructible.
         if (state.is(BoulderLayout.bodyBlock(type).getBlock()) || BoulderLayout.isChippedState(type, state)) {
             event.setCanceled(true);
         }
@@ -118,7 +119,6 @@ public final class BoulderProtection {
         }
     }
 
-    /** The player-side chip: swap to chipped state, pop the yield (knowledge-gated), make noise. */
     private static void chipForPlayer(ServerLevel sl, Player player, BlockPos pos,
                                       ChunkResource type, BlockState before) {
         sl.setBlock(pos, BoulderLayout.chippedBlock(type), 3);
@@ -134,7 +134,6 @@ public final class BoulderProtection {
         }
     }
 
-    /** Player-side material work: swap to worked state, pop the material yield, make noise. */
     private static void workMaterialForPlayer(ServerLevel sl, Player player, BlockPos pos,
                                               ChunkResource type, BlockState before) {
         sl.setBlock(pos, MaterialDepositLayout.workedBlock(type), 3);
@@ -150,7 +149,6 @@ public final class BoulderProtection {
         }
     }
 
-    /** Whether the breaker's civ has revealed {@code oreBlock} (no disguise entry = always). */
     private static boolean revealedFor(ServerLevel sl, Player player, Block oreBlock) {
         OreDisguise disguise = OreDisguiseLoader.getDisguiseFor(oreBlock);
         if (disguise == null) return true;

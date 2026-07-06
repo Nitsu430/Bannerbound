@@ -34,25 +34,42 @@ import net.minecraft.world.level.gameevent.GameEvent;
 import net.minecraft.world.phys.AABB;
 
 /**
- * Herder {@link OrderedWorkGoal} — tends a fenced <b>pen</b> on a livestock chunk. Marked with a single
- * Foreman's-Rod click ({@link PenEnclosure} auto-detects the enclosure). It doesn't haul; it keeps a herd
- * alive and growing, and rests when there's nothing to do. Behaviour (a small state machine):
+ * Herder {@link OrderedWorkGoal}: tends a fenced pen on a livestock chunk, marked with one Foreman's-Rod
+ * click ({@link PenEnclosure} auto-detects the enclosure). It doesn't haul; it keeps a herd alive and
+ * growing and rests (walking OUT of the pen, leaving the space to the animals) when there's nothing to do.
+ * A pen on a working-claim chunk turns this herder into an OUTPOST WORKER (roofed-bed sleep, pen idle-anchor,
+ * greyed storage controls) exactly like the miner; setOutpostSite must run BEFORE the hasChunk gate.
  *
- * <ul>
- *   <li><b>Corral</b> (leash-free): it walks out to wild animals of the chunk's kind, <i>claims</i> a
- *       batch of them (calming each so it joins a loose herd that follows the herder — no real leash, so
- *       nothing tangles), walks the group back, and drops them inside the pen near the centre. Only if
- *       none are around does it fall back to spawning a starter pair.</li>
- *   <li><b>Breed</b>: if there are ≥2 ready adults (and room), it fetches the right breeding food from a
- *       marked food storage, carries it to the pair, feeds them, and goes back to rest.</li>
- * </ul>
+ * <p>State machine (Phase): COLLECT/LEAD is the leash-free corral - walk out to wild/escaped stock of the
+ * chunk's kind, claim a batch (each is calmed and gets its own {@link HerdFollowGoal} so it WALKS behind the
+ * herder; driving the animal's nav from outside got overridden and nothing moved), lead them to a cell JUST
+ * inside the gate, and release each as it steps in. The herder posts one block inside the gate on purpose:
+ * the follow is the animal's own navigation and only solves a short, direct crossing - leading to the deep
+ * centre across the pen's water gave an unsolvable path. SPAWNING is the last-resort starter pair (only when
+ * no wild stock exists, gated to once per half MC day so a wiped pen can't instantly refill). TO_BREED sets a
+ * ready pair in love (feed is on hand like a farmer's seeds; the baby itself is BreedingEvents' chance roll),
+ * gated on the settlement's Animal Husbandry flag ({@code VanillaGates.FLAG}). TO_CULL is a real melee kill
+ * of surplus adults above the pen's keep threshold (drops route through LivingDropsEvent; credits the
+ * "livestock" food source). COLLECT_MANURE mucks out droppings that foul fertility (see BreedingEvents).
+ * LEAVE walks the herder back out of the pen.
  *
- * <p>Every animal it brings in/spawns is <b>domesticated</b> (shared {@code BannerboundDomesticated} tag,
- * honoured by Antiquity's {@code HuntingFear.isTamed}) so it doesn't flee players or leave footprints. The
- * follow is a gentle server-side pull, not a vanilla leash — the visible "rope" is cosmetic polish layered
- * on top of the herder's claim ({@code BannerboundCore.HERDED_BY}). Tool: a lead-rope held in the job
- * slot — a vanilla {@code minecraft:lead} standalone, or Antiquity's {@code fiber_rope} when installed
- * (both in the {@link #HERDER_ROPE_TAG}); breeding food is held while breeding.
+ * <p>Every animal brought in or spawned is domesticated ({@link #DOMESTICATED_TAG}, shared with Antiquity's
+ * HuntingFear.isTamed) so it won't flee players or leave footprints; horses are additionally tamed because
+ * vanilla only breeds / obeys setInLove on a tamed horse. The follow is a gentle server-side claim
+ * ({@code HERDED_BY}, synced so the client draws the cosmetic rope), NOT a vanilla leash - nothing tangles.
+ * Claims and follow goals do not survive a reload and are re-established when a valid herder re-claims.
+ *
+ * <p>Gate ownership: while tending a pen the herder is the SINGLE owner of its gate, reserving it via
+ * {@link GateHolds} every tick so the shared {@link OpenFenceGateGoal} never also toggles it (two systems
+ * toggling one gate each tick was the open/close flicker); the reservation lapses on its own so nothing leaks
+ * if the herder dies or disengages, and {@link #stop()} releases it. Gates are opened/closed by tag + the
+ * OPEN property so it works for vanilla AND the rope gate, never by instanceof.
+ *
+ * <p>Tool: a lead-rope in the job slot, recognised only by {@link #HERDER_ROPE_TAG} (Core ships it with
+ * vanilla {@code minecraft:lead}; Antiquity merges in {@code fiber_rope}) - never a hard item ref, so the
+ * herder works standalone and the expansion just upgrades the option. The pen marker packs
+ * "&lt;animalId&gt;|&lt;kills&gt;|&lt;keep&gt;" into its seedItemId (keep 0 = Auto -> full capacity;
+ * back-compat with old 2-field markers whose keep reads as 0).
  */
 @ApiStatus.Internal
 public class HerderWorkGoal extends OrderedWorkGoal {
@@ -60,39 +77,31 @@ public class HerderWorkGoal extends OrderedWorkGoal {
     public static final String SELECTION_TYPE = "herder";
     public static final ResourceLocation FIBER_ROPE_ID =
         ResourceLocation.fromNamespaceAndPath("bannerboundantiquity", "fiber_rope");
-    /** Items that count as a herder's lead-rope tool. Core ships this tag with {@code minecraft:lead};
-     *  Antiquity merges in its {@code fiber_rope}. So the herder works standalone (vanilla lead) and the
-     *  expansion simply upgrades the era-appropriate option — recognised by tag, never by a hard item ref. */
     public static final net.minecraft.tags.TagKey<net.minecraft.world.item.Item> HERDER_ROPE_TAG =
         net.minecraft.tags.TagKey.create(net.minecraft.core.registries.Registries.ITEM,
             ResourceLocation.fromNamespaceAndPath("bannerbound", "herder_rope"));
 
-    /** Is this stack a valid herder rope (vanilla lead, Antiquity fiber rope, or any addon's)? */
     public static boolean isRope(net.minecraft.world.item.ItemStack stack) {
         return stack.is(HERDER_ROPE_TAG);
     }
-    /** Shared with Antiquity's {@code HuntingFear.DOMESTICATED_TAG}. */
     public static final String DOMESTICATED_TAG = "BannerboundDomesticated";
-    /** Transient tag (gametime) set on an entity we deliberately teleport, so Antiquity's rope-fence
-     *  collision accepts the cross-rope jump instead of shoving the entity back to its old side. Mirrored
-     *  by the same literal in {@code RopeFenceEvents} (Core can't be imported there). */
+    // Same literal lives in RopeFenceEvents (Core can't import there) - keep the two in sync.
     public static final String TELEPORT_AT = CitizenEntity.TELEPORT_AT_KEY;
 
     private static final int START_PAIR = 2;
-    private static final int MAX_BATCH = 6;            // animals gathered into one trip before leading them in
-    private static final double CAPTURE_RADIUS = 24.0; // how far out the herder will look for wild stock
-    private static final double ESCAPE_RADIUS = 32.0;  // how far out it will chase down its own escapees
-    private static final double REACH = 2.5;           // close enough to claim / feed
-    private static final int SEEK_TIMEOUT = 200;       // give up walking to one wild animal after ~10s
-    private static final int LEAD_TIMEOUT = 600;       // give up walking the batch in after ~30s → just place
-    private static final int HERDER_STUCK_LIMIT = 40;  // herder not moving while leading for ~2s → teleport to centre
-    private static final int LEAD_STALL_LIMIT = 80;    // posted at the gate but nothing walked in for ~4s → place remainder
-    private static final int FEED_WORK_TICKS = 24;     // short, visible feeding action before love mode
-    private static final int DEFAULT_BUTCHER_DAMAGE = 4; // wood-sword baseline; actual weapon age may override
+    private static final int MAX_BATCH = 6;
+    private static final double CAPTURE_RADIUS = 24.0;
+    private static final double ESCAPE_RADIUS = 32.0;
+    private static final double REACH = 2.5;
+    private static final int SEEK_TIMEOUT = 200;
+    private static final int LEAD_TIMEOUT = 600;
+    private static final int HERDER_STUCK_LIMIT = 40;
+    private static final int LEAD_STALL_LIMIT = 80;
+    private static final int FEED_WORK_TICKS = 24;
+    private static final int DEFAULT_BUTCHER_DAMAGE = 4;
     private static final double DEFAULT_BUTCHER_ATTACK_SPEED = 1.6;
-    private static final int SPAWN_WORK_TICKS = 40;    // starter-pair fallback still happens from the pen floor
-    private static final long SPAWN_COOLDOWN = 12_000L; // half an MC day between spawn-pair fallbacks
-    /** Persistent key on the citizen: gametime of the last spawn-pair fallback (for the cooldown). */
+    private static final int SPAWN_WORK_TICKS = 40;
+    private static final long SPAWN_COOLDOWN = 12_000L;
     private static final String SPAWN_AT_KEY = "BannerboundHerdSpawnAt";
 
     private enum Phase { IDLE, COLLECT, LEAD, SPAWNING, TO_BREED, TO_CULL, COLLECT_MANURE, LEAVE }
@@ -101,24 +110,22 @@ public class HerderWorkGoal extends OrderedWorkGoal {
     private PenEnclosure.Result pen;
     private EntityType<? extends Animal> herdType;
     private Phase phase = Phase.IDLE;
-    /** OPEN pens this herder recently found no work at → avoid re-picking for a bit (posLong → gameTime until),
-     *  so a lone herder rotates across open pens instead of looping on one. */
     private final java.util.Map<Long, Long> penCooldown = new java.util.HashMap<>();
-    private static final long PEN_IDLE_COOLDOWN = 120L;   // ~6s before re-considering an idled open pen
-    private final List<Animal> batch = new ArrayList<>(); // claimed animals following the herder right now
-    private Animal seeking;          // the next wild animal the herder is walking over to claim
-    private int seekTicks;           // watchdog so an uncatchable animal is eventually skipped
-    private BlockPos dropCell;       // validated interior cell the herder walks to while leading
-    private BlockPos gatePos;        // the pen's gate (cached when the pen is scanned), auto opened/closed
-    private int leadTicks;           // watchdog so a stuck lead eventually just places the batch
-    private int herderStuck;         // herder-not-moving counter → teleport the herder to its gate-side post
-    private int leadStall;           // ticks posted at the gate with no animal walking in → place the stuck remainder
-    private double prevX, prevZ;     // herder's last position, to detect it being stuck while leading
-    private BlockPos restSpot;       // a spot OUTSIDE the pen the herder walks to when idle (leaves it to the herd)
-    private Animal breedA, breedB;   // the pair to tend
-    private Animal cullTarget;       // the surplus adult currently being butchered
-    private BlockPos manurePos;      // the manure block (air cell) the herder is walking over to muck out
-    private int workTicks;           // visible timed work for feeding/spawning, attack cooldown for culling
+    private static final long PEN_IDLE_COOLDOWN = 120L;
+    private final List<Animal> batch = new ArrayList<>();
+    private Animal seeking;
+    private int seekTicks;
+    private BlockPos dropCell;
+    private BlockPos gatePos;
+    private int leadTicks;
+    private int herderStuck;
+    private int leadStall;
+    private double prevX, prevZ;
+    private BlockPos restSpot;
+    private Animal breedA, breedB;
+    private Animal cullTarget;
+    private BlockPos manurePos;
+    private int workTicks;
 
     public HerderWorkGoal(CitizenEntity citizen, double speedModifier) {
         super(citizen, speedModifier);
@@ -136,28 +143,23 @@ public class HerderWorkGoal extends OrderedWorkGoal {
     @Override
     protected boolean canStartWork() {
         if (!hasRope() || !(citizen.level() instanceof ServerLevel sl)) return false;
-        PenClaims.releaseAll(citizen.getId());   // fresh each evaluation; findPenMarker re-claims if it commits
+        PenClaims.releaseAll(citizen.getId());
         BlockSelection sel = findPenMarker(sl);
         if (sel == null) return false;
         anchor = new BlockPos(sel.minX(), sel.minY(), sel.minZ());
-        // Outpost pens (working-claim chunks) make this herder an OUTPOST WORKER: they sleep in
-        // the site's roofed bed, idle-anchor at the pen, and the Job tab greys storage controls —
-        // identical to the miner's arrangement (see CitizenEntity#setOutpostSite).
         Settlement os = citizen.getSettlement();
         citizen.setOutpostSite(os != null && os.workingClaims().contains(
             new net.minecraft.world.level.ChunkPos(anchor).toLong()) ? anchor.immutable() : null);
-        if (!sl.hasChunk(anchor.getX() >> 4, anchor.getZ() >> 4)) return false; // pen not loaded → can't judge
+        if (!sl.hasChunk(anchor.getX() >> 4, anchor.getZ() >> 4)) return false;
         pen = PenEnclosure.scan(sl, anchor);
-        if (!pen.valid()) {                  // chunk loaded but no valid pen → it was destroyed → drop the marker
+        if (!pen.valid()) {
             removeMarker(sl, sel);
             return false;
         }
         gatePos = findGate(sl, pen);
-        herdType = animalFromMarker(sel);   // the pen's chosen species (stored on the marker)
+        herdType = animalFromMarker(sel);
         if (herdType == null) return false;
-        assess(sl);                 // is there actually work to do?
-        // No work → the goal won't start, so manageOwnGate won't run. Close a gate a chunk unload
-        // left hanging open (unload skips stop()) so the pen never leaks its flock while idle.
+        assess(sl);
         if (phase == Phase.IDLE && gatePos != null && !GateHolds.isHeld(gatePos, sl.getGameTime())) {
             setOwnGate(sl, false);
         }
@@ -180,9 +182,8 @@ public class HerderWorkGoal extends OrderedWorkGoal {
     public void stop() {
         citizen.setWorking(false);
         citizen.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, ItemStack.EMPTY);
-        releaseBatch();   // free any followers (no leash to drop) so none are left "herded" with no herder
-        PenClaims.releaseAll(citizen.getId());   // free our open-pen reservation so another herder can take it
-        // Never leave our pen gate hanging open / reserved when the goal deactivates (e.g. tool removed mid-lead).
+        releaseBatch();
+        PenClaims.releaseAll(citizen.getId());
         if (gatePos != null && citizen.level() instanceof ServerLevel sl) {
             GateHolds.release(gatePos, citizen.getId());
             setOwnGate(sl, false);
@@ -213,19 +214,11 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         equipForPhase();
     }
 
-    /** The herder is the SINGLE owner of its pen gate the whole time it tends this pen — it {@linkplain
-     *  GateHolds reserves} the gate every tick so the shared {@link OpenFenceGateGoal} never also touches it
-     *  (two systems toggling the same gate each tick was the rapid open/close FLICKER). Open iff something is
-     *  actually crossing: the flock is at/near the gate, or the herder itself is walking through it (entering
-     *  to lead, or leaving). Closed otherwise, so the pen stays shut. The reservation lapses on its own, so
-     *  nothing leaks if the herder dies or disengages; {@link #stop()} also releases it. */
     private void manageOwnGate(ServerLevel sl) {
         if (gatePos == null) return;
+        // Reserve the gate every tick so the shared OpenFenceGateGoal never also toggles it (flicker).
         GateHolds.hold(gatePos, citizen.getId(), sl.getGameTime());
-        // Hold the gate OPEN the whole time there's a claimed flock to bring in. Proximity-only opening was a
-        // DEADLOCK: a closed gate's 1.5-tall collision bar makes vanilla reject the gate cell (floor-level
-        // step-up), so the animal can't path TO the gate to trigger the opening in the first place. Holding
-        // it open from the start means the animal's pathfinder sees a clear, routable gate.
+        // Hold open from the start, not by proximity: a closed gate blocks the path to itself, so proximity-open deadlocks.
         boolean wantOpen = !batch.isEmpty()
             || herderCrossingGate()
             || herdedAnimalNear(sl, gatePos, 7.5)
@@ -233,16 +226,11 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         setOwnGate(sl, wantOpen);
     }
 
-    /** True while the herder is actively walking through (within ~2.5 of) its gate — so it opens for the
-     *  herder's own entry/exit, not just the flock. The herder is citizen-narrow, so vanilla A* routes it
-     *  through a 1-wide gate fine; it only needs the gate open by the time it arrives. */
     private boolean herderCrossingGate() {
         return !citizen.getNavigation().isDone()
             && citizen.distanceToSqr(gatePos.getX() + 0.5, gatePos.getY() + 0.5, gatePos.getZ() + 0.5) <= 6.25;
     }
 
-    /** Open/close {@link #gatePos} by tag + the OPEN property (works for vanilla AND the rope gate; never
-     *  {@code instanceof} a vanilla class). No-op if it's already in that state or isn't a gate. */
     private void setOwnGate(ServerLevel sl, boolean open) {
         BlockState state = sl.getBlockState(gatePos);
         if (!state.is(BlockTags.FENCE_GATES) || !state.hasProperty(BlockStateProperties.OPEN)) return;
@@ -253,7 +241,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         sl.gameEvent(citizen, open ? GameEvent.BLOCK_OPEN : GameEvent.BLOCK_CLOSE, gatePos);
     }
 
-    /** Is any animal the herder has claimed ({@code HERDED_BY} set) within {@code r} blocks of {@code pos}? */
     private boolean herdedAnimalNear(ServerLevel sl, BlockPos pos, double r) {
         AABB box = new AABB(pos).inflate(r);
         for (Animal a : sl.getEntitiesOfClass(Animal.class, box)) {
@@ -263,12 +250,9 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         return false;
     }
 
-    // ─── Assessment: pick the next task (or idle) ────────────────────────────────────────────────
-
     private void assess(ServerLevel sl) {
         PenEnclosure.Result r = PenEnclosure.scan(sl, anchor);
         if (!r.valid()) {
-            // Pen destroyed (chunk loaded but no longer a valid enclosure) → remove its marker selection.
             if (sl.hasChunk(anchor.getX() >> 4, anchor.getZ() >> 4)) removeMarker(sl, findPenMarker(sl));
             phase = Phase.IDLE;
             return;
@@ -276,12 +260,9 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         pen = r;
         gatePos = findGate(sl, r);
         List<Animal> herd = penHerd(sl, r);
-        // Calm everything in the pen (incl. babies + any stray that wandered in) → it won't flee and is
-        // re-corralled by proximity if it later escapes.
         for (Animal a : herd) if (!isDomesticated(a)) domesticate(a);
-        int cap = capacity(sl);                 // the maximum population this pen can hold
-        int keepAdults = adultKeepTarget(sl, cap); // the adult floor below which culling stops
-        // Culling is a physical task now: pick one surplus adult, walk to it, then butcher it.
+        int cap = capacity(sl);
+        int keepAdults = adultKeepTarget(sl, cap);
         Animal surplus = selectCullTarget(herd, keepAdults);
         if (surplus != null && DropOffContainers.resolveOrPreferred(citizen, citizen.getDropOff()) != null) {
             cullTarget = surplus;
@@ -291,22 +272,16 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         }
         int inside = herd.size();
 
-        // Already carrying a batch? Lead it in.
         if (!batch.isEmpty()) { beginLead(sl, r); return; }
 
-        // Maintenance: muck out the pen. Manure fouls fertility (see BreedingEvents), so clear it before
-        // tending the herd — a clean pen breeds best. Not research-gated: basic upkeep any herder does.
         BlockPos manure = findManure(sl, r);
         if (manure != null) { manurePos = manure; phase = Phase.COLLECT_MANURE; return; }
 
-        // Round up escapees + bring in wild stock, up to the remaining capacity.
         if (inside < cap && (findEscaped(sl, r) != null || findWild(sl, r) != null)) {
             seeking = null; seekTicks = 0;
             phase = Phase.COLLECT;
             return;
         }
-        // No stock to bring in. If we don't even have a breeding pair, spawn one (last resort) — but only
-        // once per half-day so a wiped pen doesn't instantly refill from nothing.
         if (inside < START_PAIR) {
             if (spawnReady(sl)) {
                 dropCell = findDropCell(sl, r);
@@ -317,10 +292,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
             }
             return;
         }
-        // Otherwise breeding proceeds passively toward the cap (just needs a ready pair — the herder has
-        // feed on hand; the baby itself is the chance roll in BreedingEvents). GATED on the settlement having
-        // researched Animal Husbandry — same flag as the player-feed gate, so a herder without husbandry can
-        // corral and cull but not breed.
         if (inside < cap && hasBreedingResearch()) {
             List<Animal> ready = herd.stream().filter(HerderWorkGoal::breedReady).toList();
             if (ready.size() >= 2) {
@@ -334,10 +305,7 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         goIdle(sl);
     }
 
-    /** Nothing to do. The herder would rather not loiter in the pen (leave the space to the animals), so if
-     *  it's standing inside, send it out to a rest spot first; otherwise just idle and let the goal yield. */
     private void goIdle(ServerLevel sl) {
-        // Remember this pen had no work, so findPenMarker rotates a lone herder to other open pens for a bit.
         if (anchor != null) penCooldown.put(anchor.asLong(), sl.getGameTime() + PEN_IDLE_COOLDOWN);
         if (insideHerder()) {
             restSpot = exteriorRestSpot();
@@ -350,10 +318,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         }
     }
 
-    /** Walk out of the pen, then idle (the goal yields once IDLE). Re-engages from {@link #canStartWork}
-     *  if the herder ever ends up back inside with no work — so it won't settle in the pen. If it can't
-     *  path out the rope gate (stuck ~2s), teleport it out so it never gets trapped (and never holds the
-     *  gate open). */
     private void tickLeave(ServerLevel sl) {
         if (restSpot == null || !insideHerder()) { phase = Phase.IDLE; return; }
         lookAndApproach(restSpot);
@@ -373,39 +337,35 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         prevZ = citizen.getZ();
     }
 
-    /** A standing spot a couple blocks OUTSIDE the gate (away from the pen interior). */
     private BlockPos exteriorRestSpot() {
         BlockPos c = penCenter();
         BlockPos g = gatePos != null ? gatePos : c;
         int ox = Integer.signum(g.getX() - c.getX());
         int oz = Integer.signum(g.getZ() - c.getZ());
-        if (ox == 0 && oz == 0) ox = 1;   // gate ~ at centre (degenerate) → just pick a direction
+        if (ox == 0 && oz == 0) ox = 1;
         return g.offset(ox * 2, 0, oz * 2);
     }
 
-    // ─── Corral (leash-free: claim a batch, soft-pull it along, place it inside) ───────────────────
-
     private void tickCollect(ServerLevel sl) {
-        pruneBatch();   // claimed animals WALK behind the herder via their own HerdFollowGoal
+        pruneBatch();
 
         int room = capacity(sl) - penHerd(sl, pen).size() - batch.size();
         if (batch.size() >= MAX_BATCH || room <= 0) { beginLead(sl, pen); return; }
 
-        // Pick the next animal to walk to (escapees first), and calm it so it doesn't bolt on approach.
         if (seeking == null || !seeking.isAlive() || insidePen(seeking) || isClaimed(sl, seeking)
                 || citizen.distanceToSqr(seeking) > (CAPTURE_RADIUS + 12) * (CAPTURE_RADIUS + 12)) {
             seeking = pickNext(sl);
             seekTicks = 0;
             if (seeking != null) domesticate(seeking);
         }
-        if (seeking == null) { beginLead(sl, pen); return; }   // nothing more nearby → lead what we have
+        if (seeking == null) { beginLead(sl, pen); return; }
 
         lookAndApproach(seeking.blockPosition());
         if (citizen.distanceToSqr(seeking) <= REACH * REACH) {
-            claim(seeking);          // it now follows the herder (and gets a cosmetic rope, later)
+            claim(seeking);
             seeking = null;
         } else if (++seekTicks > SEEK_TIMEOUT) {
-            seeking = null;          // couldn't catch this one — move on
+            seeking = null;
         }
     }
 
@@ -414,7 +374,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         return escaped != null ? escaped : findWild(sl, pen);
     }
 
-    /** Switch to leading: if nothing was actually collected, re-assess instead (spawn/breed/idle). */
     private void beginLead(ServerLevel sl, PenEnclosure.Result r) {
         seeking = null;
         if (batch.isEmpty()) { assess(sl); return; }
@@ -431,9 +390,8 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         pruneBatch();
         if (batch.isEmpty()) { assess(sl); return; }
         if (dropCell == null) dropCell = findDropCell(sl, pen);
-        lookAndApproach(dropCell);   // herder posts just inside the gate, holding it open for the flock
+        lookAndApproach(dropCell);
 
-        // Herder can't reach its gate-side post (stuck ~2s) → teleport it there (last-resort un-stick).
         if (insideHerder()) {
             herderStuck = 0;
         } else {
@@ -449,20 +407,9 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         prevX = citizen.getX();
         prevZ = citizen.getZ();
 
-        // Is the herder posted at its gate-side cell? Arrival alone is NOT completion — the flock
-        // still walks in through the gate below. But once posted, the batch should make steady
-        // progress; if nothing walks in for a few seconds (an animal wedged on a fence, out of
-        // follow range, etc.) the whole lead would stall while the rest of the pen drifts, so we
-        // place the stuck remainder instead of waiting out the full LEAD_TIMEOUT.
         boolean posted = citizen.distanceToSqr(
             dropCell.getX() + 0.5, dropCell.getY(), dropCell.getZ() + 0.5) <= 2.25;
 
-        // Each claimed animal FOLLOWS the herder via its own nav (HerdFollowGoal) — like a cow trailing a
-        // player holding wheat. The herder posts just inside the gate, so the follow is a short hop straight
-        // through the opening. Release each the moment it's genuinely inside; and if it has followed right up
-        // to the herder but STOPPED in the gateway without committing the last step (small pen — the herder
-        // is already within the follow's stop-distance of the gate), teleport it the final block onto an
-        // interior cell. That short finishing hop reads as stepping in, and is the agreed-good completion.
         List<BlockPos> finishSpots = null;
         int finished = 0;
         java.util.Iterator<Animal> it = batch.iterator();
@@ -477,19 +424,17 @@ public class HerderWorkGoal extends OrderedWorkGoal {
             }
             if (done) {
                 a.setPersistenceRequired();
-                a.removeData(BannerboundCore.HERDED_BY.get());   // penned now — stays domesticated
+                a.removeData(BannerboundCore.HERDED_BY.get());
                 it.remove();
-                leadStall = 0;                                   // progress — the lead isn't stalled
+                leadStall = 0;
                 citizen.grantJobXp(JOB_TYPE_ID, 0.5F, "herd");
             }
         }
         if (batch.isEmpty()) { assess(sl); return; }
         if (posted && ++leadStall > LEAD_STALL_LIMIT) { placeBatch(sl); return; }
-        if (++leadTicks > LEAD_TIMEOUT) placeBatch(sl);          // couldn't walk them all in → place remainder
+        if (++leadTicks > LEAD_TIMEOUT) placeBatch(sl);
     }
 
-    /** Fallback for any followers that never managed to walk in (lead timed out): teleport the remainder
-     *  onto interior cells near the centre and release them. The normal path is walking in via nav. */
     private void placeBatch(ServerLevel sl) {
         List<BlockPos> spots = centerCells(sl, pen, batch.size());
         for (int i = 0; i < batch.size(); i++) {
@@ -508,28 +453,20 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         assess(sl);
     }
 
-    // ─── Claim / follow helpers ────────────────────────────────────────────────────────────────────
-
-    /** Take this animal into the herd: mark it ours, calm it, and give it the follow goal so it WALKS to
-     *  the herder (the goal lives in the animal's own AI, so it beats wander; driving the nav from outside
-     *  got overridden and the animals never moved). */
     private void claim(Animal a) {
-        a.setData(BannerboundCore.HERDED_BY.get(), citizen.getId());   // synced → the client draws the rope
+        a.setData(BannerboundCore.HERDED_BY.get(), citizen.getId());
         domesticate(a);
         a.setPersistenceRequired();
         ensureFollowGoal(a);
         if (!batch.contains(a)) batch.add(a);
     }
 
-    /** Add {@link HerdFollowGoal} to the animal's own goalSelector if absent (claims don't persist a reload,
-     *  so it's re-added when the herder re-claims). Mirrors {@code PetBonding.ensureFollowGoal}. */
     private static void ensureFollowGoal(Animal a) {
         boolean present = a.goalSelector.getAvailableGoals().stream()
             .anyMatch(g -> g.getGoal() instanceof HerdFollowGoal);
         if (!present) a.goalSelector.addGoal(2, new HerdFollowGoal(a));
     }
 
-    /** Free every current follower (clear the claim). No leash to drop — that's the whole point. */
     private void releaseBatch() {
         for (Animal a : batch) if (a.isAlive()) a.removeData(BannerboundCore.HERDED_BY.get());
         batch.clear();
@@ -542,64 +479,42 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         });
     }
 
-    /** True if some LIVING herder currently claims this animal (so others don't poach an in-progress
-     *  catch). A claim whose herder is gone reads as free, which self-heals orphaned claims. */
     private boolean isClaimed(ServerLevel sl, Animal a) {
         Integer h = a.getExistingDataOrNull(BannerboundCore.HERDED_BY.get());
         return h != null && h != 0 && sl.getEntity(h) instanceof CitizenEntity c && c.isAlive();
     }
 
-    /** Max animals this pen holds — the pen's size-units divided by this animal's size cost (min 2). */
     private int capacity(ServerLevel sl) {
         return PenEnclosure.stats(sl, pen).capacity(animalSize(herdType));
     }
 
-    /** Per-animal "size" cost against pen capacity: large animals (cow, horse) take the configured
-     *  footprint (default 3); the rest take 1. */
     public static int animalSize(EntityType<?> type) {
         return (type == EntityType.COW || type == EntityType.HORSE)
             ? com.bannerbound.core.Config.HERDER_PEN_LARGE_FOOTPRINT.get() : 1;
     }
 
-    /** Per-animal FOOD size — how much passive settlement food this species is worth (see
-     *  {@link HerderFoodBonus}). Distinct from {@link #animalSize} (pen-capacity footprint): chicken = 1,
-     *  cow/sheep/pig = 2, horse = 3. */
     public static int foodSize(EntityType<?> type) {
         if (type == EntityType.HORSE) return 3;
         if (type == EntityType.COW || type == EntityType.SHEEP || type == EntityType.PIG) return 2;
-        return 1;   // chicken (and any other small/unknown penned animal)
+        return 1;
     }
 
-    // ─── Pen geometry / queries ────────────────────────────────────────────────────────────────────
-
-    /** Is the animal "in the pen" for MEMBERSHIP (counting the herd, escapee detection)? Uses a generous
-     *  1-block margin so an animal hugging the edge / straddling a boundary cell still counts as inside —
-     *  NOT used for deciding what to bring in (that's {@link #strictInside}). */
     private boolean insidePen(Animal a) {
         return nearInterior(a.getX(), a.blockPosition().getY(), a.getZ(), 1.0);
     }
 
-    /** Strict membership: the animal's centre is on an interior cell (margin 0). Used for "bring this in?"
-     *  (findWild — so a wild animal right outside the fence is still corralled). */
     private boolean strictInside(Animal a) {
         return nearInterior(a.getX(), a.blockPosition().getY(), a.getZ(), 0.0);
     }
 
-    /** Lenient "arrived → release it": a half-block margin so an animal whose centre is straddling the
-     *  boundary cell (or has stopped just shy of the centre-posted herder) is freed, instead of staying
-     *  herded forever waiting to stand dead-centre on an interior cell. Kept separate from {@link
-     *  #strictInside} so findWild's corral test stays at margin 0. */
     private boolean arrivedInside(Animal a) {
         return nearInterior(a.getX(), a.blockPosition().getY(), a.getZ(), 0.5);
     }
 
-    /** True if the herder itself is inside the pen (precise — half-block margin). */
     private boolean insideHerder() {
         return nearInterior(citizen.getX(), citizen.blockPosition().getY(), citizen.getZ(), 0.5);
     }
 
-    /** True if any interior column lies within {@code margin} blocks of the (x,z) centre at the entity's
-     *  feet level (or the cell below it, since mobs stand on the floor). */
     private boolean nearInterior(double x, int feetY, double z, double margin) {
         int cx0 = (int) Math.floor(x - margin), cx1 = (int) Math.floor(x + margin);
         int cz0 = (int) Math.floor(z - margin), cz1 = (int) Math.floor(z + margin);
@@ -614,7 +529,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         return false;
     }
 
-    /** The fence gate on the pen's boundary nearest the herder (rope or vanilla), or null. */
     private BlockPos findGate(ServerLevel sl, PenEnclosure.Result r) {
         BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos();
         BlockPos best = null;
@@ -633,11 +547,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         return best;
     }
 
-    /** The cell one block OUTSIDE ({@code inside=false}) or INSIDE ({@code inside=true}) the gate, along the
-     *  gate's OPENING axis (its {@code FACING}, not the diagonal to the centre). A gate only opens
-     *  orthogonally, so the approach cells must sit on that axis — otherwise a straight walk through it hits a
-     *  fence post beside the gate. The inward side is whichever facing-neighbour is nearer the pen centre.
-     *  Null if no gate / no facing. */
     private BlockPos gateApproach(ServerLevel sl, boolean inside) {
         if (gatePos == null) return null;
         BlockState gs = sl.getBlockState(gatePos);
@@ -648,8 +557,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         net.minecraft.core.Direction inward = facingInward ? facing : facing.getOpposite();
         return gatePos.relative(inside ? inward : inward.getOpposite());
     }
-
-    // ─── Spawn fallback ────────────────────────────────────────────────────────────────────────────
 
     private void tickSpawning(ServerLevel sl) {
         int have = penHerd(sl, pen).size();
@@ -663,14 +570,13 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         swingEvery(sl, 8);
         if (++workTicks < skilledWorkTicks(SPAWN_WORK_TICKS)) return;
         spawnAdult(sl, pen);
-        citizen.getPersistentData().putLong(SPAWN_AT_KEY, sl.getGameTime()); // start the half-day cooldown
+        citizen.getPersistentData().putLong(SPAWN_AT_KEY, sl.getGameTime());
         citizen.grantJobXp(JOB_TYPE_ID, 0.5F, "herd");
         citizen.consumeStamina(1);
         workTicks = 0;
         assess(sl);
     }
 
-    /** Whether the spawn-pair fallback is off cooldown (half an MC day since the last one). */
     private boolean spawnReady(ServerLevel sl) {
         if (!citizen.getPersistentData().contains(SPAWN_AT_KEY)) return true;
         return sl.getGameTime() - citizen.getPersistentData().getLong(SPAWN_AT_KEY) >= SPAWN_COOLDOWN;
@@ -694,10 +600,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         }
     }
 
-    // ─── Cull + harvest (actual melee kill; drops route through LivingDropsEvent) ────────────────
-
-    /** Pick the nearest mature surplus animal once the adult count is above the configured keep threshold.
-     *  Capacity is not involved here: the pen still fills to capacity; this only decides slaughter income. */
     private Animal selectCullTarget(List<Animal> herd, int keepAdults) {
         int adults = 0;
         for (Animal a : herd) if (a.isAlive() && !a.isBaby()) adults++;
@@ -734,8 +636,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
             citizen.grantJobXp(JOB_TYPE_ID, 1.0F, "herd");
             citizen.consumeStamina(1);
             bumpKills(sl, 1);
-            // Statistic: credit the "livestock" source with this cull's food yield (by animal food-size,
-            // chicken=1 … horse=3), so crisis objectives / stats know how much food the pens have raised.
             if (citizen.getSettlement() != null) {
                 citizen.getSettlement().addFoodProduced("livestock", foodSize(cullTarget.getType()));
             }
@@ -745,7 +645,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         }
     }
 
-    /** Add to the pen marker's kill counter (packed in seedItemId) and re-broadcast for the rod readout. */
     private void bumpKills(ServerLevel sl, int add) {
         BlockSelection sel = penMarkerAt(sl);
         if (sel == null) return;
@@ -754,10 +653,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
             sel.withSeed(packPen(penAnimalId(packed), penKills(packed) + add, penKeep(packed))));
         SelectionBroadcaster.broadcast(sl.getServer());
     }
-
-    // ─── Breed ───────────────────────────────────────────────────────────────────────────────────
-    // The herder has feed on hand (like a farmer with seeds) — no food chest needed. It tends the pair
-    // (sets them in love); whether a baby is actually born is the global chance roll in BreedingEvents.
 
     private void tickToBreed(ServerLevel sl) {
         if (breedA == null || breedB == null || !breedA.isAlive() || !breedB.isAlive()
@@ -777,12 +672,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         assess(sl);
     }
 
-    // ─── Muck out (clear manure that fouls the pen's fertility) ──────────────────────────────────
-
-    /** Walk to the targeted manure block and clear it (the dung goes to the harvest storage, like a
-     *  cull's loot). Re-targets if the block is already gone; re-assesses when there's nothing left to
-     *  muck out. The herder reaches it from an adjacent floor cell (manure is non-colliding, in the air
-     *  cell above the floor). */
     private void tickCollectManure(ServerLevel sl) {
         if (manurePos == null || !sl.getBlockState(manurePos).is(BreedingEvents.MANURE)) {
             manurePos = findManure(sl, pen);
@@ -797,8 +686,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         }
     }
 
-    /** Nearest manure block sitting in the pen — droppings occupy the air cell ABOVE an interior floor
-     *  cell, so scan {@code interior().above()}. Null if the pen is clean. */
     private BlockPos findManure(ServerLevel sl, PenEnclosure.Result r) {
         BlockPos best = null;
         double bestD = Double.MAX_VALUE;
@@ -811,14 +698,12 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         return best;
     }
 
-    /** Break a manure block, routing its drops (dung) into the marked harvest storage — overflow / no
-     *  storage spills at the pen so the cleanup still happens. */
     private void collectManure(ServerLevel sl, BlockPos pos) {
         BlockState st = sl.getBlockState(pos);
         if (!st.is(BreedingEvents.MANURE)) return;
         List<ItemStack> drops = Block.getDrops(st, sl, pos, null);
         sl.removeBlock(pos, false);
-        sl.levelEvent(2001, pos, Block.getId(st));   // block-break particles + sound
+        sl.levelEvent(2001, pos, Block.getId(st));
         Container harvest = DropOffContainers.resolveOrPreferred(citizen, citizen.getDropOff());
         for (ItemStack drop : drops) {
             ItemStack rem = harvest != null ? DropOffContainers.insert(harvest, drop) : drop;
@@ -828,14 +713,10 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         citizen.consumeStamina(1);
     }
 
-    // ─── Helpers ─────────────────────────────────────────────────────────────────────────────────
-
     private void holdRope() {
         citizen.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, citizen.getJobTool().copy());
     }
 
-    /** Held item mirrors the current chore: feed while luring/breeding, blade while culling, rope otherwise.
-     *  Only re-equips on a real change so it doesn't re-sync to clients every tick. */
     private void equipForPhase() {
         net.minecraft.world.item.ItemStack want = switch (phase) {
             case COLLECT, LEAD, TO_BREED -> catalystFor(herdType);
@@ -877,31 +758,25 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         }
     }
 
-    /** The food a herder visually holds to lure each species. Purely cosmetic — the follow is driven by the
-     *  claim, not this item — so it's just an era-appropriate "luring" prop (no golden carrots in 13,529 BC). */
     private static net.minecraft.world.item.ItemStack catalystFor(EntityType<?> type) {
         net.minecraft.world.item.Item food;
         if (type == EntityType.PIG) food = net.minecraft.world.item.Items.CARROT;
         else if (type == EntityType.CHICKEN) food = net.minecraft.world.item.Items.WHEAT_SEEDS;
-        else food = net.minecraft.world.item.Items.WHEAT;   // cow, sheep, mooshroom, horse, default — grain/hay
+        else food = net.minecraft.world.item.Items.WHEAT;
         return new net.minecraft.world.item.ItemStack(food);
     }
 
     private void lookAndApproach(BlockPos pos) {
         citizen.getLookControl().setLookAt(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5);
-        // Re-issue on a cadence (not only when the path completes): the first path to an interior cell
-        // may have been computed before the gate opened and stalls at it; re-pathing recomputes a route
-        // through the now-open gate.
+        // Re-path on a cadence, not just when nav is done: a route computed before the gate opened stalls at it.
         if (citizen.getNavigation().isDone() || citizen.tickCount % 15 == 0) {
             citizen.getNavigation().moveTo(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, skilledSpeed());
         }
     }
 
-    /** Server-side hard teleport (sets position and resets interpolation) — the corral's reliable finish.
-     *  Tags the entity so the rope-fence collision accepts the cross-rope jump instead of bouncing it back
-     *  to where it came from (which was ejecting placed animals and the herder right back out of the pen). */
     private static void teleport(net.minecraft.world.entity.Entity e, double x, double y, double z) {
         e.teleportTo(x, y, z);
+        // Tag the entity so rope-fence collision accepts this cross-rope jump instead of bouncing it back.
         e.getPersistentData().putLong(TELEPORT_AT, e.level().getGameTime());
     }
 
@@ -911,30 +786,23 @@ public class HerderWorkGoal extends OrderedWorkGoal {
     }
 
     private List<Animal> penHerd(ServerLevel sl, PenEnclosure.Result r) {
-        // Count by ACTUAL interior membership (with the 0.5 margin), not the bounding box — an irregular
-        // (L-shaped) pen's box covers ground outside the rope, where animals would be miscounted as in.
         return sl.getEntitiesOfClass(Animal.class, r.bounds().inflate(1.0, 2.0, 1.0),
             a -> a.isAlive() && a.getType() == herdType && insidePen(a));
     }
 
-    /** Nearest wild (un-penned, un-domesticated, un-leashed) animal of the herd kind within range —
-     *  any age (the herder brings the whole local herd in). Domestication already excludes claimed stock. */
     private Animal findWild(ServerLevel sl, PenEnclosure.Result r) {
         AABB search = r.bounds().inflate(CAPTURE_RADIUS, 8.0, CAPTURE_RADIUS);
         Animal best = null;
         double bestD = Double.MAX_VALUE;
         for (Animal a : sl.getEntitiesOfClass(Animal.class, search,
                 a -> a.isAlive() && a.getType() == herdType && !a.isLeashed() && !isDomesticated(a))) {
-            if (strictInside(a)) continue;   // genuinely in the pen — strict, so edge-outside wild stock IS brought in
+            if (strictInside(a)) continue;
             double d = citizen.distanceToSqr(a);
             if (d < bestD) { bestD = d; best = a; }
         }
         return best;
     }
 
-    /** Nearest DOMESTICATED animal of the herd kind that's near this pen but OUTSIDE it and not already
-     *  being herded — an escapee to round up. By proximity (not a stored home-pen id) so it survives pens
-     *  being relocated or rebuilt: whatever herder works a valid pen re-corrals the stock near it. */
     private Animal findEscaped(ServerLevel sl, PenEnclosure.Result r) {
         AABB search = r.bounds().inflate(ESCAPE_RADIUS, 12.0, ESCAPE_RADIUS);
         Animal best = null;
@@ -942,19 +810,13 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         for (Animal a : sl.getEntitiesOfClass(Animal.class, search,
                 a -> a.isAlive() && a.getType() == herdType && !a.isLeashed()
                     && isDomesticated(a) && !isClaimed(sl, a))) {
-            if (insidePen(a)) continue;   // still inside → fine
+            if (insidePen(a)) continue;
             double d = citizen.distanceToSqr(a);
             if (d < bestD) { bestD = d; best = a; }
         }
         return best;
     }
 
-    /** Where the herder posts to lure the flock in: the interior cell JUST INSIDE the gate. The animals
-     *  follow the herder with their OWN navigation (like a player luring with wheat), and that only works
-     *  reliably for a SHORT, direct crossing — leading to the deep centre across the pen's water gave the
-     *  animal's nav an unsolvable path. Posting one block inside the gate keeps the crossing to the single
-     *  hop through the opening, exactly the path a tempted cow takes for a player. Falls back to a centre
-     *  cell if that cell isn't a valid stand. */
     private BlockPos findDropCell(ServerLevel sl, PenEnclosure.Result r) {
         BlockPos in = gateApproach(sl, true);
         if (in != null && r.interior().contains(in)
@@ -967,7 +829,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         return spots.isEmpty() ? penCenter() : spots.get(0);
     }
 
-    /** Up to {@code n} distinct interior cells nearest the centre with a solid floor and air above. */
     private List<BlockPos> centerCells(ServerLevel sl, PenEnclosure.Result r, int n) {
         BlockPos focus = penCenter();
         List<BlockPos> cells = new ArrayList<>();
@@ -986,9 +847,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         return a.isAlive() && !a.isBaby() && a.getAge() == 0 && a.canFallInLove() && !a.isInLove();
     }
 
-    /** Has the herder's settlement researched Animal Husbandry? Gates the herder's breeding behind the same
-     *  {@code bannerbound.allow_animal_breeding} flag the player-feed path uses ({@link com.bannerbound.core
-     *  .event.VanillaGates}). {@code hasFlag(null, …)} is false, so an unsettled herder can't breed. */
     private boolean hasBreedingResearch() {
         return com.bannerbound.core.api.research.ResearchManager.hasFlag(
             citizen.getSettlement(), com.bannerbound.core.event.VanillaGates.FLAG);
@@ -1000,47 +858,39 @@ public class HerderWorkGoal extends OrderedWorkGoal {
 
     private static void domesticate(Animal a) {
         a.getPersistentData().putBoolean(DOMESTICATED_TAG, true);
-        // Horses only breed (and obey setInLove) once TAMED — tame the herd's horses so the herder can
-        // actually breed them; otherwise the breeding event never fires (no baby, no smoke).
         if (a instanceof net.minecraft.world.entity.animal.horse.AbstractHorse h && !h.isTamed()) {
             h.setTamed(true);
         }
     }
 
-    /** Remove a pen's marker selection (its enclosure was destroyed) and re-broadcast. Null-safe. */
     private void removeMarker(ServerLevel sl, BlockSelection sel) {
         if (sel == null) return;
         BlockSelectionRegistry.get(sl).unregister(sel.rodId());
         SelectionBroadcaster.broadcast(sl.getServer());
     }
 
-    /** Pick which pen this herder works. Pens BOUND to a specific citizen are private to that citizen; OPEN
-     *  pens are workable by ANY herder but each is reserved ({@link PenClaims}) by at most one at a time, so
-     *  multiple herders spread across the open pens instead of clustering on the first. Preference: a pen
-     *  bound to me, then a pen I already hold, then the nearest fresh open pen (a recently-idled open pen is
-     *  deprioritised so a lone herder rotates across pens). Claims the chosen open pen before returning. */
     private BlockSelection findPenMarker(ServerLevel sl) {
         Settlement settlement = citizen.getSettlement();
         if (settlement == null) return null;
         long now = sl.getGameTime();
-        penCooldown.values().removeIf(t -> now >= t);   // drop expired entries so the map can't grow unbounded
+        penCooldown.values().removeIf(t -> now >= t);
         BlockSelection best = null;
         int bestScore = Integer.MAX_VALUE;
         double bestD = Double.MAX_VALUE;
         for (BlockSelection sel : BlockSelectionRegistry.get(sl).getForSettlement(settlement.id())) {
             if (sel.kind() != BlockSelection.Kind.WORKSTATION) continue;
             if (!SELECTION_TYPE.equals(sel.workstationType())) continue;
-            if (!sel.targetsCitizen(citizen.getUUID())) continue;   // a pen bound to someone else → not mine
+            if (!sel.targetsCitizen(citizen.getUUID())) continue;
             BlockPos a = new BlockPos(sel.minX(), sel.minY(), sel.minZ());
             boolean open = sel.targetsAllWorkers();
             int score;
             if (!open) {
-                score = 0;                                          // bound to me → always my top priority
+                score = 0;
             } else {
-                if (PenClaims.isClaimedByOther(sl, a, citizen.getId())) continue;   // another herder has it
-                score = PenClaims.ownedBy(a, citizen.getId()) ? 1 : 2;             // prefer the one I already hold
+                if (PenClaims.isClaimedByOther(sl, a, citizen.getId())) continue;
+                score = PenClaims.ownedBy(a, citizen.getId()) ? 1 : 2;
                 Long until = penCooldown.get(a.asLong());
-                if (until != null && now < until) score += 10;      // just idled here → try elsewhere first
+                if (until != null && now < until) score += 10;
             }
             double d = citizen.distanceToSqr(a.getX() + 0.5, a.getY(), a.getZ() + 0.5);
             if (score < bestScore || (score == bestScore && d < bestD)) {
@@ -1053,8 +903,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         return best;
     }
 
-    /** The marker for THIS herder's current pen ({@link #anchor}), without the claim side-effect of
-     *  {@link #findPenMarker} — for reading live pen data (keep target, kills) during work. */
     private BlockSelection penMarkerAt(ServerLevel sl) {
         if (anchor == null) return null;
         Settlement settlement = citizen.getSettlement();
@@ -1068,21 +916,16 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         return null;
     }
 
-    /** How many ADULTS the herder keeps alive before butchering surplus. Breeding/collecting still fill to
-     *  full pen capacity; this threshold only controls mature-animal harvest income. */
     private int adultKeepTarget(ServerLevel sl, int cap) {
         BlockSelection sel = penMarkerAt(sl);
         int keep = sel == null ? 0 : penKeep(sel.seedItemId());
         return keep <= 0 ? cap : Math.max(2, Math.min(keep, cap));
     }
 
-    // ─── Pen marker packing: seedItemId stores "<animalId>|<kills>|<keep>" ───────────────────────────
-
     public static String packPen(String animalId, int kills) {
         return packPen(animalId, kills, 0);
     }
 
-    /** {@code keep} = the player's "keep how many adults alive" threshold (0 = Auto → full capacity). */
     public static String packPen(String animalId, int kills, int keep) {
         return animalId + "|" + kills + "|" + keep;
     }
@@ -1097,13 +940,10 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         return packedInt(packed, 1);
     }
 
-    /** The player's "keep how many adults alive" threshold for the pen (0 = Auto → full capacity). */
     public static int penKeep(String packed) {
         return packedInt(packed, 2);
     }
 
-    /** Parse the int at {@code index} of the "|"-packed seedItemId; 0 if absent/unparseable (back-compat with
-     *  old 2-field "animalId|kills" markers, which read keep as 0). */
     private static int packedInt(String packed, int index) {
         if (packed == null) return 0;
         String[] parts = packed.split("\\|");
@@ -1115,7 +955,6 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         }
     }
 
-    /** The animal {@link EntityType} a pen marker is set to raise (parsed from its packed seedItemId). */
     @SuppressWarnings("unchecked")
     public static EntityType<? extends Animal> animalFromMarker(BlockSelection sel) {
         if (sel == null) return null;

@@ -21,27 +21,27 @@ import net.minecraft.world.level.block.Blocks;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Server-authoritative driver for the mason's-bench chisel-strike minigame — the stone analogue of
- * {@link Carpentry}. Holds one in-flight session per player (bench pos), opens the client minigame,
- * and on completion outputs the whole build list while consuming only the stone it cost. The
- * minigame is non-skill, so there's no quality roll and no forfeit: a cancel leaves the budget +
- * list exactly as they were.
+ * Server-authoritative driver for the mason's-bench chisel-strike minigame -- the stone analogue of
+ * {@link Carpentry}. Holds one in-flight session per player keyed on player UUID (SESSIONS, server
+ * thread only), opens the client minigame, and on completion outputs the whole build list while
+ * consuming only the stone it cost. Strike count scales with the total base stone the batch consumes,
+ * clamped to [MIN_STRIKES, MAX_STRIKES]. The minigame is non-skill, so there's no quality roll and no
+ * forfeit: a cancel leaves the budget + list exactly as they were. A REMOVE_QUEUE action is a direct
+ * in-world edit of the bench list with no chisel session involved. The bench pos is work-locked for
+ * the session's duration and released on completion, cancel, disconnect, or bench break.
  */
 @ApiStatus.Internal
 public final class Masonry {
     private Masonry() {
     }
 
-    /** Chisel strikes for the smallest batch, and the cap for the largest. */
     private static final int MIN_STRIKES = 4;
     private static final int MAX_STRIKES = 24;
 
     private record Session(BlockPos pos, int strikes, long startTime) {}
 
-    /** Active sessions keyed by player UUID (server thread only). */
     private static final Map<UUID, Session> SESSIONS = new HashMap<>();
 
-    /** Opens the chisel minigame for {@code player} on the bench at {@code pos} (list non-empty). */
     public static void startChiseling(ServerPlayer player, BlockPos pos, MasonsBenchBlockEntity be) {
         int strikes = strikesFor(be);
         SESSIONS.put(player.getUUID(),
@@ -50,7 +50,6 @@ public final class Masonry {
         PacketDistributor.sendToPlayer(player, new OpenMasonChiselPayload(pos, strikes));
     }
 
-    /** Strikes scale with the total base stone the batch consumes, clamped to [MIN, MAX]. */
     private static int strikesFor(MasonsBenchBlockEntity be) {
         int materials = 0;
         for (MasonsBenchBlockEntity.ListEntry e : be.getBuildList()) {
@@ -59,9 +58,7 @@ public final class Masonry {
         return Math.max(MIN_STRIKES, Math.min(MAX_STRIKES, MIN_STRIKES + materials / 2));
     }
 
-    /** Handles a client mason's-bench action (chisel COMPLETE/CANCEL, or an in-world queue removal). */
     public static void handleAction(ServerPlayer player, MasonryActionPayload payload) {
-        // Queue removal is a direct in-world edit — no chisel session involved.
         if (payload.action() == MasonryActionPayload.REMOVE_QUEUE) {
             BlockPos pos = payload.pos();
             if (!player.level().isLoaded(pos)) return;
@@ -94,7 +91,6 @@ public final class Masonry {
         SESSIONS.remove(player.getUUID());
     }
 
-    /** Drops a disconnecting player's session (nothing was consumed — the list stays on the bench). */
     public static void onPlayerDisconnect(ServerPlayer player) {
         Session session = SESSIONS.remove(player.getUUID());
         if (session != null) {
@@ -102,7 +98,6 @@ public final class Masonry {
         }
     }
 
-    /** Drops any session anchored at {@code pos} (the bench was broken) and clears its work lock. */
     public static void abortSessionAt(BlockPos pos) {
         SESSIONS.values().removeIf(s -> s.pos().equals(pos));
         com.bannerbound.core.api.workshop.WorkBlockLocks.forceUnlock(pos);

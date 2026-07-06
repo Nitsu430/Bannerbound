@@ -18,25 +18,59 @@ import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * All faith mutations + the devotion tick (FAITH_PLAN.md). Mirrors the
+ * All faith mutations plus the per-tick devotion loop (FAITH_PLAN.md). Mirrors the
  * SettlementManager/CultureManager split: settlements reference faiths by UUID, the
- * cross-faction {@link Faith} objects live in {@link FaithData}, and every change runs
- * through here so persistence + client sync stay consistent.
+ * cross-faction {@link Faith} objects live in {@link FaithData}, and every change funnels
+ * through here so persistence and client sync stay consistent. tickAll runs once per
+ * server tick (from ResearchEvents): it accrues each settlement's devotion stockpile
+ * (citizens x 0.01/s + player members x 0.05/s + any KINSHIP-god self-boost, so a faith
+ * grows with citizens AND players AND territory, not just town count), refreshes each
+ * member's transient FaithEffects bundle once a second (self-heals after world load and
+ * any missed mutation path), fills the faith's active tree node from the pooled member
+ * RATE (the stockpile is untouched - it pays for deeds like constellations), and
+ * broadcasts state to members once a second.
  *
- * <p>The founding vote copies the Choose-Government machinery: every online member votes,
- * majority wins, ties broadcast "divided" and reset. Options are string keys —
- * {@code found:ASTROLOGY}, {@code found:TOTEMIC}, {@code adopt:<faithUuid>} — so adopting
- * any existing faith rides the same vote as founding a new one.
+ * <p>The faith tree is per-FAITH shared progress (FAITH_PLAN Part 2.5): completed nodes
+ * apply to EVERY member settlement - the cross-faction payoff. Nodes tagged with the other
+ * path are invisible AND unresearchable. Enqueue mirrors CultureManager.tryEnqueue: a
+ * click toggles the active/queued node off (progress preserved), otherwise the node is
+ * appended behind its unmet prerequisites (DFS post-order); faith research deliberately
+ * runs in parallel with science/culture. Age gates use the faith's MOST progressed member
+ * settlement. The nested ResearchManagerResult enum mirrors ResearchManager.StartResult
+ * so api.faith does not reach into its twin.
+ *
+ * <p>Governance gates WHO acts everywhere (founding, adoption, abandonment,
+ * constellations): under CHIEFDOM the chief decides alone, with no government the owner
+ * does; under COUNCIL the Choose-Faith vote copies the government-vote machinery - every
+ * online member votes (votes lock, no retraction; offline members forfeit), plurality
+ * with a majority threshold and a strict winner, ties broadcast "divided" and reset.
+ * Options are string keys - {@code found:ASTROLOGY}, {@code found:TOTEMIC},
+ * {@code adopt:<faithUuid>} - so adopting an existing faith rides the same vote as
+ * founding a new one. Abandoning under COUNCIL is a yes-only tally that resolves once
+ * half the online members have clicked (closing the screen = abstain). Founding requires
+ * a name at cast time; the server re-validates every client-checked rule because packets
+ * can be tampered.
+ *
+ * <p>Constellations (FAITH_PLAN M2, ASTROLOGY only) are server-authoritative, first
+ * confirm wins: Star Charts flag, 3-12 valid unclaimed star ids, per-faith name/deity
+ * uniqueness, pantheon cap (base 1 + one slot per completed node carrying
+ * bannerbound.pantheon_slot), devotion cost of CONSTELLATION_BASE_COST x N for the Nth
+ * god paid from the SUBMITTER settlement's stockpile, and at least one typed star (every
+ * god has a domain). Domain profile: primary = dominant star type, secondary = second
+ * type with >= 2 stars; ties currently resolve in enum order (a drawer-picks tie UI is
+ * later polish). Forgetting a god returns its stars to the pool but refunds no devotion.
+ * sky() caches the server's authoritative SkyField - the same seed+calendar the clients
+ * render.
+ *
+ * <p>Apostasy (leaveFaith) severs membership, wipes ALL stored devotion, gives every
+ * citizen a FORSOOK_THE_GODS thought, and starts a rejoin cooldown before the
+ * Choose-Faith window reopens; faiths left with no members are deleted. resetReligion
+ * (op/debug) strips the same state but leaves faithFoundingUnlocked untouched, so the
+ * window reopens if Spiritualism is researched.
  */
 public final class FaithManager {
-    /** M1 devotion source: a flat trickle per believer citizen. Shrine-appeal multipliers
-     *  and capacity arrive with the shrine milestone (see the plan). */
     public static final double DEVOTION_PER_CITIZEN_PER_SECOND = 0.01;
-    /** Each player who follows the faith (a member of a faithful settlement) adds a stronger trickle
-     *  on top of their settlement's believer citizens — so a faith with more human followers, not just
-     *  more towns, accrues devotion faster. */
     public static final double DEVOTION_PER_PLAYER_PER_SECOND = 0.05;
-    /** Same majority rule as the government vote. */
     private static final double FAITH_VOTE_THRESHOLD_RATIO = 0.5;
 
     public static final String OPTION_FOUND_ASTROLOGY = "found:ASTROLOGY";
@@ -79,21 +113,13 @@ public final class FaithManager {
         return maxAge >= def.minAge().ordinal();
     }
 
-    // ── Devotion tick ────────────────────────────────────────────────────────────
-
     public static double devotionPerSecond(Settlement s) {
         if (!s.hasFaith()) return 0.0;
-        // Stacks on three axes: believer citizens (population), the settlement's human followers
-        // (its members — so two players sharing a town out-faith a lone founder), and any KINSHIP-god
-        // self-boost from the pantheon. Summed per-settlement, faithDevotionPerSecond pools it across
-        // every town, so a faith grows with citizens AND players AND territory — not just town count.
         return s.population() * DEVOTION_PER_CITIZEN_PER_SECOND
             + s.members().size() * DEVOTION_PER_PLAYER_PER_SECOND
             + s.faithEffects().devotion();
     }
 
-    /** Recompute the passive bundle for every member of {@code faith} (instant feedback on
-     *  pantheon change). FAITH_PLAN Part 3 — effects apply to ALL member settlements. */
     public static void recomputeFaithEffects(MinecraftServer server, Faith faith) {
         if (faith == null) return;
         SettlementData data = SettlementData.get(server.overworld());
@@ -103,9 +129,6 @@ public final class FaithManager {
         }
     }
 
-    /** Called once per server tick (ResearchEvents). Accrues devotion for every faithful
-     *  settlement, fills each faith's active tree node from its summed member rate, and
-     *  broadcasts faith state to members once per second. */
     public static void tickAll(MinecraftServer server) {
         if (server == null) return;
         if (server.overworld() == null) return;
@@ -116,8 +139,6 @@ public final class FaithManager {
 
         for (Settlement s : data.all()) {
             if (s.hasFaith()) {
-                // Refresh the passive bundle once a second — self-heals after world load
-                // (transient bundle starts empty) and any missed mutation path.
                 if (broadcastTick) {
                     Faith faith = FaithData.get(server.overworld()).byId(s.faithId());
                     FaithEffects.computeInto(s.faithEffects(), faith);
@@ -134,8 +155,6 @@ public final class FaithManager {
         }
         if (anyChange) data.setDirty();
 
-        // Faith tree: per-FAITH shared progress — the RATE fills the active node (the
-        // stockpile above is untouched; it pays for deeds). FAITH_PLAN Part 2.5.
         FaithData faiths = FaithData.get(server.overworld());
         boolean faithChange = false;
         for (Faith faith : faiths.all()) {
@@ -171,9 +190,6 @@ public final class FaithManager {
         if (faithChange) faiths.setDirty();
     }
 
-    // ── Faith tree (per-FAITH shared progress — FAITH_PLAN Part 2.5) ─────────────
-
-    /** Total devotion rate pooling into the faith from ALL member settlements. */
     public static double faithDevotionPerSecond(MinecraftServer server, Faith faith) {
         SettlementData data = SettlementData.get(server.overworld());
         double total = 0.0;
@@ -196,7 +212,6 @@ public final class FaithManager {
             com.bannerbound.core.api.research.data.FaithTreeLoader.get(researchId);
         if (def == null) return ResearchManagerResult.UNKNOWN;
         if (faith.completedResearches().contains(researchId)) return ResearchManagerResult.ALREADY_COMPLETE;
-        // Path gate: the other path's branch is invisible AND unresearchable.
         if (def.faithPath() != null && def.faithPath() != faith.path()) return ResearchManagerResult.UNKNOWN;
         for (String prereq : def.prerequisites()) {
             if (!faith.completedResearches().contains(prereq)) return ResearchManagerResult.PREREQ_MISSING;
@@ -208,12 +223,8 @@ public final class FaithManager {
         return ResearchManagerResult.OK;
     }
 
-    /** Mirror of ResearchManager.StartResult, local so api.faith doesn't reach into its twin. */
     public enum ResearchManagerResult { OK, UNKNOWN, ALREADY_COMPLETE, PREREQ_MISSING, AGE_LOCKED, NOT_IN_SETTLEMENT }
 
-    /** Right-click enqueue, mirroring CultureManager.tryEnqueue: toggle off active/queued,
-     *  else append the node behind its unmet prerequisites (DFS post-order). No mutual
-     *  exclusion — faith research runs in parallel with science/culture by design. */
     public static com.bannerbound.core.api.research.ResearchManager.EnqueueResult
             tryEnqueueFaithResearch(ServerPlayer player, String researchId) {
         MinecraftServer server = player.getServer();
@@ -234,7 +245,6 @@ public final class FaithManager {
         if (faith.completedResearches().contains(researchId)) {
             return com.bannerbound.core.api.research.ResearchManager.EnqueueResult.ALREADY_COMPLETE;
         }
-        // Toggle: clicking active drops it (progress preserved); clicking queued removes it.
         if (researchId.equals(faith.activeResearch())) {
             faith.setActiveResearch(null);
             promoteFaithQueue(server, faith);
@@ -287,8 +297,6 @@ public final class FaithManager {
         return true;
     }
 
-    /** Promotes the first runnable queued node. Age gate uses the faith's MOST progressed
-     *  member settlement — the furthest believer defines what the faith can reach. */
     private static void promoteFaithQueue(MinecraftServer server, Faith faith) {
         int maxAge = 0;
         SettlementData data = SettlementData.get(server.overworld());
@@ -325,7 +333,6 @@ public final class FaithManager {
         faith.completedResearches().add(def.id());
         faith.researchProgress().remove(def.id());
         faith.setActiveResearch(null);
-        // Completed nodes apply to EVERY member settlement — the cross-faction payoff.
         SettlementData data = SettlementData.get(server.overworld());
         for (UUID memberId : faith.memberSettlements()) {
             Settlement member = data.getById(memberId);
@@ -340,7 +347,6 @@ public final class FaithManager {
         broadcastTreeState(server, faith);
     }
 
-    /** True while the settlement's faith has completed a node carrying {@code flag}. */
     public static boolean hasFaithFlag(MinecraftServer server, Settlement settlement, String flag) {
         if (settlement == null || !settlement.hasFaith()) return false;
         Faith faith = FaithData.get(server.overworld()).byId(settlement.faithId());
@@ -366,7 +372,6 @@ public final class FaithManager {
         }
     }
 
-    /** Login/datapack-sync push of the player's faith-tree state (no-op without a faith). */
     public static void sendTreeStateTo(MinecraftServer server, ServerPlayer player) {
         Settlement settlement = SettlementData.get(server.overworld()).getByPlayer(player.getUUID());
         if (settlement == null || !settlement.hasFaith()) return;
@@ -395,9 +400,6 @@ public final class FaithManager {
                 faith.firedInsights(), com.bannerbound.core.api.research.InsightManager.TreeType.FAITH));
     }
 
-    // ── Founding / adoption ──────────────────────────────────────────────────────
-
-    /** The Spiritualism feature fired: open the window + announce it. Idempotent. */
     public static void unlockFounding(MinecraftServer server, Settlement settlement) {
         if (settlement.faithFoundingUnlocked()) return;
         settlement.setFaithFoundingUnlocked(true);
@@ -438,24 +440,16 @@ public final class FaithManager {
             Component.translatable("bannerbound.faith.adopted", faith.name())
                 .withStyle(ChatFormatting.GREEN));
         playFanfare(server, settlement);
-        // Adopting an established faith inherits its drawn gods — apply their passives now.
         FaithEffects.computeInto(settlement.faithEffects(), faith);
         broadcastState(server, settlement);
         return true;
     }
 
-    // ── Constellations (FAITH_PLAN M2 — Pantheon mode) ──────────────────────────
-
-    /** Base pantheon size — research grows it (each completed faith node carrying the
-     *  {@code bannerbound.pantheon_slot} flag adds one god). */
     public static final int BASE_PANTHEON_CAP = 1;
     public static final String PANTHEON_SLOT_FLAG = "bannerbound.pantheon_slot";
-    /** Pantheon mode + constellation drawing unlock (granted by Star Charts). */
     public static final String STAR_CHARTS_FLAG = "bannerbound.star_charts";
-    /** Devotion cost of the Nth god: BASE × N — pantheons get pricier as they grow. */
     public static final double CONSTELLATION_BASE_COST = 25.0;
 
-    /** Research-driven pantheon cap: base 1 + one slot per completed pantheon_slot node. */
     public static int pantheonCap(Faith faith) {
         int cap = BASE_PANTHEON_CAP;
         for (String id : faith.completedResearches()) {
@@ -470,7 +464,6 @@ public final class FaithManager {
     private static long cachedSkySeed;
     private static int cachedSkyYear;
 
-    /** The server's authoritative sky — same seed+calendar the clients render. */
     public static com.bannerbound.core.celestial.SkyField sky(MinecraftServer server) {
         long seed = FaithData.get(server.overworld()).skySeed();
         int year = new com.bannerbound.core.celestial.WorldCalendar(
@@ -483,14 +476,6 @@ public final class FaithManager {
         return cachedSky;
     }
 
-    /**
-     * The confirm transaction (FAITH_PLAN: server is authoritative, first confirm wins).
-     * Governance gates WHO submits — chief/owner decide alone; COUNCIL currently lets any
-     * member confirm (the pick-one-of-N ballot is the next governance pass). Validation:
-     * astrology path, 3–12 stars, valid + unclaimed ids, pantheon cap, per-faith name
-     * uniqueness, devotion cost from the SUBMITTER settlement's stockpile, and at least
-     * one typed star (every god has a domain).
-     */
     public static void submitConstellation(ServerPlayer player, String rawName,
                                            String rawDeity, int[] starIds) {
         MinecraftServer server = player.getServer();
@@ -513,7 +498,6 @@ public final class FaithManager {
             }
         }
 
-        // Star Charts gates the drawing itself — the client checks too; reject tampering.
         if (!faith.completedResearches().contains("bannerboundantiquity:star_charts")
                 && !hasFaithFlag(server, settlement, STAR_CHARTS_FLAG)) {
             player.sendSystemMessage(Component.translatable("bannerbound.pantheon.uncharted")
@@ -542,7 +526,6 @@ public final class FaithManager {
         java.util.Set<Integer> seen = new java.util.HashSet<>();
         for (int id : starIds) {
             if (!sky.isValidStarId(id) || !seen.add(id) || faith.starUsed(id)) {
-                // "The heavens have shifted" — a star got claimed (or the packet is junk).
                 player.sendSystemMessage(Component.translatable("bannerbound.faith.constellation.star_taken")
                     .withStyle(ChatFormatting.YELLOW));
                 return;
@@ -555,9 +538,6 @@ public final class FaithManager {
                 return;
             }
         }
-        // Domain profile from typed members (hybrid rules: primary = dominant type,
-        // secondary = second type with ≥2 stars; ties resolve in enum order for now —
-        // the drawer-picks tie UI is later polish).
         java.util.Map<DeityDomain, Integer> counts = new java.util.EnumMap<>(DeityDomain.class);
         for (int id : starIds) {
             com.bannerbound.core.celestial.SkyField.Star typed = sky.typedStar(id);
@@ -611,8 +591,6 @@ public final class FaithManager {
         broadcastState(server, settlement);
     }
 
-    /** Forget a god (governance-gated like creation): the constellation fades, its stars
-     *  return to the sky's pool. No devotion refund — the gods do not give back. */
     public static void forgetConstellation(ServerPlayer player, String constellationId) {
         MinecraftServer server = player.getServer();
         if (server == null) return;
@@ -672,11 +650,11 @@ public final class FaithManager {
         }
     }
 
-    /** Login push (no-op for the faithless — they also get an empty list to clear stale state). */
     public static void sendConstellationsTo(MinecraftServer server, ServerPlayer player) {
         Settlement settlement = SettlementData.get(server.overworld()).getByPlayer(player.getUUID());
         Faith faith = settlement == null ? null
             : FaithData.get(server.overworld()).byId(settlement.faithId());
+        // Faithless players still get an empty payload so stale client constellations clear.
         PacketDistributor.sendToPlayer(player, faith == null
             ? new com.bannerbound.core.network.ConstellationsSyncPayload(new ArrayList<>())
             : buildConstellationsPayload(faith));
@@ -693,15 +671,11 @@ public final class FaithManager {
         return new com.bannerbound.core.network.ConstellationsSyncPayload(entries);
     }
 
-    /** The Choose-Faith window, including the apostasy rejoin cooldown. */
     public static boolean choiceWindowOpen(MinecraftServer server, Settlement settlement) {
         return settlement.faithChoiceWindowOpen()
             && server.overworld().getGameTime() >= settlement.faithRejoinAfterGameTime();
     }
 
-    /** A member clicked Abandon Faith. Chief/owner decide alone (like founding); under
-     *  COUNCIL it's a yes-only vote — resolution when half the online members have clicked
-     *  (closing the screen = abstain, mirroring the disband vote's shape). */
     public static void handleAbandonFaith(ServerPlayer player) {
         MinecraftServer server = player.getServer();
         if (server == null) return;
@@ -721,8 +695,7 @@ public final class FaithManager {
             leaveFaith(server, settlement);
             return;
         }
-        // COUNCIL: yes-only tally.
-        if (!settlement.abandonFaithVotes().add(player.getUUID())) return; // already voted
+        if (!settlement.abandonFaithVotes().add(player.getUUID())) return;
         int online = SettlementManager.countOnlineMembers(server, settlement);
         int needed = (int) Math.ceil(online * FAITH_VOTE_THRESHOLD_RATIO);
         int votes = 0;
@@ -738,9 +711,6 @@ public final class FaithManager {
         }
     }
 
-    /** Apostasy proper (FAITH_PLAN Part 1): membership severed, ALL devotion lost, every
-     *  citizen grieves ({@code FORSOOK_THE_GODS}), and a rejoin cooldown opens before the
-     *  Choose-Faith window returns. Empty faiths are deleted — gods fade unbelieved. */
     public static void leaveFaith(MinecraftServer server, Settlement settlement) {
         FaithData faiths = FaithData.get(server.overworld());
         Faith faith = faiths.byId(settlement.faithId());
@@ -768,9 +738,6 @@ public final class FaithManager {
         broadcastState(server, settlement);
     }
 
-    /** Op/debug (/bannerbound reset_religion): strips the settlement's faith — membership,
-     *  devotion, pending votes. The founding window REOPENS if Spiritualism is researched
-     *  (faithFoundingUnlocked is untouched). A faith with no members left is deleted. */
     public static boolean resetReligion(MinecraftServer server, Settlement settlement) {
         boolean hadAnything = settlement.hasFaith()
             || !settlement.faithVotes().isEmpty() || settlement.devotionStored() > 0.0;
@@ -790,8 +757,6 @@ public final class FaithManager {
         return hadAnything;
     }
 
-    /** found_religion.ogg at every online member's position — everyone hears the moment,
-     *  wherever they are (celebrateGovernmentEnacted pattern). */
     private static void playFanfare(MinecraftServer server, Settlement settlement) {
         for (UUID member : settlement.members()) {
             ServerPlayer p = server.getPlayerList().getPlayer(member);
@@ -801,8 +766,6 @@ public final class FaithManager {
                 net.minecraft.sounds.SoundSource.PLAYERS, 1.0f, 1.0f);
         }
     }
-
-    // ── The Choose-Faith vote (government-vote machinery) ───────────────────────
 
     public static void handleFaithVote(ServerPlayer player, String optionKey, String proposedName) {
         MinecraftServer server = player.getServer();
@@ -816,17 +779,12 @@ public final class FaithManager {
             return;
         }
         if (!isValidOption(server, optionKey)) return;
-        // Founding REQUIRES a name (the client enforces this too — reject tampered packets;
-        // no settlement worships at the altar of "<Town> Stars" by accident).
         if (optionKey.startsWith("found:") && (proposedName == null || proposedName.isBlank())) {
             player.sendSystemMessage(Component.translatable("bannerbound.faith.name.required")
                 .withStyle(ChatFormatting.YELLOW));
             return;
         }
 
-        // Government decides WHO chooses (FAITH_PLAN: governance gates who submits).
-        // CHIEFDOM → the Chief decides alone, instantly. No government yet → the owner.
-        // COUNCIL → majority vote of all online members.
         Settlement.Government gov = settlement.governmentType();
         if (gov == Settlement.Government.CHIEFDOM || gov == Settlement.Government.NONE) {
             java.util.UUID leader = gov == Settlement.Government.CHIEFDOM
@@ -840,7 +798,7 @@ public final class FaithManager {
             return;
         }
 
-        if (settlement.faithVotes().containsKey(player.getUUID())) return; // locked, no retract
+        if (settlement.faithVotes().containsKey(player.getUUID())) return;
         settlement.castFaithVote(player.getUUID(), optionKey, proposedName);
         tryResolveFaithVote(server, settlement, data);
     }
@@ -864,14 +822,12 @@ public final class FaithManager {
                                             SettlementData data) {
         int online = SettlementManager.countOnlineMembers(server, settlement);
         if (online <= 0) return;
-        // Wait until every online member has voted (offline members forfeit, same as government).
         for (UUID member : settlement.members()) {
             ServerPlayer p = server.getPlayerList().getPlayer(member);
             if (p != null && !settlement.faithVotes().containsKey(member)) return;
         }
         int needed = (int) Math.ceil(online * FAITH_VOTE_THRESHOLD_RATIO);
 
-        // Plurality across ALL options cast, majority threshold, strict winner.
         String winner = null;
         int winnerCount = 0;
         boolean tie = false;
@@ -897,8 +853,6 @@ public final class FaithManager {
         executeChoice(server, settlement, data, winner, settlement.faithNameProposalFor(winner));
     }
 
-    /** Final execution of a resolved choice — shared by the council vote and the
-     *  chief/owner direct pick. */
     private static void executeChoice(MinecraftServer server, Settlement settlement,
                                       SettlementData data, String optionKey, String name) {
         if (optionKey.startsWith(OPTION_ADOPT_PREFIX)) {
@@ -907,7 +861,7 @@ public final class FaithManager {
         } else {
             FaithPath path = OPTION_FOUND_TOTEMIC.equals(optionKey)
                 ? FaithPath.TOTEMIC : FaithPath.ASTROLOGY;
-            // Names are required at cast time; this fallback only guards data corruption.
+            // Name is required at cast time; this fallback only guards data corruption.
             String finalName = (name == null || name.isBlank())
                 ? settlement.name() + " Faith" : name.trim();
             foundFaith(server, settlement, path, finalName);
@@ -919,8 +873,6 @@ public final class FaithManager {
         return path == FaithPath.TOTEMIC
             ? "bannerbound.faith.path.totemic" : "bannerbound.faith.path.astrology";
     }
-
-    // ── Client sync ──────────────────────────────────────────────────────────────
 
     public static void broadcastState(MinecraftServer server, Settlement settlement) {
         FaithStatePayload payload = buildStatePayload(server, settlement);
@@ -945,7 +897,6 @@ public final class FaithManager {
             devotionPerSecond(settlement), false);
     }
 
-    /** Builds the Choose-Faith screen snapshot for one player: tallies + adoptable faiths. */
     public static OpenChooseFaithScreenPayload buildScreenPayload(MinecraftServer server,
                                                                   Settlement settlement,
                                                                   ServerPlayer player) {

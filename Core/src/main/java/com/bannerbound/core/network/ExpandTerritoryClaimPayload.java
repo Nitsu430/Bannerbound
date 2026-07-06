@@ -9,10 +9,11 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** Client → server. Sent when the player clicks a purchasable chunk in the
- *  ExpandTerritoryScreen. {@link #packedChunkPos} is a long-packed {@link
- *  net.minecraft.world.level.ChunkPos}; server re-validates all preconditions
- *  (adjacency, unclaimed, era cap, biome cost, item availability, population). */
+/**
+ * Client -> server. Sent when the player clicks a purchasable chunk in the ExpandTerritoryScreen.
+ * packedChunkPos is a long-packed ChunkPos; the server re-validates every precondition (adjacency,
+ * unclaimed, era cap, biome cost, item availability, population) and never trusts the client's pick.
+ */
 @ApiStatus.Internal
 public record ExpandTerritoryClaimPayload(long packedChunkPos) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<ExpandTerritoryClaimPayload> TYPE =

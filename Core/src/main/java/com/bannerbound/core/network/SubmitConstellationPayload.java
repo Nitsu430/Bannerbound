@@ -9,7 +9,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: a finished Pantheon-mode draft — constellation name, deity name, and the star id
+ * C->S: a finished Pantheon-mode draft - constellation name, deity name, and the star id
  * chain in draw order (FAITH_PLAN M2). The server is the final arbiter: governance gate,
  * star exclusivity, pantheon cap, devotion cost, domain computation all happen there.
  */

@@ -24,9 +24,16 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Datapack loader for Crafting Stone recipes — reads every JSON under
- * {@code data/<namespace>/crafting_stone_recipes/}. Server-side only (registered as a reload
- * listener in {@code AntiquityEvents}); results are synced to clients on the block entity itself.
+ * Datapack loader for Crafting Stone recipes - reads every JSON under
+ * {@code data/<namespace>/crafting_stone_recipes/}. Registered as a server reload listener in
+ * {@code AntiquityEvents}; results are synced to clients on the block entity itself, and
+ * {@code applyEntries} is public so the client jar loader ({@code ClientDatapackRecipes}) can
+ * re-read the same JSONs on remote clients, where server datapacks don't reach. {@code find}
+ * returns the recipe whose ingredient counts EXACTLY equal the pile; {@code candidates} returns
+ * recipes the pile could still BECOME - every placed item within its required count and at least
+ * one ingredient still missing (an exact match is the craftable result, not a candidate). An empty
+ * pile yields no candidates (no ghost spam on an empty stone), and candidates are sorted by result
+ * id so the renderer's ghost pick is stable across recomputes.
  */
 @ApiStatus.Internal
 public class CraftingStoneRecipeManager extends SimpleJsonResourceReloadListener {
@@ -43,8 +50,6 @@ public class CraftingStoneRecipeManager extends SimpleJsonResourceReloadListener
         applyEntries(entries);
     }
 
-    /** Parse + store the loaded entries. Public so the client-side jar loader can reuse it on remote
-     *  clients, where server datapacks don't reach (see {@code ClientDatapackRecipes}). */
     public static void applyEntries(Map<ResourceLocation, JsonElement> entries) {
         List<CraftingStoneRecipe> loaded = new ArrayList<>();
         for (Map.Entry<ResourceLocation, JsonElement> entry : entries.entrySet()) {
@@ -57,12 +62,10 @@ public class CraftingStoneRecipeManager extends SimpleJsonResourceReloadListener
         BannerboundAntiquity.LOGGER.info("Loaded {} crafting-stone recipe(s).", recipes.size());
     }
 
-    /** Every loaded crafting-stone recipe (for the crafter NPC's "what can I craft" scan). */
     public static List<CraftingStoneRecipe> all() {
         return recipes;
     }
 
-    /** The recipe whose ingredient counts EXACTLY equal the pile, or {@code null} if none. */
     @Nullable
     public static CraftingStoneRecipe find(List<ItemStack> contents) {
         Map<Item, Integer> placed = new HashMap<>();
@@ -92,10 +95,6 @@ public class CraftingStoneRecipeManager extends SimpleJsonResourceReloadListener
         return matched;
     }
 
-    /** Recipes the pile could still BECOME — every placed item appears in the recipe at no more
-     *  than its required count, and at least one ingredient is still missing (an exact match is the
-     *  craftable result, not a candidate). Empty pile → no candidates (no ghost spam on an empty
-     *  stone). Sorted by result id so the renderer's ghost pick is stable across recomputes. */
     public static List<CraftingStoneRecipe> candidates(List<ItemStack> contents) {
         Map<Item, Integer> placed = new HashMap<>();
         for (ItemStack s : contents) {

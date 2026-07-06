@@ -7,21 +7,27 @@ import org.jetbrains.annotations.ApiStatus;
 
 /**
  * The tunable distribution for specialized chunks, loaded from
- * {@code data/bannerbound/chunk_resources/*.json} (see {@code ChunkResourceLoader}). Holds, per biome
- * <i>category</i> ({@code aquatic} / {@code mountainous} / {@code plains} / {@code forest} / {@code other}):
- * the chance a chunk of that category is special, and the weighted menu of resources it can carry.
+ * data/bannerbound/chunk_resources/*.json (see ChunkResourceLoader). Holds, per biome category
+ * (aquatic / mountainous / plains / forest / other): the chance a chunk of that category is special
+ * and the weighted menu of resources it can carry. This is the single place to retune sparsity/mix
+ * by hand -- edit the JSON and /reload; ChunkResources maps a biome to a category (by name
+ * substring) and then asks this object.
  *
- * <p>This is the single place to retune sparsity/mix by hand — edit the JSON and {@code /reload}.
- * {@link ChunkResources} maps a biome to a category (by name substring) and then asks this object.
+ * <p>A Category stores its resource picks alongside a cumulative-weight array (ascending, last
+ * entry == 1.0), so pick() walks it to select a resource for a roll in [0,1). maxChance is the
+ * largest category chance, a cheap reject: a chunk rolling above it can't be special. maxRelief is
+ * the max ground-height spread a chunk may have before it's too steep/terraced to be special.
+ * defaults() is a hard-coded fallback mirroring the shipped distribution.json; note that basic
+ * livestock (cow/pig/sheep/chicken) are NOT chunk-typed -- they spawn naturally everywhere, so only
+ * HORSES and FISH remain animal chunk types.
  */
 @ApiStatus.Internal
 public final class ChunkResourceDistribution {
 
-    /** One biome category's odds + weighted resource menu (weights pre-normalised to cumulative). */
     public static final class Category {
         private final double chance;
         private final ChunkResource[] picks;
-        private final double[] cumulative; // ascending, last == 1.0
+        private final double[] cumulative;
 
         public Category(double chance, ChunkResource[] picks, double[] cumulative) {
             this.chance = chance;
@@ -33,7 +39,6 @@ public final class ChunkResourceDistribution {
             return chance;
         }
 
-        /** Pick a resource for {@code rollPick} in [0,1) by cumulative weight. */
         public ChunkResource pick(double rollPick) {
             for (int i = 0; i < cumulative.length; i++) {
                 if (rollPick < cumulative[i]) return picks[i];
@@ -54,22 +59,18 @@ public final class ChunkResourceDistribution {
         this.maxChance = m;
     }
 
-    /** Max ground-height spread across a chunk before it's too steep/terraced to be special. */
     public int maxRelief() {
         return maxRelief;
     }
 
-    /** The largest category chance — chunks rolling above this can't be special (cheap reject). */
     public double maxChance() {
         return maxChance;
     }
 
-    /** The category for a key ({@code plains}, …), or null if none is defined. */
     public Category category(String key) {
         return categories.get(key);
     }
 
-    /** Build a {@link Category} from an ordered resource→weight map (weights need not sum to 1). */
     public static Category category(double chance, LinkedHashMap<ChunkResource, Double> weights) {
         ChunkResource[] picks = new ChunkResource[weights.size()];
         double[] cumulative = new double[weights.size()];
@@ -86,11 +87,8 @@ public final class ChunkResourceDistribution {
         return new Category(chance, picks, cumulative);
     }
 
-    /** Hard-coded fallback used if no JSON is present (mirrors the shipped distribution.json). */
     public static ChunkResourceDistribution defaults() {
         Map<String, Category> cats = new LinkedHashMap<>();
-        // Basic livestock (cow/pig/sheep/chicken) are NOT chunk-typed — they spawn naturally everywhere.
-        // Only HORSES + FISH remain animal chunk types.
         cats.put("aquatic", category(0.12, weights(ChunkResource.FISH, 100)));
         cats.put("mountainous", category(0.15, weights(
             ChunkResource.COPPER, 48, ChunkResource.IRON, 20, ChunkResource.COAL, 30, ChunkResource.MARBLE, 16,
@@ -114,7 +112,6 @@ public final class ChunkResourceDistribution {
         return new ChunkResourceDistribution(5, cats);
     }
 
-    /** Vararg helper: {@code weights(CATTLE, 37, SHEEP, 17, ...)} → ordered map. */
     private static LinkedHashMap<ChunkResource, Double> weights(Object... pairs) {
         LinkedHashMap<ChunkResource, Double> m = new LinkedHashMap<>();
         for (int i = 0; i + 1 < pairs.length; i += 2) {

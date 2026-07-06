@@ -10,7 +10,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: the Job tab's "Select work area" button. Points the player's Foreman's Rod at the digger
+/** C->S: the Job tab's "Select work area" button. Points the player's Foreman's Rod at the digger
  *  unit and binds it to this citizen, so areas they mark with it are dug only by this digger. */
 @ApiStatus.Internal
 public record BindForemanToCitizenPayload(int entityId) implements CustomPacketPayload {

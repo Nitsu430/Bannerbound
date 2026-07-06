@@ -13,21 +13,17 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Client mirror of the local player's settlement status-effect list. Source of truth for the
- * Town Hall Statuses tab.
- * <p>
- * Authoritative replacements arrive via {@link com.bannerbound.core.network.StatusEffectListPayload}
- * on add/remove. Between syncs the client decrements remaining ticks locally (driven by
- * {@link com.bannerbound.core.client.ClientResearchEvents#onClientTick}) so the progress bars
- * animate smoothly without per-tick network traffic. When an effect's remaining ticks reaches
- * zero locally we drop it immediately — the server's removal payload will arrive shortly after
- * to confirm.
+ * Client mirror of the local player's settlement status-effect list; source of truth for the Town
+ * Hall Statuses tab. Authoritative replacements arrive wholesale via StatusEffectListPayload on
+ * add/remove. Between syncs the client decrements remaining ticks locally (driven per client tick by
+ * ClientResearchEvents.onClientTick) so progress bars animate smoothly without per-tick network
+ * traffic; an effect whose remaining ticks hits zero is dropped immediately and the server's removal
+ * payload confirms shortly after. State lives in an AtomicReference to an immutable list, so the
+ * main-thread tick swap keeps concurrent renderer reads consistent.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientStatusState {
-    /** Immutable snapshot of one effect on the client. Mutable {@code remainingTicks} is held
-     *  on the outer entry list to keep this record cheap-to-equal-check during render. */
     public record Entry(
         UUID instanceId,
         String translationKey,
@@ -44,18 +40,14 @@ public final class ClientStatusState {
     private ClientStatusState() {
     }
 
-    /** Server replaced our list — replace the mirror wholesale. */
     public static void setAll(List<Entry> entries) {
         EFFECTS.set(List.copyOf(entries));
     }
 
-    /** Snapshot used by the Statuses tab renderer. */
     public static List<Entry> getAll() {
         return EFFECTS.get();
     }
 
-    /** Decrement remaining ticks on every entry; drop any that hit zero. Called once per client
-     *  tick. Safe to call on the main thread — atomic-reference swap keeps reads consistent. */
     public static void tickClient() {
         List<Entry> current = EFFECTS.get();
         if (current.isEmpty()) return;

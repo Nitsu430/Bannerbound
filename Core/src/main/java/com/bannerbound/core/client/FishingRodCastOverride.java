@@ -13,15 +13,15 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Client-only override of the vanilla {@code cast} item property on {@link Items#FISHING_ROD}.
- * Vanilla's predicate only returns 1.0 for a {@link Player} with an active fishing hook —
- * citizens (which aren't Players) would never trigger the bent-rod texture. We re-register the
- * same property so it ALSO returns 1.0 when held by a {@link CitizenEntity} whose
- * {@code isCasting()} flag is true (set by the fisher work goal while the bobber is out).
- * <p>
- * {@link ItemProperties#register} replaces any prior registration for the same key, so this
- * cleanly takes over from the vanilla one. Called from
- * {@code BannerboundCoreClient.onClientSetup} via {@code event.enqueueWork}.
+ * Client-only override of the vanilla "cast" item property on {@link Items#FISHING_ROD}. Vanilla's
+ * predicate only returns 1.0 for a {@link Player} with an active fishing hook, so citizens (which
+ * are not Players) would never trigger the bent-rod texture. We re-register the same property so it
+ * ALSO returns 1.0 when held by a {@link CitizenEntity} whose isCasting() flag is true (set by the
+ * fisher work goal while the bobber is out).
+ *
+ * <p>{@link ItemProperties#register} replaces any prior registration for the same key, so this
+ * cleanly takes over the vanilla one. Called from BannerboundCoreClient.onClientSetup via
+ * event.enqueueWork.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -36,7 +36,7 @@ public final class FishingRodCastOverride {
             if (entity == null) return 0.0f;
             boolean main = entity.getMainHandItem() == stack;
             boolean off = entity.getOffhandItem() == stack;
-            // Vanilla quirk: if main hand also holds a fishing rod, off-hand version isn't drawn cast.
+            // Vanilla quirk: a rod in the main hand suppresses the off-hand copy's cast texture.
             if (entity.getMainHandItem().getItem() instanceof FishingRodItem) off = false;
             if (!(main || off)) return 0.0f;
             if (entity instanceof Player player && player.fishing != null) return 1.0f;

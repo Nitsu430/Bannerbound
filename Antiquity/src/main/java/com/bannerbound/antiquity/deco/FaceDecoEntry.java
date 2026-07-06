@@ -8,7 +8,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.codec.StreamCodec;
 
-/** One decorated (block, face) → its {@link FaceDeco}. The serialization/sync unit for both the
+/** One decorated (block, face) -> its {@link FaceDeco}. The serialization/sync unit for both the
  *  chunk attachment and the network payloads. */
 public record FaceDecoEntry(BlockPos pos, Direction dir, FaceDeco deco) {
     public static final Codec<FaceDecoEntry> CODEC = RecordCodecBuilder.create(i -> i.group(

@@ -15,14 +15,18 @@ import net.minecraft.world.phys.Vec3;
 
 /**
  * A prey animal flees the player: it runs when a player is within range (24 blocks, or 12 if the
- * player sneaks, ×1.5 if sprinting — the "noise" rule) AND has line of sight AND isn't holding the
- * animal's favourite food (the lure cancel). On the not-scared→scared edge it alarms the herd (and,
- * for pigs, elects a boar-charger). It keeps fleeing for the whole scared window so a chased herd
- * stays spooked. Cows use small speed multipliers (catchable); everything else outruns the player.
- *
- * <p>Plain {@link Goal} (not {@code AvoidEntityGoal}) for full control over the dynamic range,
- * sneak/LoS/food gating, stamina, and bleed slow — using the vanilla {@link DefaultRandomPos} away-
- * path the way AvoidEntityGoal does.
+ * player sneaks, x1.5 if sprinting -- the "noise" rule) AND has line of sight AND is not holding the
+ * animal's favourite food (the lure cancel: wheat for cows, seeds for chickens, etc.).
+ * Fed/domesticated animals behave like vanilla livestock and never flee. On the not-scared -> scared
+ * edge it alarms the herd once and, for pigs, elects a boar-charger. Fear is refreshed each tick
+ * while chased, and the goal keeps running while still moving or while spooked with a visible threat
+ * (tick repaths), so a chased herd stays spooked; it releases (herd-flee/wander resume) once calm
+ * with no threat. Candidate flee points are rejected when they would run toward the player. Prey
+ * sprints when the player is close and walks otherwise, slowed while tired/bleeding; cows use small
+ * speed multipliers (catchable) while everything else outruns the player. Deliberately a plain
+ * {@link Goal} (not {@code AvoidEntityGoal}) for full control over the dynamic range, sneak/LoS/food
+ * gating, stamina, and bleed slow, while using the vanilla {@link DefaultRandomPos} away-path the
+ * way AvoidEntityGoal does.
  */
 public class FleeFromPlayerGoal extends Goal {
     private final PathfinderMob mob;
@@ -44,7 +48,7 @@ public class FleeFromPlayerGoal extends Goal {
             return false;
         }
         if (HuntingFear.isTamed(mob)) {
-            return false; // fed/domesticated → behaves like vanilla livestock, never flees
+            return false;
         }
         if (mob.isBaby() && !Config.BABIES_FLEE.get()) {
             return false;
@@ -55,11 +59,10 @@ public class FleeFromPlayerGoal extends Goal {
         }
         Vec3 away = DefaultRandomPos.getPosAway(mob, 16, 7, t.position());
         if (away == null || t.distanceToSqr(away) < t.distanceToSqr(mob)) {
-            return false; // no escape route, or it would run toward the player
+            return false;
         }
         this.threat = t;
         this.fleeTo = away;
-        // First-scared edge: spook the herd once (and elect the pig that charges).
         if (!HuntingFear.isScared(mob)) {
             HuntingFear.alarmHerd(mob, Config.HERD_ALARM_RADIUS.get(), Config.SCARED_DURATION_TICKS.get());
             if (mob instanceof Pig pig) {
@@ -78,8 +81,6 @@ public class FleeFromPlayerGoal extends Goal {
 
     @Override
     public boolean canContinueToUse() {
-        // Keep fleeing while we're still moving, or while spooked AND a threat remains visible
-        // (tick repaths). Releases (lets the herd-flee/wander resume) once calm with no threat.
         return !mob.getNavigation().isDone() || (HuntingFear.isScared(mob) && findThreat() != null);
     }
 
@@ -88,7 +89,7 @@ public class FleeFromPlayerGoal extends Goal {
         Player t = this.threat != null ? this.threat : findThreat();
         if (t != null) {
             mob.getNavigation().setSpeedModifier(speedFor(t));
-            HuntingFear.scare(mob, Config.SCARED_DURATION_TICKS.get()); // stay alarmed while chased
+            HuntingFear.scare(mob, Config.SCARED_DURATION_TICKS.get());
         }
         if (mob.getNavigation().isDone() && t != null) {
             Vec3 away = DefaultRandomPos.getPosAway(mob, 16, 7, t.position());
@@ -106,7 +107,6 @@ public class FleeFromPlayerGoal extends Goal {
         mob.getNavigation().stop();
     }
 
-    /** Sprint when the player is close, walk otherwise; tired/bleeding animals slow (Parts 5 & 7). */
     private double speedFor(Player t) {
         double base = mob.distanceToSqr(t) < 49.0 ? sprintSpeed : walkSpeed;
         if (HuntingFear.isTired(mob)) {
@@ -153,7 +153,6 @@ public class FleeFromPlayerGoal extends Goal {
         return r;
     }
 
-    /** Holding an item the animal likes (wheat→cow, seeds→chicken, berries→fox, …) cancels fear. */
     private boolean isLured(Player p) {
         if (!Config.LURE_FOOD_CANCELS.get() || !(mob instanceof Animal animal)) {
             return false;

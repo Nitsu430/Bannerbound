@@ -11,8 +11,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server. Player picked a workstation type in the rod picker screen. Empty string =
- * "Clear selection". Server writes the chosen type to the held rod's data components (and clears
+ * Client -> server. Player picked a workstation type in the rod picker screen. Empty string means
+ * "Clear selection". The server writes the chosen type to the held rod's data components (and clears
  * any existing selection from the registry if the empty-string clear path was taken).
  */
 @ApiStatus.Internal

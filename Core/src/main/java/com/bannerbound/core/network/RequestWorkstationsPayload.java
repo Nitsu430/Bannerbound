@@ -12,9 +12,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: the player pressed "Assign to Workstation" on the citizen detail screen.
- * Server replies with a {@link WorkstationListPayload} of all workstations in the citizen's
- * settlement so the player can pick one.
+ * C->S request fired when the player presses "Assign to Workstation" on the citizen detail
+ * screen; the server replies with a {@link WorkstationListPayload} of every workstation in the
+ * citizen's settlement so the player can pick one. Carries only the citizen entity id.
  */
 @ApiStatus.Internal
 public record RequestWorkstationsPayload(int citizenEntityId) implements CustomPacketPayload {

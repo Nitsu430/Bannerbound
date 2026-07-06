@@ -20,9 +20,11 @@ import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Datapack loader for Bloomery smelting recipes — reads every JSON under
- * {@code data/<namespace>/bloomery_recipes/}. Registered as a server-data reload listener
- * (see {@code AntiquityEvents}); the loaded set is server-side only.
+ * Datapack loader for Bloomery smelting recipes - reads every JSON under
+ * {@code data/<namespace>/bloomery_recipes/}. Registered as a server-data reload listener (see
+ * {@code AntiquityEvents}). {@code applyEntries} is public so the client jar loader
+ * ({@code ClientDatapackRecipes}) can re-read the same JSONs on remote clients, where server
+ * datapacks don't reach. {@code all()} feeds JEI and tutorial displays.
  */
 @ApiStatus.Internal
 public class BloomeryRecipeManager extends SimpleJsonResourceReloadListener {
@@ -39,8 +41,6 @@ public class BloomeryRecipeManager extends SimpleJsonResourceReloadListener {
         applyEntries(entries);
     }
 
-    /** Parse + store the loaded entries. Public so the client-side jar loader can reuse it on remote
-     *  clients, where server datapacks don't reach (see {@code ClientDatapackRecipes}). */
     public static void applyEntries(Map<ResourceLocation, JsonElement> entries) {
         List<BloomeryRecipe> loaded = new ArrayList<>();
         for (Map.Entry<ResourceLocation, JsonElement> entry : entries.entrySet()) {
@@ -53,12 +53,10 @@ public class BloomeryRecipeManager extends SimpleJsonResourceReloadListener {
         BannerboundAntiquity.LOGGER.info("Loaded {} bloomery recipe(s).", recipes.size());
     }
 
-    /** Every loaded bloomery recipe (for JEI and tutorial displays). */
     public static List<BloomeryRecipe> all() {
         return recipes;
     }
 
-    /** The recipe accepting {@code stack} as its ingredient, or {@code null} if none applies. */
     @Nullable
     public static BloomeryRecipe find(ItemStack stack) {
         if (stack.isEmpty()) {

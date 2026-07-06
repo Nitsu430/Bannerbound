@@ -18,7 +18,13 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
 
-/** Structure rules for Antiquity pottery workshops. */
+/**
+ * Structure rules for Antiquity pottery workshops: validation fails with MISSING_HEAT_SOURCE
+ * unless the workshop's marked blocks contain a complete 2x2x2 kiln multiblock. The controller
+ * is the PART=0 block; each cell's PART value bit-packs its offset as dx*4 + dy*2 + dz, and this
+ * check must stay in sync with KilnBlock's placement encoding. PotterExecutor uses
+ * findCompleteKilnController to locate the kiln for fired crafts.
+ */
 @ApiStatus.Internal
 public final class PotteryWorkshopRules {
     private PotteryWorkshopRules() {

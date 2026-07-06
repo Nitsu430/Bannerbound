@@ -21,22 +21,24 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Transparent input layer for the tanning-rack scrape minigame. The OS cursor is hidden and replaced
- * by the equipped knife (drawn large); hold left-click and swipe <b>over the hide</b> (centre screen,
- * where you were aiming when you opened it — the view is frozen while the screen is up). Non-skill,
- * but raking the SAME direction has diminishing returns, so you must scrape back and forth across the
- * hide. Output quantity comes from the hide's quality, not accuracy.
+ * Transparent input layer for the tanning-rack scrape minigame. The OS cursor is hidden (GLFW
+ * CURSOR_HIDDEN still reports position) and the equipped knife is drawn large in its place, dimmed
+ * when off the hide; hold left-click and swipe over the hide, which sits at screen centre where the
+ * crosshair was when the rack was right-clicked (the view is frozen while the screen is up; hit
+ * area is a circle with radius 30% of the smaller screen dimension). Non-skill: progress is
+ * direction-weighted swipe travel (TRAVEL_PER_SWIPE px per scrape, motion under MOTION_EPS px
+ * ignored), and raking the SAME direction has diminishing returns - dirX/dirY hold an exponential
+ * moving average of recent swipe direction and its dot-product similarity to the new swipe is
+ * scaled by SAME_DIR_PENALTY - so you must scrape back and forth. Output quantity comes from the
+ * hide's quality, not accuracy. Completion sends TanningActionPayload.COMPLETE and closes the
+ * screen; closing early sends CANCEL instead.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class TanningRackScreen extends Screen {
-    /** Pixels of (direction-weighted) swipe travel that make up one scrape. */
     private static final double TRAVEL_PER_SWIPE = 200.0;
-    /** Minimum motion (px) that counts as a swipe. */
     private static final double MOTION_EPS = 1.5;
-    /** How strongly repeating the same direction is penalised (0 = none, 1 = fully). */
     private static final double SAME_DIR_PENALTY = 0.85;
-    /** Knife cursor scale. */
     private static final float KNIFE_SCALE = 4.0F;
 
     private static final int COL_BG = 0xF01A1008;
@@ -55,7 +57,6 @@ public class TanningRackScreen extends Screen {
     private boolean completed = false;
     private double cursorX;
     private double cursorY;
-    /** Exponential moving average of recent swipe direction (for the same-direction penalty). */
     private double dirX = 0.0;
     private double dirY = 0.0;
 
@@ -72,14 +73,11 @@ public class TanningRackScreen extends Screen {
     protected void init() {
         cursorX = this.width / 2.0;
         cursorY = this.height / 2.0;
-        // Hide the OS cursor (still reports position) — the knife stands in for it.
         if (minecraft != null) {
             GLFW.glfwSetInputMode(minecraft.getWindow().getWindow(), GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_HIDDEN);
         }
     }
 
-    /** The hide sits at screen centre (where the crosshair was when the rack was right-clicked, and
-     *  the view is frozen). Radius scales with the smaller screen dimension. */
     private double scrapeRadius() {
         return Math.min(this.width, this.height) * 0.30;
     }
@@ -107,7 +105,6 @@ public class TanningRackScreen extends Screen {
             if (len >= MOTION_EPS && overHide(mouseX, mouseY)) {
                 double ux = dragX / len;
                 double uy = dragY / len;
-                // Alignment with the recent direction (0 = new direction, 1 = same direction).
                 double sim = Math.max(0.0, dirX * ux + dirY * uy);
                 double mult = 1.0 - SAME_DIR_PENALTY * sim;
                 travelDone += len * mult;
@@ -179,7 +176,6 @@ public class TanningRackScreen extends Screen {
         g.fill(fillRight - 1, barTop - 2, fillRight + 1, barTop + barH + 2, COL_CURSOR);
         g.drawCenteredString(this.font, Math.round(progress() * 100.0F) + "%", cx, boxBottom - 12, 0xFFFFFFFF);
 
-        // The knife stands in for the (hidden) cursor — drawn large, dimmed when off the hide.
         boolean onHide = overHide(cursorX, cursorY);
         g.pose().pushPose();
         g.pose().translate(cursorX, cursorY, 250.0);
@@ -194,7 +190,7 @@ public class TanningRackScreen extends Screen {
 
     @Override
     public void removed() {
-        // Restore the OS cursor; MC re-grabs the mouse for gameplay after the screen closes.
+        // Must restore the OS cursor hidden in init(), or it stays invisible after the screen closes.
         if (minecraft != null) {
             GLFW.glfwSetInputMode(minecraft.getWindow().getWindow(), GLFW.GLFW_CURSOR, GLFW.GLFW_CURSOR_NORMAL);
         }

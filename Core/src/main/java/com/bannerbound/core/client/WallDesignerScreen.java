@@ -37,44 +37,59 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The Wall Designer (WALLS_PLAN.md Phase 5, mockup image 1): a 3D voxel editor for the
- * settlement's active wall / corner / gate designs. Axonometric orbit viewport (the
- * Jade/Patchouli multiblock-preview technique — invertible transforms make picking exact;
- * true perspective is a later polish), DDA ray-pick into the grid, panels for the block
- * picker (settlement-known blocks only) and Required Blocks.
+ * The Wall Designer (WALLS_PLAN.md Phase 5): a 3D voxel editor for the settlement's active
+ * wall / corner / gate designs, one design per tab (SEGMENT, CORNER, GATE). Opened from the
+ * Town Hall walls tab or the wall preview via ClientPayloadHandler (which calls
+ * setParentScreen); Save sends all three tabs to the server, which re-validates and makes each
+ * the settlement's active design for its kind. Drafts autosave into world data on EVERY exit
+ * (see removed()), and on open a draft overrides the active set so work is never lost.
  *
- * <p>Controls (shown in the hint bar): LEFT-click a face to place the picker block;
- * SHIFT+LEFT-click a block to cycle its state property; RIGHT-click removes. Middle-drag or
- * A/D + W/S orbits, scroll zooms. Save sends the design to the server, which re-validates
- * and makes it the settlement's active design for that kind.
+ * <p>Block palette: researched blocks are the ceiling; the "Owned" toggle narrows to blocks
+ * actually on hand (stockpile + inventory counts ride the payload in parallel as allBlocks).
+ * Library entries are keyed by the design NAME's slug, so saving under a new name creates a new
+ * variant instead of overwriting; file designs load from &lt;gameDir&gt;/bannerbound/wall_designs.
  *
- * <p>Extends {@link PolishedScreen} — its render path draws the blur/dim background exactly
- * once, OUTSIDE the content (a hand-rolled render that ended with {@code super.render()}
- * re-ran vanilla's blur pass over everything drawn before it — playtest 2026-06-11). Picking
- * is pixel-exact once the 160ms settle finishes; during it the offset is imperceptible.
+ * <p>Two edit modes: Build (B) places/removes/rotates via ray-picking; Select (V) is
+ * Blender/Axiom-style with rubber-band box select, a screen-space XYZ move gizmo, and a
+ * per-property inspector. Undo/redo (Ctrl+Z) keeps one stack pair per tab. Placement fidelity:
+ * a real getStateForPlacement runs against a DesignerLevel backed by the tab's grid so the
+ * clicked FACE drives orientation (torches, slabs, stairs, standing/wall pairs); K eyedrops the
+ * full sampled state, which then places verbatim. Coordinates: design-local (l,d,h) map to
+ * block-space (x=l, y=h, z=d).
+ *
+ * <p>Viewport: an axonometric orbit (the Jade/Patchouli multiblock-preview technique -- true
+ * perspective is later polish) whose transform is invertible so picking is pixel-exact. Screen
+ * DEPTH is squashed by DEPTH_SQUASH (position matrix only, never normals) so the orbiting scene
+ * -- authored cells plus translucent context ghosts of the continuing wall -- stays inside the
+ * GUI z-band (~400 +/-130) and never punches the 600/700 overlay layers or the clip planes.
+ * Block render types are NO-CULL: the mirror + GUI-ortho stack makes winding-based culling
+ * unreliable from some angles, so both faces draw and the depth test sorts them. Fences, walls
+ * and panes render CONNECTED via a cached connection-sim (displayScene, rekeyed off a cheap
+ * identity hash) that joins authored cells and ghosts as one graph across the seam; picking,
+ * editing and Required Blocks always use the raw authored states.
+ *
+ * <p>Extends {@link PolishedScreen} so the blur/dim background draws once, OUTSIDE the content
+ * (a hand-rolled render that ended with {@code super.render()} re-ran vanilla's blur over
+ * everything already drawn -- playtest 2026-06-11).
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class WallDesignerScreen extends PolishedScreen {
 
     private static final int[] LENGTHS = {2, 4, 8, 16};
-    /** Screen-depth compression for the viewport scene — see the note in renderViewport. */
     private static final float DEPTH_SQUASH = 0.12f;
     private static final int PANEL_LEFT_W = 130;
     private static final int PANEL_RIGHT_W = 120;
     private static final int PICKER_COLS = 6;
     private static final int SLOT = 18;
 
-    /** Mutable working copy of one design. */
     private static final class EditModel {
         WallDesign.Kind kind;
         int length;
         int depth;
         int height;
-        BlockState[] cells; // (h * depth + d) * length + l; null = air
+        BlockState[] cells;
         BlockState foundation;
-        /** Player-given design name — the server slugs it into the library id, so saving
-         *  under a NEW name creates a new design (variant) instead of overwriting. */
         String name = "";
 
         static EditModel of(WallDesign design) {
@@ -128,7 +143,7 @@ public class WallDesignerScreen extends PolishedScreen {
             String designName = name == null || name.isBlank()
                 ? "Custom " + kind.name().toLowerCase(Locale.ROOT) : name.trim();
             WallDesign.Builder b = WallDesign.builder(
-                "custom_" + kind.name().toLowerCase(Locale.ROOT), // server re-keys by name slug
+                "custom_" + kind.name().toLowerCase(Locale.ROOT),
                 designName, kind, length, depth, height);
             for (int l = 0; l < length; l++) {
                 for (int d = 0; d < depth; d++) {
@@ -143,17 +158,13 @@ public class WallDesignerScreen extends PolishedScreen {
     }
 
     private record Hit(int l, int d, int h, boolean filled, int nl, int nd, int nh) {
-        // filled hit: (l,d,h) is a block, (nl,nd,nh) is the face-adjacent placement cell.
     }
 
-    private final EditModel[] models = new EditModel[3]; // SEGMENT, CORNER, GATE
+    private final EditModel[] models = new EditModel[3];
     private final List<Block> knownBlocks = new ArrayList<>();
-    /** The OWNED subset of {@link #knownBlocks}: count > 0 in stockpiles + inventory. */
     private final List<Block> allBlocks = new ArrayList<>();
     private int tab = 0;
     private Block selectedBlock;
-    /** Exact state placement uses — picker sets the default state, K (eyedropper) samples the
-     *  hovered cell's FULL state so B keeps building with rotations/halves intact. */
     private BlockState selectedState;
     private float yaw = 45f;
     private float pitch = 30f;
@@ -166,20 +177,12 @@ public class WallDesignerScreen extends PolishedScreen {
     private int pickerScroll;
     private String search = "";
     private boolean onlyOwned = true;
-    /** "OUTSIDE" text on the outward edge(s) — toggleable, default on. */
     private boolean showOutsideLabel = true;
-    /** Corner/Gate tabs: ghost the LIVE wall design continuing from the piece, joined exactly
-     *  as the layout engine joins them — coherent transitions without guesswork. */
     private boolean contextWalls = true;
-    /** Connection-simulated DISPLAY states for the whole viewport scene (authored cells +
-     *  context ghosts), keyed scene-local (x=l, y=h, z=d; ghosts offset outside the grid).
-     *  Fences/walls/panes render connected as they would in the real wall — picking, editing
-     *  and Required Blocks keep using the raw authored states. Rebuilt when the key changes. */
     private java.util.Map<net.minecraft.core.BlockPos, BlockState> displayScene = java.util.Map.of();
     private int displaySceneKey;
     private boolean displaySceneReady;
 
-    // ─── Viewport juice (playtest 2026-06-12): place/break particle bursts + place pop ──────
     private static final long FX_MS = 450;
     private static final long POP_MS = 150;
 
@@ -193,7 +196,6 @@ public class WallDesignerScreen extends PolishedScreen {
             state.getBlock().defaultMapColor().col, place));
     }
 
-    /** 0.6→1 ease-out for a just-placed cell; 1 = no pop. */
     private float placePopScale(int l, int d, int h, long now) {
         for (CellFx f : cellFx) {
             if (f.place() && f.l() == l && f.d() == d && f.h() == h) {
@@ -209,23 +211,18 @@ public class WallDesignerScreen extends PolishedScreen {
     @Nullable
     private Hit hover;
 
-    // ─── Select mode (V) — Blender/Axiom-style editing ────────────────────────────────────
     private boolean selectMode = false;
-    /** Selected cell indices into the current model (cleared on tab switch / resize). */
     private final java.util.Set<Integer> selection = new java.util.HashSet<>();
-    /** Gizmo drag: 0 = X(length), 1 = Y(height), 2 = Z(depth); -1 = none. */
     private int dragAxis = -1;
     private double dragAccum;
     private boolean rubberBanding;
     private double rubberX0, rubberY0, rubberX1, rubberY1;
-    /** Inspector property-row hit rects for the selected block: {x0, y0, x1, y1, propIndex}. */
     private final List<int[]> propertyRows = new ArrayList<>();
     @Nullable
     private Button modeButton;
     @Nullable
     private Button selectButton;
 
-    // ─── Undo/redo (Ctrl+Z / Ctrl+Shift+Z), one stack pair per design tab ─────────────────
     private record Snapshot(int length, int depth, int height, BlockState[] cells,
                             BlockState foundation) {
     }
@@ -239,7 +236,6 @@ public class WallDesignerScreen extends PolishedScreen {
         return new Snapshot(m.length, m.depth, m.height, m.cells.clone(), m.foundation);
     }
 
-    /** Call BEFORE any mutation of the current model. Clears the redo branch. */
     private void pushUndo() {
         java.util.ArrayDeque<Snapshot> stack = undoStacks.get(tab);
         stack.push(snap(model()));
@@ -277,8 +273,6 @@ public class WallDesignerScreen extends PolishedScreen {
         for (WallDesign design : payload.activeSet()) {
             models[design.kind().ordinal()] = EditModel.of(design);
         }
-        // Drafts (autosaved working copies, persisted in world data) override the active set
-        // — closing/escaping the designer never loses work (playtest 2026-06-12).
         boolean restored = false;
         for (WallDesign draft : payload.drafts()) {
             EditModel active = models[draft.kind().ordinal()];
@@ -288,8 +282,6 @@ public class WallDesignerScreen extends PolishedScreen {
         if (restored) {
             ClientWallStatus.set("Draft restored — Save & Set Active to apply it.", false);
         }
-        // Researched blocks are ALWAYS the ceiling; "Owned" narrows to blocks actually on
-        // hand (stockpiles + inventory counts ride the payload in parallel).
         int[] ids = payload.knownBlockItemIds();
         int[] counts = payload.ownedCounts();
         for (int i = 0; i < ids.length; i++) {
@@ -297,7 +289,7 @@ public class WallDesignerScreen extends PolishedScreen {
             if (item instanceof BlockItem blockItem) {
                 knownBlocks.add(blockItem.getBlock());
                 if (i < counts.length && counts[i] > 0) {
-                    allBlocks.add(blockItem.getBlock()); // repurposed: the OWNED subset
+                    allBlocks.add(blockItem.getBlock());
                 }
             }
         }
@@ -312,22 +304,17 @@ public class WallDesignerScreen extends PolishedScreen {
         return models[tab];
     }
 
-    /** Same dimensions + identical cells (states are canonical — reference equality works). */
     private static boolean sameContent(EditModel a, EditModel b) {
         return a.length == b.length && a.depth == b.depth && a.height == b.height
             && java.util.Arrays.equals(a.cells, b.cells);
     }
 
-    /** Screen to return to on close/Escape (Town Hall walls tab or the wall preview) —
-     *  set by ClientPayloadHandler when the designer opens. Null = close to the world. */
     @Nullable
     private net.minecraft.client.gui.screens.Screen parentScreen;
 
-    /** File · Edit · View · Go — built in init(), clicks checked FIRST, drawn LAST. */
     @Nullable
     private WallMenuBar menuBar;
 
-    /** Sends all three tabs for validation + activation (the Save button and File menu). */
     private void saveAllDesigns() {
         for (EditModel m : models) {
             if (m != null) {
@@ -337,20 +324,12 @@ public class WallDesignerScreen extends PolishedScreen {
         }
     }
 
-    // ─── Design library (playtest 2026-06-12: variants = designs the player made and saved,
-    //     plus a file loader so designs can be shared between worlds) ───────────────────────
-
-    /** The settlement's saved designs (server-synced; refreshed in place after save/delete). */
     private List<WallDesign> library = new ArrayList<>();
-    /** Active design id per kind ordinal — "•" markers in the library list. */
     private final String[] activeIdsByKind = new String[3];
-    /** Designs read from disk ({@code <gameDir>/bannerbound/wall_designs/*.nbt}). */
     private final List<WallDesign> fileDesigns = new ArrayList<>();
     @Nullable
     private EditBox nameBox;
 
-    /** Server pushed a fresh designer payload (after save/delete): refresh the library list
-     *  in place — models, drafts and camera stay untouched. */
     public void refreshLibrary(WallScreenPayloads.OpenWallDesigner payload) {
         this.library = new ArrayList<>(payload.library());
         for (WallDesign design : payload.activeSet()) {
@@ -363,7 +342,6 @@ public class WallDesignerScreen extends PolishedScreen {
             .resolve("bannerbound").resolve("wall_designs");
     }
 
-    /** Re-reads every {@code .nbt} design in the folder; unreadable files are skipped. */
     private void rescanFileDesigns() {
         fileDesigns.clear();
         Minecraft mc = Minecraft.getInstance();
@@ -381,7 +359,6 @@ public class WallDesignerScreen extends PolishedScreen {
                             net.minecraft.nbt.CompoundTag tag = net.minecraft.nbt.NbtIo.read(p);
                             if (tag != null) fileDesigns.add(WallDesign.load(tag, blocks));
                         } catch (Exception ignored) {
-                            // corrupt/foreign file — skip, never crash the designer
                         }
                     });
             }
@@ -389,7 +366,6 @@ public class WallDesignerScreen extends PolishedScreen {
         }
     }
 
-    /** Writes the current tab's design to the designs folder (slugged name + kind). */
     private void exportCurrentTab() {
         try {
             WallDesign design = model().toDesign();
@@ -411,7 +387,6 @@ public class WallDesignerScreen extends PolishedScreen {
         return s.isEmpty() ? "design" : s;
     }
 
-    /** Library + file designs matching the CURRENT tab's kind, in display order. */
     private List<WallDesign> visibleLibrary() {
         List<WallDesign> rows = new ArrayList<>();
         WallDesign.Kind kind = model().kind;
@@ -424,7 +399,6 @@ public class WallDesignerScreen extends PolishedScreen {
         return rows;
     }
 
-    /** True when the row index (into visibleLibrary) is a FILE design, not a library one. */
     private boolean isFileRow(int index) {
         int libraryCount = 0;
         WallDesign.Kind kind = model().kind;
@@ -451,7 +425,6 @@ public class WallDesignerScreen extends PolishedScreen {
     public void onClose() {
         if (parentScreen != null && this.minecraft != null) {
             this.minecraft.setScreen(parentScreen);
-            // The preview underneath shows design-derived data (gate spans) — refresh it.
             if (parentScreen instanceof WallPreviewScreen) {
                 PacketDistributor.sendToServer(new WallScreenPayloads.RequestWallPreview());
             }
@@ -462,9 +435,7 @@ public class WallDesignerScreen extends PolishedScreen {
 
     @Override
     public void removed() {
-        // Autosave drafts into world data on EVERY way out of this screen — Escape, Close,
-        // menu-bar navigation, the server force-opening another screen. removed() fires on
-        // all of them; onClose alone missed setScreen() swaps (playtest 2026-06-12).
+        // Autosave here, not in onClose(): removed() also fires on setScreen() swaps, so drafts are never lost.
         for (EditModel m : models) {
             if (m != null) {
                 PacketDistributor.sendToServer(
@@ -473,8 +444,6 @@ public class WallDesignerScreen extends PolishedScreen {
         }
         super.removed();
     }
-
-    // ─── Layout ──────────────────────────────────────────────────────────────────────────────
 
     private int viewLeft() { return PANEL_LEFT_W + 4; }
     private int viewRight() { return this.width - PANEL_RIGHT_W - 4; }
@@ -485,8 +454,6 @@ public class WallDesignerScreen extends PolishedScreen {
 
     @Override
     protected void init() {
-        // 3D-software menu bar (File · Edit · View · Go) — also the navigation layer between
-        // the wall menus (playtest 2026-06-12). Drafts autosave via removed() on any exit.
         menuBar = new WallMenuBar(this.font, 8, 4, List.of(
             new WallMenuBar.Menu("File", List.of(
                 WallMenuBar.Item.of("Save & Set Active", this::saveAllDesigns),
@@ -532,7 +499,6 @@ public class WallDesignerScreen extends PolishedScreen {
                 WallMenuBar.Item.of("Wall Preview", () -> PacketDistributor.sendToServer(
                     new WallScreenPayloads.RequestWallPreview())),
                 new WallMenuBar.Item("Back  (Esc)", this::onClose, () -> parentScreen != null)))));
-        // Tabs.
         Component[] tabNames = {
             Component.translatable("bannerbound.wall_designer.tab.segment"),
             Component.translatable("bannerbound.wall_designer.tab.corner"),
@@ -542,14 +508,12 @@ public class WallDesignerScreen extends PolishedScreen {
             addRenderableWidget(PolishButton.polished(tabNames[i], b -> {
                 tab = index;
                 hover = null;
-                selection.clear(); // indices are per-model
+                selection.clear();
                 dragAxis = -1;
                 if (nameBox != null) nameBox.setValue(model().name == null ? "" : model().name);
                 uiClick(net.minecraft.sounds.SoundEvents.NOTE_BLOCK_HAT.value(), 1.0f);
             }).bounds(PANEL_LEFT_W + 8 + i * 92, 8, 88, 18).accent(primaryAccent()).build());
         }
-        // Size controls (left panel): LEFT-click steps up, RIGHT-click steps down (user
-        // request 2026-06-12 — sizes were increase-only and wrapped).
         addRenderableWidget(new StepButton(8, 40, PANEL_LEFT_W - 16, 18,
             sizeLabel("bannerbound.wall_designer.length", () -> model().length),
             () -> stepLength(false), () -> stepLength(true)));
@@ -559,7 +523,6 @@ public class WallDesignerScreen extends PolishedScreen {
         addRenderableWidget(new StepButton(8, 84, PANEL_LEFT_W - 16, 18,
             sizeLabel("bannerbound.wall_designer.height", () -> model().height),
             () -> stepHeight(false), () -> stepHeight(true)));
-        // Tool selects in the top bar (mirrors keybinds: B = build, V = select; K = eyedropper).
         int toolX = PANEL_LEFT_W + 8 + 3 * 92 + 12;
         modeButton = addRenderableWidget(PolishButton.polished(
             toolLabel("bannerbound.wall_designer.build", !selectMode), b -> setMode(false))
@@ -575,8 +538,6 @@ public class WallDesignerScreen extends PolishedScreen {
                 Component.translatable("bannerbound.wall_designer.select.tooltip")))
             .accent(primaryAccent())
             .build());
-        // Toggles are CHECKBOXES now — toggle buttons read as "buttons thrown together"
-        // (playtest 2026-06-12).
         addRenderableWidget(net.minecraft.client.gui.components.Checkbox.builder(
                 Component.translatable("bannerbound.wall_designer.owned_only"), this.font)
             .pos(this.width - PANEL_RIGHT_W + 8, 42)
@@ -589,8 +550,6 @@ public class WallDesignerScreen extends PolishedScreen {
             .tooltip(net.minecraft.client.gui.components.Tooltip.create(
                 Component.translatable("bannerbound.wall_designer.owned_only.tooltip")))
             .build());
-        // (No foundation picker anymore — each column's BOTTOM BLOCK continues down to the
-        // terrain automatically, playtest 2026-06-12.)
         addRenderableWidget(net.minecraft.client.gui.components.Checkbox.builder(
                 Component.translatable("bannerbound.wall_designer.outside_label"), this.font)
             .pos(8, 112)
@@ -600,8 +559,6 @@ public class WallDesignerScreen extends PolishedScreen {
                 uiClick(net.minecraft.sounds.SoundEvents.NOTE_BLOCK_HAT.value(), value ? 1.2f : 0.8f);
             })
             .build());
-        // Design NAME — the server keys library entries on its slug, so a new name saves a
-        // NEW design (your variants: "2 steps", "3 steps", "10 steps"…).
         nameBox = new EditBox(this.font, 8, 162, PANEL_LEFT_W - 16, 14,
             Component.translatable("bannerbound.wall_designer.design_name"));
         nameBox.setMaxLength(32);
@@ -621,9 +578,6 @@ public class WallDesignerScreen extends PolishedScreen {
             .tooltip(net.minecraft.client.gui.components.Tooltip.create(
                 Component.translatable("bannerbound.wall_designer.wall_context.tooltip")))
             .build());
-        // Save / close (bottom). Saves ALL THREE tabs, not just the open one — "I did NOT
-        // know save is only for the one I looked at" (playtest 2026-06-12); the server
-        // validates and confirms each kind independently.
         addRenderableWidget(PolishButton.polished(
                 Component.translatable("bannerbound.wall_designer.save_set_active"),
                 b -> saveAllDesigns())
@@ -635,7 +589,6 @@ public class WallDesignerScreen extends PolishedScreen {
         addRenderableWidget(PolishButton.polished(
                 Component.translatable("bannerbound.wall_designer.close"), b -> onClose())
             .bounds(viewCx() + 32, this.height - 24, 70, 18).accent(primaryAccent()).build());
-        // Picker search.
         searchBox = new EditBox(this.font, this.width - PANEL_RIGHT_W + 8, 26, PANEL_RIGHT_W - 16, 14,
             Component.translatable("bannerbound.wall_designer.search"));
         searchBox.setResponder(text -> {
@@ -649,13 +602,11 @@ public class WallDesignerScreen extends PolishedScreen {
         return () -> Component.translatable(key, v.getAsInt());
     }
 
-    /** Tool-select label: the "▶ " active marker stays a literal glyph, the word translates. */
     private static Component toolLabel(String key, boolean active) {
         Component word = Component.translatable(key);
         return active ? Component.literal("▶ ").append(word) : word;
     }
 
-    /** 1px vertical identity edge along a panel border (neutral line when no identity). */
     private void identityEdge(GuiGraphics g, int x, int y0, int y1) {
         if (identityAccents.isEmpty()) {
             g.fill(x, y0, x + 1, y1, GuiPalette.PANEL_BORDER);
@@ -678,8 +629,6 @@ public class WallDesignerScreen extends PolishedScreen {
         return LENGTHS[0];
     }
 
-    /** Corners aren't run-tiled — free 1..16 in steps of one (square: depth follows length);
-     *  segments/gates stay on the 2/4/8/16 ladder. */
     private void stepLength(boolean back) {
         EditModel m = model();
         int next = m.kind == WallDesign.Kind.CORNER
@@ -696,7 +645,7 @@ public class WallDesignerScreen extends PolishedScreen {
 
     private void stepDepth(boolean back) {
         EditModel m = model();
-        if (m.kind == WallDesign.Kind.CORNER) return; // square footprint
+        if (m.kind == WallDesign.Kind.CORNER) return;
         int next = back
             ? (m.depth <= 1 ? WallDesign.MAX_DEPTH : m.depth - 1)
             : (m.depth >= WallDesign.MAX_DEPTH ? 1 : m.depth + 1);
@@ -715,8 +664,6 @@ public class WallDesignerScreen extends PolishedScreen {
         uiClick(net.minecraft.sounds.SoundEvents.NOTE_BLOCK_HAT.value(), back ? 0.9f : 1.1f);
     }
 
-    /** Size stepper: LEFT-click steps forward, RIGHT-click steps BACK (playtest 2026-06-12);
-     *  the label re-reads its supplier after every step. */
     private static final class StepButton extends PolishButton {
         private final java.util.function.Supplier<Component> label;
         private final Runnable forward;
@@ -746,33 +693,24 @@ public class WallDesignerScreen extends PolishedScreen {
 
         @Override
         public void onPress() {
-            super.onPress(); // press pop animation; the OnPress handler is a no-op
+            super.onPress();
             (lastButton == 1 ? back : forward).run();
             setMessage(label.get());
         }
     }
 
-    // ─── Rendering ───────────────────────────────────────────────────────────────────────────
-
     @Override
     protected void renderPolishedBackdrop(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        // Panels + a single full-height center fill (margins/tab strip/hint band included —
-        // partial fills left the world peeking through the seams, playtest 2026-06-11).
         g.fill(0, 0, PANEL_LEFT_W, this.height, 0xFF202024);
         g.fill(this.width - PANEL_RIGHT_W, 0, this.width, this.height, 0xFF202024);
         g.fill(PANEL_LEFT_W, 0, this.width - PANEL_RIGHT_W, this.height, 0xFF111116);
-        // Identity chrome: the banner colors run down the panels' inner edges (the panels
-        // themselves keep their tool-palette fills — this is an editor, not a Town Hall tab).
         identityEdge(g, PANEL_LEFT_W - 1, 0, this.height);
         identityEdge(g, this.width - PANEL_RIGHT_W, 0, this.height);
-        // Inspector label sits below the File/Edit/View/Go menu bar (drawn in extras).
         g.drawString(this.font, "Inspector", 8, 24, 0xFFFFFF);
         g.drawString(this.font, "Block Picker", this.width - PANEL_RIGHT_W + 8, 8, 0xFFFFFF);
 
         hover = pick(mouseX, mouseY);
         renderViewport(g);
-        // Rubber-band rectangle (screen space, raised above the blocks' depth range — drawn
-        // at z 0 it depth-tested BEHIND the geometry, playtest 2026-06-12).
         g.pose().pushPose();
         g.pose().translate(0, 0, 700);
         if (rubberBanding) {
@@ -809,11 +747,6 @@ public class WallDesignerScreen extends PolishedScreen {
         PoseStack pose = g.pose();
         pose.pushPose();
         pose.translate(viewCx() + panX, viewCy() + panY, 400);
-        // Squash SCREEN DEPTH only (position matrix, never the normal matrix — lighting stays
-        // computed on true geometry). At zoom 30 with context ghosts the scene spanned ±960
-        // GUI-z: blocks punched past the 600/700 overlay band and flirted with the clip
-        // planes from some orbit angles ("faces inverted", playtest 2026-06-12). Squashed,
-        // the whole scene stays inside ~400±130 with relative depth ordering untouched.
         pose.last().pose().scale(1f, 1f, DEPTH_SQUASH);
         pose.scale(zoom, -zoom, zoom);
         pose.mulPose(Axis.XP.rotationDegrees(pitch));
@@ -823,13 +756,7 @@ public class WallDesignerScreen extends PolishedScreen {
         Minecraft mc = Minecraft.getInstance();
         MultiBufferSource.BufferSource buffers = mc.renderBuffers().bufferSource();
 
-        // Blocks FIRST — lines drawn after depth-test correctly against them (drawn before,
-        // the grid vanished through blocks / rendered scuffed, playtest 2026-06-11).
-        // Entity-in-inventory lighting: the viewport's scale(zoom, -zoom, zoom) Y-flip
-        // inverts normals, which made setupFor3DItems light every face from behind (near-
-        // black blocks); this rig is built for exactly that flipped space.
-        // No-cull render types: the mirror + GUI-ortho stack makes winding-based culling
-        // unreliable from some orbit angles — draw both faces, depth test sorts them.
+        // The scale(zoom, -zoom, zoom) Y-flip inverts normals; this rig lights the flipped space (setupFor3DItems -> near-black blocks).
         com.mojang.blaze3d.platform.Lighting.setupForEntityInInventory();
         MultiBufferSource solid = type -> buffers.getBuffer(noCullBlockType(type, false));
         net.minecraft.core.BlockPos.MutableBlockPos sceneCursor =
@@ -842,7 +769,6 @@ public class WallDesignerScreen extends PolishedScreen {
                     if (state == null) continue;
                     pose.pushPose();
                     pose.translate(l, h, d);
-                    // Place pop: a just-placed block scales 0.6→1 around its center.
                     float pop = placePopScale(l, d, h, fxNow);
                     if (pop < 1f) {
                         pose.translate(0.5, 0.5, 0.5);
@@ -856,20 +782,12 @@ public class WallDesignerScreen extends PolishedScreen {
                 }
             }
         }
-        // Wall-context ghosts (Corner/Gate tabs): the LIVE wall working copy continuing from
-        // this piece, joined exactly as the layout engine joins them (gate: a segment on each
-        // side; corner: the east run as-authored + the south run rotated CCW for the west
-        // face). Translucent, outside the editable grid — not pickable, not in Required.
-        // Connection-simulated like the authored cells, so fences/walls join ACROSS the seam.
         MultiBufferSource ghost = type -> new ContextGhostConsumer(
             buffers.getBuffer(noCullBlockType(type, true)));
         forEachContextGhost((pos, raw) -> ghostBlock(mc, pose, ghost,
             displayState(pos, raw), pos.getX(), pos.getY(), pos.getZ()));
-        buffers.endBatch(); // flush block geometry before the line pass
+        buffers.endBatch();
 
-        // Depth-tested guide geometry: grid floor, bounds posts and the red outward strip(s)
-        // render BEHIND the model (always-on-top grid read as visual noise, playtest
-        // 2026-06-12). Interactive overlays (hover/selection/gizmo) stay screen-space below.
         VertexConsumer lines3d = buffers.getBuffer(RenderType.lines());
         for (int l = 0; l <= m.length; l++) {
             line(pose, lines3d, l, 0, 0, l, 0, m.depth, 0.45f, 0.45f, 0.5f);
@@ -881,8 +799,6 @@ public class WallDesignerScreen extends PolishedScreen {
         line(pose, lines3d, m.length, 0, 0, m.length, m.height, 0, 0.35f, 0.35f, 0.4f);
         line(pose, lines3d, 0, 0, m.depth, 0, m.height, m.depth, 0.35f, 0.35f, 0.4f);
         line(pose, lines3d, m.length, 0, m.depth, m.length, m.height, m.depth, 0.35f, 0.35f, 0.4f);
-        // Outward strip: -Z edge always; corners face TWO ways (north AND west), so they get
-        // a second strip on the -X edge.
         line(pose, lines3d, 0, 0.02f, -0.25f, m.length, 0.02f, -0.25f, 0.95f, 0.25f, 0.25f);
         if (m.kind == WallDesign.Kind.CORNER) {
             line(pose, lines3d, -0.25f, 0.02f, 0, -0.25f, 0.02f, m.depth, 0.95f, 0.25f, 0.25f);
@@ -891,10 +807,8 @@ public class WallDesignerScreen extends PolishedScreen {
         com.mojang.blaze3d.platform.Lighting.setupForFlatItems();
         pose.popPose();
 
-        // ─── 2D OVERLAY: interactive markers drawn screen-space ABOVE the blocks (hover,
-        // selection, gizmo, labels) — these must never hide. Still scissored to the viewport.
         pose.pushPose();
-        pose.translate(0, 0, 600); // above the block geometry's depth range
+        pose.translate(0, 0, 600);
         if (showOutsideLabel) {
             double[] labelAt = localToScreen(m.length / 2.0, 0, -1.0, m);
             g.drawCenteredString(this.font, "OUTSIDE", (int) labelAt[0], (int) labelAt[1] - 4, 0xFFF24040);
@@ -904,8 +818,6 @@ public class WallDesignerScreen extends PolishedScreen {
             }
         }
 
-        // Place/break particle bursts — deterministic screen-space fragments flying out of
-        // the cell, tinted by the block's map color, with a little gravity droop.
         long fxOverlayNow = net.minecraft.Util.getMillis();
         cellFx.removeIf(f -> fxOverlayNow - f.atMs() > FX_MS);
         for (CellFx f : cellFx) {
@@ -924,8 +836,6 @@ public class WallDesignerScreen extends PolishedScreen {
         }
 
         if (hover != null && !selectMode) {
-            // Build hover: green placement box only; the white hit box appears while SHIFT is
-            // held (the rotate gesture); red = face can't take a block.
             if (hover.filled()) {
                 boolean canPlace = m.inBounds(hover.nl(), hover.nd(), hover.nh())
                     && m.get(hover.nl(), hover.nd(), hover.nh()) == null;
@@ -941,12 +851,10 @@ public class WallDesignerScreen extends PolishedScreen {
             }
         }
         if (selectMode) {
-            // Drop indices invalidated by a resize or an external edit.
             selection.removeIf(i -> i < 0 || i >= m.cells.length || m.cells[i] == null);
             for (int idx : selection) {
                 box2D(g, m, idxL(m, idx), idxH(m, idx), idxD(m, idx), 0xFFFFD940, 1.5f);
             }
-            // Live preview of what a rubber-band release would select.
             if (rubberBanding) {
                 double minX = Math.min(rubberX0, rubberX1);
                 double maxX = Math.max(rubberX0, rubberX1);
@@ -966,14 +874,13 @@ public class WallDesignerScreen extends PolishedScreen {
             } else if (hover != null && hover.filled()) {
                 box2D(g, m, hover.l(), hover.h(), hover.d(), 0xFFE8E8E8, 1f);
             }
-            // Move gizmo: thick 2D arrows (X red, Y green, Z blue) from the selection centroid.
             double[] c = selectionCentroid(m);
             if (c != null) {
                 double[] base = localToScreen(c[0], c[1], c[2], m);
                 int[] axisColors = {0xFFFF4545, 0xFF45E045, 0xFF5588FF};
                 for (int axis = 0; axis < 3; axis++) {
                     double[] tip = gizmoTip(c, axis, m);
-                    int color = dragAxis == axis ? 0xFFFFFFFF : axisColors[axis]; // grabbed = white
+                    int color = dragAxis == axis ? 0xFFFFFFFF : axisColors[axis];
                     line2D(g, base, tip, color, 3f);
                     arrowhead2D(g, base, tip, color);
                 }
@@ -983,20 +890,10 @@ public class WallDesignerScreen extends PolishedScreen {
         g.disableScissor();
     }
 
-    /**
-     * Visits every wall-context ghost as (scene-local pos, state) — the SINGLE source of ghost
-     * placement geometry, shared by rendering and the connection-sim scene so they can never
-     * drift apart. Gate: a wall segment on each side along the run. Corner (authored as the
-     * land's NW corner): the east run as-authored plus the south run rotated CCW for the west
-     * face (engine: outward WEST = CCW_90, along = north, start at the south end — mirror of
-     * placeCorner).
-     */
     private void forEachContextGhost(java.util.function.BiConsumer<net.minecraft.core.BlockPos, BlockState> out) {
         if (!contextWalls || tab == 0 || models[0] == null) return;
         EditModel m = model();
         EditModel w = models[0];
-        // First-wins dedup: a tiny corner with a deeper wall makes the two runs share a
-        // column — emitting both would z-fight in the render and disagree with the sim map.
         java.util.HashSet<net.minecraft.core.BlockPos> emitted = new java.util.HashSet<>();
         java.util.function.BiConsumer<net.minecraft.core.BlockPos, BlockState> sink =
             (pos, state) -> {
@@ -1020,8 +917,6 @@ public class WallDesignerScreen extends PolishedScreen {
         }
     }
 
-    /** Cheap scene fingerprint — block states are canonical singletons, so identity hashes
-     *  catch every paint/move/resize/undo without wiring a dirty flag through each edit site. */
     private int sceneKey() {
         EditModel m = model();
         int key = java.util.Objects.hash(tab, contextWalls, m.length, m.depth, m.height);
@@ -1034,8 +929,6 @@ public class WallDesignerScreen extends PolishedScreen {
         return key;
     }
 
-    /** Re-runs the connection simulation when the scene changed (authored cells + ghosts as
-     *  ONE neighbor graph — fences join across the piece/wall seam, exactly like the layout). */
     private void rebuildDisplaySceneIfNeeded() {
         int key = sceneKey();
         if (displaySceneReady && key == displaySceneKey) return;
@@ -1057,20 +950,11 @@ public class WallDesignerScreen extends PolishedScreen {
             : com.bannerbound.core.api.walls.WallConnectivity.simulate(raw, level, false);
     }
 
-    /** Display state for a scene position: connected if the sim has one, raw otherwise. */
     private BlockState displayState(net.minecraft.core.BlockPos pos, BlockState raw) {
         BlockState display = displayScene.get(pos);
         return display == null || display.isAir() ? raw : display;
     }
 
-    /**
-     * Viewport block render types, decided per requested type: translucent stays translucent,
-     * everything else renders cutout — both NO-CULL. The viewport's mirror + GUI-ortho stack
-     * makes winding-based culling unreliable from some orbit angles ("inverted faces",
-     * playtests 2026-06-11..12); drawing both faces costs nothing at GUI scale and the depth
-     * test picks the right one. Entity sheet types accept block-model geometry (it's the same
-     * path vanilla uses for block items in GUIs).
-     */
     private static RenderType noCullBlockType(RenderType requested, boolean forceTranslucent) {
         boolean translucent = forceTranslucent
             || requested == RenderType.translucent()
@@ -1090,7 +974,6 @@ public class WallDesignerScreen extends PolishedScreen {
         pose.popPose();
     }
 
-    /** Alpha-scaling consumer — the ghost-silhouette technique from the in-world preview. */
     private record ContextGhostConsumer(com.mojang.blaze3d.vertex.VertexConsumer delegate)
         implements com.mojang.blaze3d.vertex.VertexConsumer {
         @Override
@@ -1130,7 +1013,6 @@ public class WallDesignerScreen extends PolishedScreen {
         }
     }
 
-    /** Screen-space line via a rotated thin fill (GuiGraphics has no line primitive). */
     private static void line2D(GuiGraphics g, double[] a, double[] b, int color, float px) {
         double dx = b[0] - a[0];
         double dy = b[1] - a[1];
@@ -1145,7 +1027,6 @@ public class WallDesignerScreen extends PolishedScreen {
         pose.popPose();
     }
 
-    /** Two short barbs at the tip, perpendicular-ish to the arrow direction. */
     private static void arrowhead2D(GuiGraphics g, double[] base, double[] tip, int color) {
         double dx = tip[0] - base[0];
         double dy = tip[1] - base[1];
@@ -1153,7 +1034,6 @@ public class WallDesignerScreen extends PolishedScreen {
         if (len < 1) return;
         double ux = dx / len;
         double uy = dy / len;
-        // Barbs start slightly PAST the tip so the point itself renders solid.
         double[] tipE = {tip[0] + ux * 2, tip[1] + uy * 2};
         double bx = tip[0] - ux * 7;
         double by = tip[1] - uy * 7;
@@ -1161,7 +1041,6 @@ public class WallDesignerScreen extends PolishedScreen {
         line2D(g, tipE, new double[]{bx + uy * 4, by - ux * 4}, color, 3f);
     }
 
-    /** Cell wireframe drawn as 12 screen-space edges (always on top, never depth-hidden). */
     private void box2D(GuiGraphics g, EditModel m, double l, double h, double d, int color, float px) {
         double[][] c = new double[8][];
         for (int i = 0; i < 8; i++) {
@@ -1243,7 +1122,6 @@ public class WallDesignerScreen extends PolishedScreen {
         }
     }
 
-    /** Library list geometry — shared by render and click handling so they can't drift. */
     private static final int LIBRARY_TOP = 196;
     private static final int LIBRARY_ROW_H = 11;
 
@@ -1252,7 +1130,6 @@ public class WallDesignerScreen extends PolishedScreen {
         EditModel m = model();
         g.drawString(this.font, "Name:", 8, 152, 0xFFD080);
         int y = 182;
-        // Saved-design library (Build mode; Select mode uses this space for the inspector).
         if (!selectMode) {
             List<WallDesign> rows = visibleLibrary();
             g.drawString(this.font, "Library — click to load:", 8, LIBRARY_TOP - 12, 0xFFD080);
@@ -1278,7 +1155,6 @@ public class WallDesignerScreen extends PolishedScreen {
             }
             return;
         }
-        // Select mode, single selection: EVERY blockstate property as a clickable row.
         if (selectMode && selection.size() == 1) {
             int idx = selection.iterator().next();
             BlockState state = idx >= 0 && idx < m.cells.length ? m.cells[idx] : null;
@@ -1301,7 +1177,7 @@ public class WallDesignerScreen extends PolishedScreen {
                     8, y + 2, 0x808080);
                 y += 12;
             }
-            return; // selection details replace the hover readout
+            return;
         }
         if (selectMode && selection.size() > 1) {
             y += 26;
@@ -1346,7 +1222,7 @@ public class WallDesignerScreen extends PolishedScreen {
     }
 
     private List<Block> filteredBlocks() {
-        List<Block> source = onlyOwned ? allBlocks : knownBlocks; // allBlocks = owned subset
+        List<Block> source = onlyOwned ? allBlocks : knownBlocks;
         if (search.isEmpty()) return source;
         List<Block> out = new ArrayList<>();
         for (Block block : source) {
@@ -1358,8 +1234,6 @@ public class WallDesignerScreen extends PolishedScreen {
         return out;
     }
 
-    // ─── Picking (inverse of the viewport transform + Amanatides–Woo DDA) ────────────────────
-
     @Nullable
     private Hit pick(int mouseX, int mouseY) {
         if (mouseX < viewLeft() || mouseX >= viewRight() || mouseY < viewTop() || mouseY >= viewBottom()) {
@@ -1368,18 +1242,12 @@ public class WallDesignerScreen extends PolishedScreen {
         EditModel m = model();
         double vx = (mouseX - viewCx() - panX) / zoom;
         double vy = -(mouseY - viewCy() - panY) / zoom;
-        // Orthographic view ray, marched in fine steps. GUI space: HIGHER z is CLOSER to the
-        // viewer (the camera looks along decreasing z), so the ray must start at +z and march
-        // toward -z — cast the other way it hits the REARMOST block and offers the cell
-        // behind it as the placement neighbour, which broke placement almost everywhere
-        // (playtest 2026-06-11). The grid is ≤16³ and this runs once per frame.
+        // GUI space: higher z = nearer, so the ray marches +z -> -z; reversed it hits the rearmost block and offers the wrong placement cell.
         double[] origin = viewToLocal(vx, vy, 64, m);
         double[] far = viewToLocal(vx, vy, -64, m);
         double len = 128.0;
         double[] dir = {(far[0] - origin[0]) / len, (far[1] - origin[1]) / len, (far[2] - origin[2]) / len};
 
-        // Exact floor-plane crossing (y = 0, descending): clicking the grid ground places at
-        // height 0 — the bread-and-butter way to start a design on an empty grid.
         double floorT = Double.MAX_VALUE;
         int floorL = 0;
         int floorD = 0;
@@ -1395,10 +1263,6 @@ public class WallDesignerScreen extends PolishedScreen {
             }
         }
 
-        // First FILLED cell along the ray; the placement neighbour is the previous sampled
-        // cell REGARDLESS of bounds (clicking a boundary block's outer face yields an
-        // out-of-grid neighbour, which the click handler correctly rejects — the old
-        // "last in-bounds empty cell" rule silently broke every outer-face placement).
         int prevL = Integer.MIN_VALUE, prevD = Integer.MIN_VALUE, prevH = Integer.MIN_VALUE;
         for (double t = 0; t <= len; t += 0.02) {
             double px = origin[0] + dir[0] * t;
@@ -1424,26 +1288,19 @@ public class WallDesignerScreen extends PolishedScreen {
         return null;
     }
 
-    /** view (vx, vy, vz) → design-local coords: undo yaw/pitch and re-add the grid center. */
     private double[] viewToLocal(double vx, double vy, double vz, EditModel m) {
         double pr = Math.toRadians(pitch);
         double yr = Math.toRadians(-yaw);
-        // Inverse pitch (rotX by -pitch).
         double y1 = vy * Math.cos(pr) + vz * Math.sin(pr);
         double z1 = -vy * Math.sin(pr) + vz * Math.cos(pr);
-        // Inverse yaw (rotY by -(-yaw) = +yaw).
         double x2 = vx * Math.cos(yr) - z1 * Math.sin(yr);
         double z2 = vx * Math.sin(yr) + z1 * Math.cos(yr);
         return new double[]{x2 + m.length / 2.0, y1 + m.height / 2.0, z2 + m.depth / 2.0};
     }
 
-    // ─── Input ───────────────────────────────────────────────────────────────────────────────
-
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        // Menu bar first — its dropdown overlays everything, including the viewport.
         if (menuBar != null && menuBar.mouseClicked(mouseX, mouseY, button)) return true;
-        // Library rows (Build mode): click = load into this tab, Shift+click = delete.
         if (!selectMode && button == 0 && mouseX >= 6 && mouseX < PANEL_LEFT_W - 6
             && mouseY >= LIBRARY_TOP - 1) {
             List<WallDesign> rows = visibleLibrary();
@@ -1466,10 +1323,7 @@ public class WallDesignerScreen extends PolishedScreen {
                 return true;
             }
         }
-        // Viewport clicks are handled BEFORE the widget pass: no widget overlaps the
-        // viewport, and vanilla focus handling was eating LEFT clicks before they reached
-        // the editor (right clicks worked because isValidClickButton only accepts button 0 —
-        // which is exactly why remove worked while place didn't, playtest 2026-06-11).
+        // Handle viewport clicks before the widget pass: otherwise vanilla focus handling eats LEFT clicks.
         boolean inViewport = mouseX >= viewLeft() && mouseX < viewRight()
             && mouseY >= viewTop() && mouseY < viewBottom();
         if (inViewport && handleViewportClick(mouseX, mouseY, button)) {
@@ -1477,7 +1331,6 @@ public class WallDesignerScreen extends PolishedScreen {
             return true;
         }
         if (super.mouseClicked(mouseX, mouseY, button)) return true;
-        // Picker clicks.
         if (mouseX >= this.width - PANEL_RIGHT_W && mouseY >= 62 && mouseY < viewBottom()) {
             List<Block> filtered = filteredBlocks();
             int x0 = this.width - PANEL_RIGHT_W + 8;
@@ -1494,7 +1347,6 @@ public class WallDesignerScreen extends PolishedScreen {
             }
             return false;
         }
-        // Inspector property rows (select mode, single selection): click cycles that property.
         if (mouseX < PANEL_LEFT_W && button == 0 && selectMode && selection.size() == 1) {
             for (int[] row : propertyRows) {
                 if (mouseX >= row[0] && mouseX < row[2] && mouseY >= row[1] && mouseY < row[3]) {
@@ -1521,7 +1373,6 @@ public class WallDesignerScreen extends PolishedScreen {
 
     private boolean handleViewportClick(double mouseX, double mouseY, int button) {
         if (button == 2) {
-            // Blender-style: MMB orbits, Shift+MMB pans.
             if (hasShiftDown()) panning = true;
             else orbiting = true;
             return true;
@@ -1529,13 +1380,12 @@ public class WallDesignerScreen extends PolishedScreen {
         EditModel m = model();
         if (selectMode) {
             if (button != 0) return true;
-            // Gizmo arrows take priority over selection clicks.
             int axis = pickGizmoAxis(mouseX, mouseY);
             if (axis >= 0) {
                 pushUndo();
                 dragAxis = axis;
                 dragAccum = 0;
-                uiClick(net.minecraft.sounds.SoundEvents.NOTE_BLOCK_HAT.value(), 1.05f); // grab feedback
+                uiClick(net.minecraft.sounds.SoundEvents.NOTE_BLOCK_HAT.value(), 1.05f);
                 return true;
             }
             Hit hit = pick((int) mouseX, (int) mouseY);
@@ -1549,7 +1399,6 @@ public class WallDesignerScreen extends PolishedScreen {
                 }
                 uiClick(net.minecraft.sounds.SoundEvents.NOTE_BLOCK_HAT.value(), 1.05f);
             } else {
-                // Empty space: start a rubber-band drag select.
                 rubberBanding = true;
                 rubberX0 = rubberX1 = mouseX;
                 rubberY0 = rubberY1 = mouseY;
@@ -1557,7 +1406,7 @@ public class WallDesignerScreen extends PolishedScreen {
             return true;
         }
         Hit hit = pick((int) mouseX, (int) mouseY);
-        if (hit == null) return button == 0 || button == 1; // consume, but nothing to do
+        if (hit == null) return button == 0 || button == 1;
         if (button == 1) {
             if (hit.filled()) {
                 pushUndo();
@@ -1570,8 +1419,6 @@ public class WallDesignerScreen extends PolishedScreen {
         }
         if (button == 0) {
             if (hit.filled() && hasShiftDown()) {
-                // Build-mode quick-cycle: ROTATION properties only (facing/axis/rotation) —
-                // full blockstate editing lives in Select mode's inspector.
                 BlockState state = m.cells[m.idx(hit.l(), hit.d(), hit.h())];
                 for (Property<?> p : state.getProperties()) {
                     String pn = p.getName();
@@ -1590,9 +1437,6 @@ public class WallDesignerScreen extends PolishedScreen {
             int placeH = hit.filled() ? hit.nh() : hit.h();
             if (m.inBounds(placeL, placeD, placeH) && m.get(placeL, placeD, placeH) == null) {
                 pushUndo();
-                // The face the player clicked drives orientation — the REAL placement code
-                // path runs against a virtual level (torch → wall torch, slab halves,
-                // stair facing; "ALL block states", playtest 2026-06-12).
                 net.minecraft.core.Direction face = hit.filled()
                     ? net.minecraft.core.Direction.fromDelta(
                         hit.nl() - hit.l(), hit.nh() - hit.h(), hit.nd() - hit.d())
@@ -1608,17 +1452,14 @@ public class WallDesignerScreen extends PolishedScreen {
         return false;
     }
 
-    // ─── Placement-state fidelity (playtest 2026-06-12) ─────────────────────────────────────
-
     private static java.lang.reflect.Field wallBlockField;
 
-    /** {@code StandingAndWallBlockItem.wallBlock} — NeoForge runs mojmap names at runtime,
-     *  so plain reflection holds in dev AND production. Null = fall back to standing. */
     @Nullable
     private static net.minecraft.world.level.block.Block wallBlockOf(
             net.minecraft.world.item.StandingAndWallBlockItem item) {
         try {
             if (wallBlockField == null) {
+                // "wallBlock" is the mojmap field name; NeoForge runs mojmap at runtime, so this reflection holds in dev and prod.
                 wallBlockField = net.minecraft.world.item.StandingAndWallBlockItem.class
                     .getDeclaredField("wallBlock");
                 wallBlockField.setAccessible(true);
@@ -1629,14 +1470,6 @@ public class WallDesignerScreen extends PolishedScreen {
         }
     }
 
-    /**
-     * Runs the genuine {@code getStateForPlacement} code path against a {@link DesignerLevel}
-     * backed by THIS tab's grid: the clicked face drives the context's "looking direction"
-     * (the real player's camera is unrelated to the viewport), standing/wall item pairs try
-     * the wall variant on horizontal faces exactly like vanilla right-click placement, and
-     * canSurvive checks read the design's own blocks. K-sampled exact states still place
-     * verbatim — that's the eyedropper contract.
-     */
     private BlockState derivePlacementState(int pl, int pd, int ph,
                                             net.minecraft.core.Direction face) {
         Minecraft mc = Minecraft.getInstance();
@@ -1658,8 +1491,6 @@ public class WallDesignerScreen extends PolishedScreen {
             }
         });
         net.minecraft.core.BlockPos pos = new net.minecraft.core.BlockPos(pl, ph, pd);
-        // Click point on the shared plane between support and placement cell — gives slabs/
-        // stairs a sane half (face center = bottom half on side clicks).
         net.minecraft.world.phys.Vec3 click = new net.minecraft.world.phys.Vec3(
             pl + 0.5 - face.getStepX() * 0.5,
             ph + 0.5 - face.getStepY() * 0.5,
@@ -1685,8 +1516,6 @@ public class WallDesignerScreen extends PolishedScreen {
         return derived == null || derived.isAir() ? selectedState : derived;
     }
 
-    /** Placement context whose "looking direction" is the CLICKED FACE, not the real player
-     *  camera — directional blocks (torches, ladders, buttons, furnaces) orient to the face. */
     private static final class FaceFirstPlaceContext
         extends net.minecraft.world.item.context.BlockPlaceContext {
         private final net.minecraft.core.Direction face;
@@ -1734,13 +1563,10 @@ public class WallDesignerScreen extends PolishedScreen {
             net.minecraft.client.resources.sounds.SimpleSoundInstance.forUI(sound, pitch));
     }
 
-    // ─── Select-mode helpers ─────────────────────────────────────────────────────────────────
-
     private int idxL(EditModel m, int idx) { return idx % m.length; }
     private int idxD(EditModel m, int idx) { return (idx / m.length) % m.depth; }
     private int idxH(EditModel m, int idx) { return idx / (m.length * m.depth); }
 
-    /** Forward projection (mirror of the viewport pose): design-local point → screen px. */
     private double[] localToScreen(double x, double y, double z, EditModel m) {
         double px = x - m.length / 2.0;
         double py = y - m.height / 2.0;
@@ -1768,17 +1594,15 @@ public class WallDesignerScreen extends PolishedScreen {
 
     private static final double GIZMO_LEN = 1.8;
 
-    /** Axis arrow under the mouse (0 = X/length, 1 = Y/height, 2 = Z/depth), or -1. */
     private int pickGizmoAxis(double mouseX, double mouseY) {
         EditModel m = model();
         double[] c = selectionCentroid(m);
         if (c == null) return -1;
         double[] base = localToScreen(c[0], c[1], c[2], m);
         int best = -1;
-        double bestDist = 10.0; // generous — the arrows are 3px thick plus arrowheads
+        double bestDist = 10.0;
         for (int axis = 0; axis < 3; axis++) {
             double[] tip = gizmoTip(c, axis, m);
-            // Extend the grab segment past the tip so the arrowhead itself is grabbable.
             double dx = tip[0] - base[0];
             double dy = tip[1] - base[1];
             double len = Math.hypot(dx, dy);
@@ -1808,7 +1632,6 @@ public class WallDesignerScreen extends PolishedScreen {
         return Math.hypot(px - (x0 + t * dx), py - (y0 + t * dy));
     }
 
-    /** Shift the whole selection one cell along an axis if every target is free/in-bounds. */
     private void tryMoveSelection(int axis, int dir) {
         EditModel m = model();
         Map<Integer, BlockState> moves = new LinkedHashMap<>();
@@ -1859,7 +1682,6 @@ public class WallDesignerScreen extends PolishedScreen {
         return super.mouseReleased(mouseX, mouseY, button);
     }
 
-    /** Selects every filled cell whose projected center lies inside the rubber rectangle. */
     private void finishRubberBand() {
         rubberBanding = false;
         EditModel m = model();
@@ -1868,7 +1690,6 @@ public class WallDesignerScreen extends PolishedScreen {
         double minY = Math.min(rubberY0, rubberY1);
         double maxY = Math.max(rubberY0, rubberY1);
         if (maxX - minX < 3 && maxY - minY < 3) {
-            // A click on empty space, not a drag — clear the selection.
             if (!hasShiftDown()) selection.clear();
             return;
         }
@@ -1890,7 +1711,7 @@ public class WallDesignerScreen extends PolishedScreen {
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dx, double dy) {
         if (button == 2) {
             if (panning) {
-                panX -= (float) dx; // horizontal felt inverted grab-style (playtest 2026-06-12)
+                panX -= (float) dx;
                 panY += (float) dy;
                 return true;
             }
@@ -1906,8 +1727,6 @@ public class WallDesignerScreen extends PolishedScreen {
             return true;
         }
         if (button == 0 && dragAxis >= 0 && !selection.isEmpty()) {
-            // Project the mouse delta onto the dragged axis' screen direction; step the
-            // selection one cell per cell-length of accumulated travel (snapped, like Axiom).
             EditModel m = model();
             double[] c = selectionCentroid(m);
             if (c == null) return true;
@@ -1917,7 +1736,6 @@ public class WallDesignerScreen extends PolishedScreen {
             double ay = tip[1] - base[1];
             double axisLen = Math.hypot(ax, ay);
             if (axisLen < 1.0e-3) return true;
-            // Pixels of mouse travel along the axis, converted to cells (arrow = GIZMO_LEN cells).
             dragAccum += (dx * ax + dy * ay) / axisLen / (axisLen / GIZMO_LEN);
             while (dragAccum >= 1) {
                 tryMoveSelection(dragAxis, 1);
@@ -1949,7 +1767,7 @@ public class WallDesignerScreen extends PolishedScreen {
             return super.keyPressed(keyCode, scanCode, modifiers);
         }
         switch (keyCode) {
-            case 65 -> {                                       // A orbit · Ctrl+A select all
+            case 65 -> {
                 if (hasControlDown() && selectMode) {
                     EditModel m = model();
                     selection.clear();
@@ -1962,7 +1780,7 @@ public class WallDesignerScreen extends PolishedScreen {
                 }
                 return true;
             }
-            case 68 -> {                                       // D orbit · Ctrl+D deselect hovered
+            case 68 -> {
                 if (hasControlDown() && selectMode) {
                     if (hover != null && hover.filled()) {
                         selection.remove(model().idx(hover.l(), hover.d(), hover.h()));
@@ -1973,11 +1791,11 @@ public class WallDesignerScreen extends PolishedScreen {
                 }
                 return true;
             }
-            case 87 -> { pitch = Math.min(85f, pitch + 10f); return true; } // W
-            case 83 -> { pitch = Math.max(5f, pitch - 10f); return true; }  // S
-            case 66 -> { setMode(false); return true; }        // B = build
-            case 86 -> { setMode(true); return true; }         // V = select
-            case 75 -> {                                       // K = eyedropper (full state)
+            case 87 -> { pitch = Math.min(85f, pitch + 10f); return true; }
+            case 83 -> { pitch = Math.max(5f, pitch - 10f); return true; }
+            case 66 -> { setMode(false); return true; }
+            case 86 -> { setMode(true); return true; }
+            case 75 -> {
                 if (hover != null && hover.filled()) {
                     BlockState sampled = model().get(hover.l(), hover.d(), hover.h());
                     if (sampled != null) {
@@ -1988,14 +1806,14 @@ public class WallDesignerScreen extends PolishedScreen {
                 }
                 return true;
             }
-            case 90 -> {                                       // Ctrl+Z / Ctrl+Shift+Z
+            case 90 -> {
                 if (hasControlDown()) {
                     if (hasShiftDown()) redo();
                     else undo();
                     return true;
                 }
             }
-            case 261, 259 -> {                                 // Delete / Backspace
+            case 261, 259 -> {
                 if (selectMode && !selection.isEmpty()) {
                     deleteSelection();
                     return true;

@@ -1,7 +1,7 @@
 package com.bannerbound.antiquity.item;
 
 /**
- * Flint Knife — the first real tool: a {@link KnifeItem} (3 dmg, 2.0 speed, low durability). The
+ * Flint Knife - the first real tool: a {@link KnifeItem} (3 dmg, 2.0 speed, low durability). The
  * crafting-stone carving and grass/leaf harvesting all live on the {@link KnifeItem} base, so this
  * is just the flint-tier stats.
  */

@@ -20,32 +20,29 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity for a Drying Rack — a line with up to {@value #SLOTS} hanging spots. Right-click with
- * a dryable item to hang it on the first free spot; right-click empty-handed to take the last hung
- * item back (the finished result if it's dry, the original if it isn't). Each spot dries
- * independently per its {@link DryingRackRecipe} (data-driven). The renderer cross-fades each spot
- * from its input to its result as it dries.
- *
- * <p>A "double" rack is purely cosmetic (two adjacent single racks rendered as one, chest-style):
- * each block keeps its own four spots and its own block entity.
+ * Block entity for a Drying Rack: a line with up to SLOTS hanging spots. Right-click with a
+ * dryable item to hang it on the first free spot; right-click empty-handed to take the last hung
+ * item back (the finished result if dry, the original input if not -- inputs are kept so an early
+ * pull returns them). Each spot dries independently on its own countdown per its data-driven
+ * DryingRackRecipe; the renderer cross-fades the spot from input to result using progress()
+ * (0 = just hung, 1 = dry). NPC rack-tenders use firstDrySlot(filter) + takeSlot(i) to collect the
+ * exact spot they found dry rather than the last hung, with the recipe filter letting each NPC
+ * line collect only its own category (food vs craft). A "double" rack is purely cosmetic (two
+ * adjacent single racks rendered as one, chest-style): each block keeps its own four spots and its
+ * own block entity. Every server-side change pushes a full block-update sync to clients.
  */
 @ApiStatus.Internal
 public class DryingRackBlockEntity extends BlockEntity {
     public static final int SLOTS = 4;
 
-    /** The item hung on each spot (the original input — kept so an early pull returns it). */
     private final ItemStack[] inputs = new ItemStack[SLOTS];
-    /** Drying countdown per spot (ticks remaining); 0 once dry. */
     private final int[] dryTicks = new int[SLOTS];
-    /** Total drying time per spot (for the render progress fraction). */
     private final int[] dryTotal = new int[SLOTS];
 
     public DryingRackBlockEntity(BlockPos pos, BlockState state) {
         super(BannerboundAntiquity.DRYING_RACK_BE.get(), pos, state);
         java.util.Arrays.fill(inputs, ItemStack.EMPTY);
     }
-
-    // ─── Queries (renderer + interaction) ──────────────────────────────────────────────────────
 
     public boolean isEmpty() {
         for (ItemStack s : inputs) if (!s.isEmpty()) return false;
@@ -56,19 +53,16 @@ public class DryingRackBlockEntity extends BlockEntity {
         return firstFreeSlot() < 0;
     }
 
-    /** The raw item hung on a spot (empty if the spot is free), for the renderer's "before" decal. */
     public ItemStack input(int slot) {
         return inputs[slot];
     }
 
-    /** The dried result for a spot (the recipe output), or empty if the spot is free / has no recipe. */
     public ItemStack result(int slot) {
         if (inputs[slot].isEmpty()) return ItemStack.EMPTY;
         DryingRackRecipe recipe = DryingRackRecipeManager.find(inputs[slot].getItem());
         return recipe == null ? ItemStack.EMPTY : recipe.result();
     }
 
-    /** Drying progress 0..1 for a spot (0 = just hung, 1 = dry) — drives the render cross-fade. */
     public float progress(int slot) {
         if (inputs[slot].isEmpty()) return 0.0F;
         if (dryTotal[slot] <= 0) return 1.0F;
@@ -89,14 +83,10 @@ public class DryingRackBlockEntity extends BlockEntity {
         return -1;
     }
 
-    // ─── Interaction ─────────────────────────────────────────────────────────────────────────────
-
-    /** True if {@code stack} can be hung here (has a drying recipe and there's a free spot). */
     public boolean canAccept(ItemStack stack) {
         return !stack.isEmpty() && !isFull() && DryingRackRecipeManager.find(stack.getItem()) != null;
     }
 
-    /** Hang one of {@code stack} on the first free spot. Returns false if it can't be dried / no room. */
     public boolean hang(ItemStack stack) {
         DryingRackRecipe recipe = DryingRackRecipeManager.find(stack.getItem());
         if (recipe == null) return false;
@@ -109,16 +99,12 @@ public class DryingRackBlockEntity extends BlockEntity {
         return true;
     }
 
-    /** Take the most-recently-hung spot's contents — the dried result if it's finished, else the
-     *  original item back. Returns empty if the rack is bare. */
     public ItemStack takeLast() {
         int slot = lastUsedSlot();
         if (slot < 0) return ItemStack.EMPTY;
         return takeSlot(slot);
     }
 
-    /** Take a SPECIFIC spot's contents (the dried result if finished, else the input back) — the
-     *  NPC rack-tending path, which collects the exact slot it found dry rather than the last hung. */
     public ItemStack takeSlot(int slot) {
         if (slot < 0 || slot >= SLOTS || inputs[slot].isEmpty()) return ItemStack.EMPTY;
         ItemStack out = isDry(slot) ? result(slot).copy() : inputs[slot].copy();
@@ -129,8 +115,6 @@ public class DryingRackBlockEntity extends BlockEntity {
         return out;
     }
 
-    /** The first spot that finished drying and whose recipe passes {@code filter}, or {@code -1} —
-     *  lets each NPC line collect only its own category (food vs craft). */
     public int firstDrySlot(java.util.function.Predicate<DryingRackRecipe> filter) {
         for (int i = 0; i < SLOTS; i++) {
             if (!isDry(i)) continue;
@@ -140,7 +124,6 @@ public class DryingRackBlockEntity extends BlockEntity {
         return -1;
     }
 
-    /** Everything currently hung (results if dry, inputs otherwise) — for block-break drops. */
     public java.util.List<ItemStack> dropContents() {
         java.util.List<ItemStack> out = new java.util.ArrayList<>();
         for (int i = 0; i < SLOTS; i++) {
@@ -150,16 +133,13 @@ public class DryingRackBlockEntity extends BlockEntity {
         return out;
     }
 
-    // ─── Ticking (drying timers + ambient particles) ───────────────────────────────────────────────
-
     public static void tick(Level level, BlockPos pos, BlockState state, DryingRackBlockEntity be) {
         boolean anyDrying = false;
         boolean finishedNow = false;
         for (int i = 0; i < SLOTS; i++) {
             if (be.inputs[i].isEmpty() || be.dryTicks[i] <= 0) continue;
             anyDrying = true;
-            // Both sides count down so the client fade stays smooth without per-tick sync; the server
-            // is authoritative for the dry transition (and re-syncs when a spot finishes).
+            // Both sides count down (smooth client fade w/o per-tick sync); server stays authoritative and re-syncs on finish.
             be.dryTicks[i]--;
             if (be.dryTicks[i] <= 0 && !level.isClientSide) finishedNow = true;
         }
@@ -176,8 +156,6 @@ public class DryingRackBlockEntity extends BlockEntity {
         }
     }
 
-    // ─── NBT + client sync ───────────────────────────────────────────────────────────────────────
-
     @Override
     public void setChanged() {
         super.setChanged();
@@ -189,9 +167,7 @@ public class DryingRackBlockEntity extends BlockEntity {
     @Override
     protected void saveAdditional(CompoundTag tag, HolderLookup.Provider provider) {
         super.saveAdditional(tag, provider);
-        // Always write all four spots (an empty spot = an empty compound) so the update tag is NEVER
-        // empty — the client skips empty block-entity tags, which would otherwise leave the last item
-        // rendered after it's pulled off (the cleared rack would send {} and never update).
+        // Write all 4 spots even when empty: an all-empty update tag is skipped client-side, leaving stale items rendered.
         net.minecraft.nbt.ListTag list = new net.minecraft.nbt.ListTag();
         for (int i = 0; i < SLOTS; i++) {
             CompoundTag slot = new CompoundTag();

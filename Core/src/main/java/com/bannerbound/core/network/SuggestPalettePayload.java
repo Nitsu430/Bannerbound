@@ -11,8 +11,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: a Chiefdom non-chief toggles a suggestion on {@code paletteId}. Twin of
- * {@link SuggestPolicyPayload} — the server toggles the suggester and re-broadcasts so the chief
+ * Client -> server: a Chiefdom non-chief toggles a suggestion on {@code paletteId}. Twin of
+ * {@link SuggestPolicyPayload} - the server toggles the suggester and re-broadcasts so the chief
  * sees the face badge on that palette row.
  */
 @ApiStatus.Internal

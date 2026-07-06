@@ -3,14 +3,25 @@ package com.bannerbound.core.api.settlement;
 import net.minecraft.network.chat.Component;
 
 /**
- * Bannerbound tech-tier enum. Ordinals are persisted (in {@link Settlement#save()} as
- * {@code Age} and in {@link SettlementData}'s {@code WorldAge}), so existing entries must
- * keep their position — append new ones at the end. The one exception so far: {@code CLASSICAL}
- * was inserted between {@code ANCIENT} and {@code MEDIEVAL} (so {@code min_age} ordering stays
- * monotonic for the Ancient&rarr;Classical&rarr;Medieval progression), which shifted every
- * later era's ordinal up by one. Worlds saved before that insert will read one era too low —
- * acceptable during development; re-create test worlds. Lang keys follow the pattern
- * {@code bannerbound.era.<lowercase_name>} (so {@code ANCIENT} &rarr; {@code bannerbound.era.ancient}).
+ * Bannerbound tech-tier enum. Ordinals are persisted ({@code Age} in {@link Settlement#save()},
+ * {@code WorldAge} in {@link SettlementData}), so existing entries must keep their position -
+ * append new eras at the end. One historical exception: {@code CLASSICAL} was inserted between
+ * {@code ANCIENT} and {@code MEDIEVAL} (keeping {@code min_age} ordering monotonic for the
+ * Ancient->Classical->Medieval progression), shifting every later ordinal up by one; worlds
+ * saved before that insert read one era too low - acceptable during development, re-create test
+ * worlds. Lang keys follow {@code bannerbound.era.<lowercase_name>}.
+ *
+ * <p>{@link #immigrationFloor()} is a per-era population FLOOR, not a lifetime cap: immigration
+ * fires whenever {@code population() < immigrationFloor()}, so a settlement whose citizens all
+ * died drops back below the floor and resumes immigration automatically - no soft-lock where the
+ * player can never rebuild. Ancient is locked at 7 (the original spec); every gate (immigration,
+ * consumption, population-max floor) reads the per-era number through
+ * {@link Settlement#immigrationFloor()}. The three slot counts - active policies, active
+ * palettes, registration documents - all follow the same +1-per-era curve (Ancient=1,
+ * Classical=2, ...) but stay separate methods so they can diverge later without entangling;
+ * slots never shrink, so an era advance never evicts an active policy or claws back an issued
+ * registration document. {@link #next()} returns {@code this} when already at the last tier.
+ * Open: post-Ancient immigration floors are placeholder values to tune as each era ships.
  */
 public enum Era {
     ANCIENT,
@@ -31,61 +42,32 @@ public enum Era {
         return name().toLowerCase();
     }
 
-    /**
-     * Per-era <i>immigration floor</i>: the population number that immigration tops a settlement
-     * up to. Immigration fires whenever {@code population() < immigrationFloor()} — so a
-     * settlement whose citizens all died drops back below the floor and resumes immigration
-     * automatically. There is no hard lifetime cap; this prevents soft-locks where every original
-     * immigrant dies and the player can never rebuild.
-     *
-     * <p>Ancient is locked at 7 (the original spec). Later eras scale up — placeholder values
-     * for now, tuned when each era ships. Adjust here; every gate (immigration, consumption,
-     * population-max floor) reads the per-era number through {@link Settlement#immigrationFloor()}.
-     */
     public int immigrationFloor() {
         return switch (this) {
             case ANCIENT     -> 7;
-            case CLASSICAL   -> 10;  // TODO: tune when Classical ships
-            case MEDIEVAL    -> 14;  // TODO: tune when Medieval ships
-            case RENAISSANCE -> 23;  // TODO: tune when Renaissance ships
-            case INDUSTRIAL  -> 34;  // TODO: tune when Industrial ships
-            case DIESEL      -> 57;  // TODO: tune when Diesel ships
-            case ATOMIC      -> 80;  // TODO: tune when Atomic ships
-            case MODERN      -> 100;  // TODO: tune when Modern ships
-            case FUTURE      -> 150;  // TODO: tune when Future ships
+            case CLASSICAL   -> 10;
+            case MEDIEVAL    -> 14;
+            case RENAISSANCE -> 23;
+            case INDUSTRIAL  -> 34;
+            case DIESEL      -> 57;
+            case ATOMIC      -> 80;
+            case MODERN      -> 100;
+            case FUTURE      -> 150;
         };
     }
 
-    /**
-     * Number of active policy slots a settlement of this era has. Scales +1 per era:
-     * Ancient = 1, Classical = 2, Medieval = 3, ... A settlement that advances an era
-     * gains a slot; slots never shrink, so an active policy is never forcibly evicted.
-     */
     public int activePolicySlots() {
         return ordinal() + 1;
     }
 
-    /**
-     * Number of active palette slots a settlement of this era has. Same per-era curve as
-     * {@link #activePolicySlots()} (Antiquity = 1, Medieval = 2, ...) but tracked separately so
-     * the two can diverge later without entangling them.
-     * (Ancient = 1, Classical = 2, ...)
-     */
     public int activePaletteSlots() {
         return ordinal() + 1;
     }
 
-    /**
-     * Number of registration documents a settlement of this era may issue over its lifetime —
-     * a Registration Tablet in the Ancient era, a Registration Paper from Medieval on. Same
-     * +1-per-era curve as {@link #activePolicySlots()} (Ancient = 1, Classical = 2, ...), so each age
-     * advance grants exactly one more document on top of those already issued.
-     */
     public int registrationDocumentSlots() {
         return ordinal() + 1;
     }
 
-    /** Returns the era following this one, or {@code this} if already at the last tier. */
     public Era next() {
         Era[] vals = values();
         int idx = ordinal();

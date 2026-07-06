@@ -11,8 +11,8 @@ import net.minecraft.network.codec.StreamCodec;
 /**
  * One line in a barter offer or storage panel: a registry item id, a count, and the server-computed
  * abstract worth of a single unit ({@link com.bannerbound.core.barbarian.ItemValue}). The value is
- * carried on S→C payloads so the client can score offers without a server round-trip (food values are
- * datapack/server-only, so the client can't recompute them); on C→S payloads it's unused (server
+ * carried on S->C payloads so the client can score offers without a server round-trip (food values are
+ * datapack/server-only, so the client can't recompute them); on C->S payloads it's unused (server
  * recomputes authoritatively) and sent as 0.
  */
 @ApiStatus.Internal

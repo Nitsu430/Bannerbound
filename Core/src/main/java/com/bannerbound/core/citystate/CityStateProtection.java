@@ -30,12 +30,14 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.event.level.BlockEvent;
 
 /**
- * Claim protection for AI city-states — the parallel to {@code FactionEvents}' settlement protection
- * (CITY_STATES §2). Players cannot break/place blocks, harm entities, fire projectiles, or open
- * containers inside a city-state's claimed territory UNLESS their settlement is at <b>active war</b>
- * with it — exactly like enemy settlements. City-state chunks live in a separate store
- * ({@link CityStateData}), so the settlement protection in {@code FactionEvents} doesn't cover them;
- * this fills that gap. Op bypass honours {@link ChunkProtection#shouldBypass}.
+ * Claim protection for AI city-states -- the parallel to FactionEvents' settlement protection
+ * (CITY_STATES plan). Players cannot break/place blocks, harm entities, fire projectiles, or open
+ * containers inside a city-state's claimed territory UNLESS their settlement is at active war with it
+ * (then it is free to sack), exactly like enemy settlements. City-state chunks live in a separate store
+ * (CityStateData) that FactionEvents' settlement protection does not cover, so this fills that gap.
+ * protectingAt is the shared gate every handler runs: it returns null (player may act) when the system
+ * is disabled -- so stale claims protect nothing -- on op bypass (ChunkProtection.shouldBypass), when
+ * no city-state owns the chunk, or when the player's settlement is at active war with it.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -43,16 +45,14 @@ public final class CityStateProtection {
     private CityStateProtection() {
     }
 
-    /** The city-state protecting {@code pos} against {@code player}, or null if the player may act
-     *  (no city-state there, op-bypass, or actively at war with it). */
     private static CityState protectingAt(MinecraftServer server, ServerPlayer player, BlockPos pos) {
-        if (!CityStateManager.enabled()) return null; // system off → stale claims protect nothing
+        if (!CityStateManager.enabled()) return null;
         if (server == null || ChunkProtection.shouldBypass(player)) return null;
         ServerLevel overworld = server.overworld();
         CityState cs = CityStateData.get(overworld).getByChunk(new ChunkPos(pos).toLong());
         if (cs == null) return null;
         Settlement mine = SettlementData.get(overworld).getByPlayer(player.getUUID());
-        if (mine != null && cs.isActiveEnemy(mine.id())) return null; // at war → free to act (sack it)
+        if (mine != null && cs.isActiveEnemy(mine.id())) return null;
         return cs;
     }
 
@@ -80,11 +80,10 @@ public final class CityStateProtection {
         }
     }
 
-    /** Block container access (village loot chests, barrels, furnaces…) in a peaceful city-state. */
     @SubscribeEvent
     public static void onRightClickBlock(PlayerInteractEvent.RightClickBlock event) {
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
-        if (player.isShiftKeyDown()) return; // sneaking = placing against; handled by place event
+        if (player.isShiftKeyDown()) return; // sneaking = placing against a block; handled by place event
         if (!(event.getLevel().getBlockEntity(event.getPos()) instanceof Container)) return;
         CityState cs = protectingAt(player.getServer(), player, event.getPos());
         if (cs != null) {

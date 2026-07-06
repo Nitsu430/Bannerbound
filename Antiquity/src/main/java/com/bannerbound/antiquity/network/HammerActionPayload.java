@@ -14,13 +14,13 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: a step in the active cold-hammer minigame.
- * <ul>
- *   <li>{@link #COMMIT} — first strike: the server consumes the casting (+stick) — the commitment point.</li>
- *   <li>{@link #COMPLETE} — after the last strike; {@code scores} carries the per-strike 0–100 grades.
- *       The server aggregates them, applies the hammer-rank quality gate, and gives the finished tool.</li>
- *   <li>{@link #CANCEL} — aborted; if it had committed, the inputs are already forfeit.</li>
- * </ul>
+ * Client -> server: a step in the active cold-hammer minigame. COMMIT is the first strike: the
+ * server consumes the casting (+stick) - the commitment point. STRIKE is one landed strike with its
+ * single 0-100 grade in {@code scores}; on it the server fires the world-visible effects (sparks,
+ * hammer-clang, arm swing) so other players see/hear the smithing. COMPLETE follows the last
+ * strike with all per-strike 0-100 grades; the server aggregates them, applies the hammer-rank
+ * quality gate, and gives the finished tool. CANCEL aborts - a committed session's inputs are
+ * already forfeit.
  */
 @ApiStatus.Internal
 public record HammerActionPayload(BlockPos pos, int action, List<Integer> scores)
@@ -28,8 +28,6 @@ public record HammerActionPayload(BlockPos pos, int action, List<Integer> scores
     public static final int COMMIT = 0;
     public static final int COMPLETE = 1;
     public static final int CANCEL = 2;
-    /** A single strike landed; {@code scores} carries its one 0–100 grade. The server fires the
-     *  world-visible effects (sparks, hammer-clang, arm swing) so other players see/hear the smithing. */
     public static final int STRIKE = 3;
 
     public static final CustomPacketPayload.Type<HammerActionPayload> TYPE =

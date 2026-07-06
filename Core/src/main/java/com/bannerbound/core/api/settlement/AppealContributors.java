@@ -7,14 +7,13 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 
 /**
- * Extension point for appeal that does NOT come from a block type — e.g. the Antiquity expansion's
+ * Extension point for appeal that does NOT come from a block type - e.g. the Antiquity expansion's
  * per-face plaster/trim coatings, which are decoration data rather than blocks and so are invisible
  * to the block-type tally. Contributors are summed per scanned position in
  * {@link HouseAppealData#scoreUnion} (homes and workshops). Core ships none; expansions register at
- * setup.
+ * setup. Backed by a CopyOnWriteArrayList so registration at setup and the reader threads don't race.
  */
 public final class AppealContributors {
-    /** Extra appeal at one position (summed across whatever the contributor tracks there). */
     @FunctionalInterface
     public interface ExtraAppeal {
         double appeal(ServerLevel level, BlockPos pos);
@@ -32,7 +31,6 @@ public final class AppealContributors {
         return !LIST.isEmpty();
     }
 
-    /** Summed extra appeal at {@code pos} across all contributors (0 when none registered). */
     public static double extra(ServerLevel level, BlockPos pos) {
         double sum = 0.0;
         for (ExtraAppeal c : LIST) {

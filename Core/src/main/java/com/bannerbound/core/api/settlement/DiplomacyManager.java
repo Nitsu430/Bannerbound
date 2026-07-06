@@ -43,6 +43,44 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.neoforged.neoforge.network.PacketDistributor;
 
+/**
+ * Server-side hub for settlement-vs-settlement diplomacy: discovery, war/peace, rallies, the
+ * stolen-standard capture objective, raze, and client state broadcasting. Authoritative state
+ * lives in {@link SettlementData} (relations, stolen standards, cooldowns, rally set); the only
+ * local state is the transient 80-tick RECENT_SUPPORT_BREAKS map that attributes a banner popping
+ * off a broken support block to the warring enemy who broke it. Ticked every server tick:
+ * pending-war countdowns and capture timeouts run at full rate, while discovery, standard
+ * reconciliation, rally cleanup and the DiplomacyStatePayload/DiplomacyObjectivePayload
+ * broadcasts run on 1-second sub-timers.
+ *
+ * routeAction branches on government: anarchy acts immediately; COUNCIL starts a ChatVoteManager
+ * vote, with councilProposalValid pre-checking the same guards declareWar/offerPeace/razeCaptured
+ * re-check at resolution (already at war, cooldowns, target offline, nothing to raze, rally at
+ * peace) so members never vote on an action that would silently fail; CHIEFDOM pings the chief
+ * with a suggestion. City-state targets divert to CityStateWarManager at every entry point
+ * (route/pickup/drop/score/container purge). War lifecycle: declare -> WAR_WARNING_TICKS pending
+ * warning (countdown pauses while the target has nobody online unless the ALLOW_OFFLINE_WAR
+ * gamerule is set) -> active; peace requires BOTH sides to offer and ends the pair into
+ * PAIR_REDECLARE_COOLDOWN_TICKS. Capture is scored by bringing the enemy's stolen standard to
+ * your own town hall while your own banner is raised; a captured war finishes only by raze or
+ * CAPTURE_TIMEOUT_TICKS timeout, and both finishes give the winner WINNER_NEW_WAR_COOLDOWN_TICKS
+ * (timeout deliberately mirrors raze so a captor cannot dodge the cooldown by waiting the timer
+ * out). Disband/raze cleanup drops every relation of the dead settlement outright - re-founding
+ * mints a fresh UUID, so kept rows would only accumulate as zombies for the life of the world.
+ *
+ * Stolen standards: the tracked record is authoritative and the ItemStack is only a proxy - any
+ * standard item whose target has no live record is a "ghost" copy and is destroyed/stripped on
+ * pickup/score rather than honored. Dropped standards auto-return after
+ * DROPPED_STANDARD_RETURN_TICKS, return instantly when a member of the owning settlement touches
+ * them, and force-return if they leave the overworld or land on a non-belligerent;
+ * reconcileStolenStandards is the per-second safety net that re-syncs the record with the world
+ * (carrier slowdown, container purge, auto-return). Rally can only be ON while at war or under a
+ * barbarian raid - the two cases worth arming every citizen instead of just the watch;
+ * clearFinishedRallies wipes it the moment neither holds, so toggleRally refuses at peace rather
+ * than flickering on->off. buildStatePayload also appends read-only city-state rows (Phase 1: the
+ * cityState flag suppresses the action button client-side) and read-only barbarian camp rows
+ * (barbarian diplomacy happens through envoys/parley, not the diplomacy tab).
+ */
 public final class DiplomacyManager {
     private DiplomacyManager() {}
 
@@ -152,9 +190,7 @@ public final class DiplomacyManager {
     public static boolean canDamageInClaim(SettlementData data, ChunkPos chunk, @Nullable Entity sourceEntity) {
         Settlement owner = data.getByChunk(chunk.toLong());
         if (owner == null) return true;
-        // Claim protection governs player/faction aggression. Source-less natural damage
-        // (starvation, fall, fire) and non-player simulation damage (mobs, citizen brawls)
-        // must still apply inside settlements.
+        // Only player-sourced damage is claim-gated; natural and mob damage must still land in settlements.
         if (!(sourceEntity instanceof ServerPlayer player)) return true;
         Settlement attacker = data.getByPlayer(player.getUUID());
         return attacker != null
@@ -226,7 +262,6 @@ public final class DiplomacyManager {
         SettlementData data = SettlementData.get(server.overworld());
         Settlement actorSettlement = data.getByPlayer(actor.getUUID());
         if (actorSettlement == null || !actorSettlement.members().contains(actor.getUUID())) return;
-        // City-state targets (war/peace/capture) route to their own manager (CITY_STATES §2).
         if (targetId != null) {
             com.bannerbound.core.citystate.CityState cs =
                 com.bannerbound.core.citystate.CityStateData.get(server.overworld()).getById(targetId);
@@ -263,11 +298,6 @@ public final class DiplomacyManager {
         }
     }
 
-    /** Validates a COUNCIL proposal up front so members aren't asked to vote on something that
-     *  would silently fail when {@link #performAction} re-checks it at resolution (already at war,
-     *  on cooldown, target offline, nothing to raze, rally with no war). On rejection the proposer
-     *  gets a red message and no vote is started. Mirrors the guards in
-     *  {@link #declareWar}/{@link #offerPeace}/{@link #razeCaptured}. */
     private static boolean councilProposalValid(MinecraftServer server, ServerPlayer actor,
                                                 Settlement actorSettlement, int action,
                                                 @Nullable UUID targetId) {
@@ -507,9 +537,6 @@ public final class DiplomacyManager {
     private static void toggleRally(MinecraftServer server, Settlement settlement) {
         SettlementData data = SettlementData.get(server.overworld());
         boolean next = !data.isRallying(settlement.id());
-        // Rally only means something while there's something to rally AGAINST — an active war or a
-        // barbarian raid (clearFinishedRallies wipes it the moment both end). Refuse to turn it on at
-        // peace instead of letting it flicker on→off for a tick.
         if (next && !canRally(data, settlement.id())) {
             SettlementManager.broadcastToSettlement(server, settlement, Component.translatable(
                 "bannerbound.diplomacy.error.rally_no_war").withStyle(ChatFormatting.RED));
@@ -539,9 +566,6 @@ public final class DiplomacyManager {
         return false;
     }
 
-    /** A settlement may call a RALLY while it is at war OR while a barbarian raid is besieging it — the
-     *  two situations worth dropping all work and arming every citizen, not just the watch. Outside
-     *  those, the standing guard handles defence and ordinary citizens keep working. */
     public static boolean canRally(SettlementData data, UUID settlementId) {
         return isSettlementAtWar(data, settlementId)
             || com.bannerbound.core.barbarian.BarbarianCampManager.isSettlementRaided(settlementId);
@@ -658,9 +682,6 @@ public final class DiplomacyManager {
         }
         Settlement target = targetId == null ? null : data.getById(targetId);
         if (target == null || !data.stolenStandards().containsKey(targetId)) {
-            // No live tracked standard backs this item (target disbanded, or the standard was
-            // already auto-returned/recovered leaving a stray "ghost" copy). Destroy it so it
-            // can never be picked up, carried, or scored a second time.
             item.discard();
             return false;
         }
@@ -702,7 +723,6 @@ public final class DiplomacyManager {
             data.setDirty();
             broadcastWarPairState(server, target.id());
         } else {
-            // Picked up a ghost copy with no live tracked standard — strip it from the player.
             removeOneStolenStandard(player, targetId);
         }
     }
@@ -794,8 +814,6 @@ public final class DiplomacyManager {
         if (targetId == null) return false;
         Settlement target = data.getById(targetId);
         if (target == null || !data.stolenStandards().containsKey(targetId)) {
-            // The item no longer corresponds to a live tracked standard (target gone, or the
-            // standard was already returned/recovered). Consume the dud so it can't capture.
             removeOneStolenStandard(player, targetId);
             return true;
         }
@@ -937,9 +955,7 @@ public final class DiplomacyManager {
     }
 
     private static void reconcileStolenStandards(MinecraftServer server, SettlementData data) {
-        // Nothing in play → skip the world-wide ItemEntity sweep entirely. Without this guard the
-        // full ±3e7 getEntitiesOfClass below runs every second over every loaded item entity even
-        // when no standard has ever been stolen.
+        // Guard is load-bearing: without it the +/-3e7 world-wide ItemEntity sweep below runs every second.
         if (data.stolenStandards().isEmpty()) return;
         ServerLevel level = server.overworld();
         Map<UUID, ItemEntity> dropped = new HashMap<>();
@@ -1144,9 +1160,6 @@ public final class DiplomacyManager {
             Settlement target = data.getById(relation.capturedTarget);
             Settlement captor = data.getById(relation.capturedBy);
             if (target != null && captor != null) {
-                // Winning by letting the capture time out earns the same new-war cooldown as
-                // razing — otherwise a captor could just wait out the timer and immediately
-                // declare on someone else, which razing (the aggressive finish) is barred from.
                 data.winnerNoNewWarUntil().put(captor.id(), now + WINNER_NEW_WAR_COOLDOWN_TICKS);
                 returnStandard(server, data, target, false);
                 endWarWithCooldown(server, data, relation, target, captor, false);
@@ -1224,9 +1237,6 @@ public final class DiplomacyManager {
                 PolicyEffects.syncWarMoraleNow(server, affectedSettlement);
             }
         }
-        // The disbanded settlement is gone for good (re-founding mints a fresh UUID), so its
-        // relations are dead weight. Drop them outright instead of leaving zombie rows that
-        // accumulate in the map for the life of the world.
         data.removeRelationsInvolving(settlementId);
         data.setDirty();
     }
@@ -1275,9 +1285,6 @@ public final class DiplomacyManager {
         return new DiplomacyStatePayload(data.isRallying(viewer.id()), winnerCooldown, rows, barbarianRows);
     }
 
-    /** Read-only rows for every barbarian camp this settlement has discovered: name (in the camp's
-     *  colour), current stance, numeric standing, and distance/direction. No actions — barbarian
-     *  diplomacy happens through envoys/parley, not the tab. */
     private static List<DiplomacyStatePayload.BarbarianRow> buildBarbarianRows(MinecraftServer server,
                                                                               Settlement viewer) {
         List<DiplomacyStatePayload.BarbarianRow> out = new ArrayList<>();
@@ -1314,8 +1321,6 @@ public final class DiplomacyManager {
         return "Here";
     }
 
-    /** Appends one row per city-state this settlement has discovered. Read-only in Phase 1 (no war /
-     *  trade actions yet — the {@code cityState} flag suppresses the action button client-side). */
     private static void appendCityStateRows(MinecraftServer server, Settlement viewer,
                                             List<DiplomacyStatePayload.Row> rows) {
         if (!com.bannerbound.core.citystate.CityStateManager.enabled()) return;

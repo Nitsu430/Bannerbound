@@ -31,9 +31,18 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * Server-authoritative driver for the cold-hammer minigame at the Stone Anvil (METALWORKING_PLAN.md
- * Part 3). The anvil is a pile station; this opens the gravity-drag minigame for the pile's matched
- * {@link AnvilRecipe} (blade + stick → sword), consumes the pile on commit, and on completion applies
- * the <b>hammer-rank quality gate</b> before stamping the tier via {@link Fletching#applyQuality}.
+ * Part 3). The anvil is a pile station; startSession opens the gravity-drag minigame for the pile's
+ * matched {@link AnvilRecipe} (blade + stick -> sword) and locks the block via WorkBlockLocks. COMMIT
+ * consumes the pile and lights the glowing workpiece, each STRIKE cools it a notch, COMPLETE grades
+ * the strikes and produces the item. One in-flight Session per player in a plain HashMap, server
+ * thread only; every exit path (COMPLETE, CANCEL, disconnect, abort) must endForging, unlock the
+ * block, and lower the broadcast hammer arm or the anvil/arm is left stuck.
+ *
+ * Quality: strikes aggregate through {@link QualityMath}, then a hammer-rank gate caps the result -
+ * a workpiece reaches its top tier only when the hammer's rank is within one step of the metal's
+ * (hammerRank >= workpieceRank - 1); otherwise it caps at Standard. Intoxication can botch it
+ * further, and {@link Fletching#applyQuality} stamps the final tier. The per-metal colour threaded
+ * through the Session tints the spark/fountain particles.
  */
 @ApiStatus.Internal
 public final class Hammer {
@@ -63,7 +72,6 @@ public final class Hammer {
 
     private static final Map<UUID, Session> SESSIONS = new HashMap<>();
 
-    /** Opens the minigame for the anvil's matched recipe, finished with a hammer of {@code hammerRank}. */
     public static void startSession(ServerPlayer player, BlockPos pos, StoneAnvilBlockEntity be, int hammerRank) {
         AnvilRecipe recipe = be.matchedRecipe();
         if (recipe == null) return;
@@ -81,7 +89,6 @@ public final class Hammer {
         broadcastArm(player, true);
     }
 
-    /** Tell tracking clients (and the smith) to raise/lower the third-person hammer arm. */
     private static void broadcastArm(ServerPlayer player, boolean active) {
         PacketDistributor.sendToPlayersTrackingEntityAndSelf(player,
             new com.bannerbound.antiquity.network.HammerArmPayload(player.getUUID(), active));
@@ -100,7 +107,7 @@ public final class Hammer {
                     int strikes = recipe != null ? Math.max(1, recipe.strikes()) : 1;
                     be.consumePile();
                     if (recipe != null) {
-                        be.beginForging(recipe.result(), strikes, session.metalColor); // glowing workpiece
+                        be.beginForging(recipe.result(), strikes, session.metalColor);
                     }
                     session.committed = true;
                 }
@@ -126,7 +133,7 @@ public final class Hammer {
                         session.strikeScores.add(score);
                     }
                     if (level.getBlockEntity(session.pos) instanceof StoneAnvilBlockEntity be) {
-                        be.forgeStrike(); // cool the workpiece one notch
+                        be.forgeStrike();
                     }
                     strikeEffects(level, player, session.pos, score, session.metalColor);
                 }
@@ -141,16 +148,12 @@ public final class Hammer {
         }
     }
 
-    /** World-visible feedback for one strike — sparks, a hammer-clang, and the smith's arm swing — so
-     *  nearby players see/hear the smithing. The sound excludes {@code player} (their client already
-     *  played the graded hammer sound locally for zero-latency feedback). */
     private static void strikeEffects(ServerLevel level, ServerPlayer player, BlockPos pos, int score,
                                       int metalColor) {
         double x = pos.getX() + 0.5, y = pos.getY() + 1.02, z = pos.getZ() + 0.5;
         int sparks = 6 + score / 6;
         level.sendParticles(net.minecraft.core.particles.ParticleTypes.LAVA, x, y, z, sparks,
             0.18, 0.05, 0.18, 0.0);
-        // Per-metal coloured sparks (redstone-dust particle takes an arbitrary tint).
         var dust = new net.minecraft.core.particles.DustParticleOptions(
             new org.joml.Vector3f(((metalColor >> 16) & 0xFF) / 255f,
                 ((metalColor >> 8) & 0xFF) / 255f, (metalColor & 0xFF) / 255f), 0.9F);
@@ -164,8 +167,8 @@ public final class Hammer {
                 0.3, 0.05, 0.3, 0.2);
         }
         float pitch = score >= 100 ? 1.3F : score >= 80 ? 1.15F : score >= 55 ? 1.0F : 0.85F;
+        // First arg = player -> excludes the striker; their client already played the graded hammer sound locally.
         level.playSound(player, pos, SoundEvents.ANVIL_LAND, SoundSource.BLOCKS, 0.5F, pitch);
-        // The arm swing broadcasts to all tracking clients, so others see the smith hammering.
         for (net.minecraft.world.InteractionHand h : net.minecraft.world.InteractionHand.values()) {
             if (player.getItemInHand(h).getItem() instanceof HammerItem) {
                 player.swing(h, true);
@@ -182,21 +185,19 @@ public final class Hammer {
         for (int i = 0; i < arr.length; i++) arr[i] = scores.get(i);
         int score = QualityMath.aggregate(arr);
 
-        // Hammer-rank gate: a workpiece reaches its top tier (Superior = Masterwork) only when the
-        // hammer's rank is at least one step below the metal's; otherwise it caps at Standard.
+        // Hammer-rank gate: top tier needs hammerRank >= workpieceRank - 1, else the roll caps at Standard.
         String metal = MetalworkingItems.metalOf(recipe.result().getItem());
         int workpieceRank = com.bannerbound.antiquity.metalworking.MetalworkingData.rank(metal);
         boolean canSuperior = session.hammerRank >= workpieceRank - 1;
-        QualityTier rolled = QualityMath.npcTierFromScore(score); // CRUDE..MASTERWORK
+        QualityTier rolled = QualityMath.npcTierFromScore(score);
         QualityTier tier = canSuperior ? rolled
             : (rolled.ordinal() > QualityTier.STANDARD.ordinal() ? QualityTier.STANDARD : rolled);
-        tier = com.bannerbound.antiquity.item.Intoxication.craftQuality(player, tier); // drunk/hungover → botched
+        tier = com.bannerbound.antiquity.item.Intoxication.craftQuality(player, tier);
 
         ItemStack out = Fletching.applyQuality(recipe.result().copy(), tier);
         if (!player.getInventory().add(out)) {
             Block.popResource(level, session.pos.above(), out);
         }
-        // Wear the hammer.
         for (net.minecraft.world.InteractionHand h : net.minecraft.world.InteractionHand.values()) {
             if (player.getItemInHand(h).getItem() instanceof HammerItem) {
                 player.getItemInHand(h).hurtAndBreak(1, player, EquipmentSlot.MAINHAND);
@@ -206,14 +207,11 @@ public final class Hammer {
         finishFlourish(level, session.pos, tier, session.metalColor);
     }
 
-    /** A tier-scaled completion flourish: a colour-tinted spark fountain + a chime that brightens with
-     *  quality — Masterwork gets the big celebratory ring + level-up chime. */
     private static void finishFlourish(ServerLevel level, BlockPos pos, QualityTier tier, int metalColor) {
         double x = pos.getX() + 0.5, y = pos.getY() + 1.0, z = pos.getZ() + 0.5;
-        int rank = tier.ordinal(); // CRUDE 0 .. MASTERWORK 3
+        int rank = tier.ordinal();
         level.playSound(null, pos, SoundEvents.ANVIL_USE, SoundSource.BLOCKS, 0.7F, 1.1F);
 
-        // A rising fountain of the metal's coloured sparks, taller and denser the better the tier.
         var dust = new net.minecraft.core.particles.DustParticleOptions(
             new org.joml.Vector3f(((metalColor >> 16) & 0xFF) / 255f,
                 ((metalColor >> 8) & 0xFF) / 255f, (metalColor & 0xFF) / 255f), 1.1F);
@@ -228,7 +226,6 @@ public final class Hammer {
                 0.8F, 0.9F + 0.15F * rank);
         }
         if (tier == QualityTier.MASTERWORK) {
-            // A celebratory ring + the level-up chime for the top tier.
             for (int i = 0; i < 16; i++) {
                 double a = i / 16.0 * Math.PI * 2;
                 level.sendParticles(net.minecraft.core.particles.ParticleTypes.ENCHANTED_HIT,

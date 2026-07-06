@@ -22,9 +22,30 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.living.LivingDeathEvent;
 
 /**
- * Server-side reactions to citizen lifecycle: when a {@link CitizenEntity} dies, prune it from
- * its settlement's roster and rebroadcast population state so the next-citizen cost recomputes
- * from the lower population.
+ * Server-side reaction to citizen death. When a {@link CitizenEntity} dies it is pruned from its
+ * settlement roster, then a cascade of eager cleanups run and population state is rebroadcast so
+ * the next-citizen cost recomputes from the lower population.
+ *
+ * Cleanup steps, in a deliberate order: apply death thoughts to survivors (tiered mourning), forget
+ * the dead UUID from every survivor's Relationships map, release the bed if the citizen died asleep,
+ * evict from any Home.residents list, then broadcast the vanilla death message to members.
+ *
+ * Design notes / gotchas:
+ * - A trade courier can die ANYWHERE (wilderness, foreign land), so its cargo spill / deal-leg
+ *   failure must fire before the settlement-roster guards below can early-return.
+ * - Death thoughts read each survivor's relationship entry for the deceased, so they MUST run
+ *   before the forget pass wipes those entries. Order-dependent.
+ * - Mourning is tiered (family/friend-for-life/close-friend/friend/generic); negative-tier
+ *   survivors (rivals/enemies) get nothing. STRANGERS maps to a generic "died_recently" so anyone
+ *   who at least met the deceased still mourns lightly. The dead citizen's bare name is captured
+ *   into the thought because the entity is discarded and later UUID resolution would return null.
+ * - Use raw getCitizenName() (no gender/pregnancy PUA glyph): getCustomName().getString() flattens
+ *   the styled component and the glyph codepoint renders as tofu once wrapped back into a literal.
+ * - Bed release and its SleepGoal reservation clear are needed because death short-circuits the
+ *   goal lifecycle (entity removed before the next tick), so SleepGoal.stop() may never run and the
+ *   bed would stay permanently OCCUPIED / reserved.
+ * - Forgetting stale UUIDs is cheap (O(N) per death) and prevents silent soft bugs once Lover /
+ *   Best Friend overflow slots exist.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -40,8 +61,7 @@ public final class CitizenLifecycleEvents {
         if (!(citizen.level() instanceof ServerLevel serverLevel)) {
             return;
         }
-        // A trade courier can die ANYWHERE (mid-wilderness, another settlement's land) — spill its
-        // cargo + fail the deal leg before the roster guards below can bail out.
+        // Couriers die off-territory: spill cargo before the roster guards below can early-return.
         if (citizen.isOnTradeJourney()) {
             com.bannerbound.core.trade.TradeCourierManager.onCourierDied(serverLevel, citizen);
         }
@@ -55,9 +75,7 @@ public final class CitizenLifecycleEvents {
             return;
         }
         if (settlement.removeCitizen(citizen.getUUID())) {
-            // Death thoughts MUST run before forgetDeadCitizenInRelationships — the tier lookup
-            // reads each survivor's relationship-map entry for the deceased, which the forget
-            // call about to follow would wipe. Order matters.
+            // Must precede forget: it reads the relationship entries forget would wipe.
             applyDeathThoughtsToSurvivors(serverLevel, settlement, citizen);
             forgetDeadCitizenInRelationships(serverLevel, settlement, citizen.getUUID());
             releaseBedIfSleeping(serverLevel, citizen);
@@ -68,20 +86,10 @@ public final class CitizenLifecycleEvents {
         }
     }
 
-    /** Every still-living citizen who had a relationship with the deceased gets a death thought
-     *  matching their tier: family / friend-for-life / close-friend / friend / generic. Negative-
-     *  tier survivors (rivals / enemies) get nothing — they wouldn't mourn. The dead citizen's
-     *  bare name is captured into the thought's {@code savedPartnerName} since the entity is
-     *  about to be discarded and UUID-resolution at screen-build time would return null. */
     private static void applyDeathThoughtsToSurvivors(ServerLevel sl, Settlement settlement,
                                                        CitizenEntity dead) {
         long now = sl.getGameTime();
         UUID deadId = dead.getUUID();
-        // Use the raw citizenName (no gender/pregnancy glyph) — getCustomName().getString() flattens
-        // the styled component and the PUA glyph codepoint comes out with no font association,
-        // rendering as tofu/square when the death-thought label later wraps the string back into a
-        // Component.literal. The death-thought label is plain text only; the gender icon belongs
-        // on the live entity's nametag, not in the survivors' Thoughts list.
         String deadName = dead.getCitizenName() != null
             ? dead.getCitizenName()
             : "Someone";
@@ -89,11 +97,6 @@ public final class CitizenLifecycleEvents {
             if (c.entityId().equals(deadId)) continue;
             if (!(sl.getEntity(c.entityId()) instanceof CitizenEntity survivor)) continue;
             com.bannerbound.core.social.Relationship rel = survivor.getRelationships().get(deadId);
-            // STRANGERS.tier() returns STRANGERS too — the dispatch table maps STRANGERS → the
-            // generic "died_recently" so this still fires for citizens who'd at least met the
-            // deceased once (Relationship entry exists in the map). Citizens with no entry at
-            // all (never interacted) get the STRANGERS default → still mourn lightly. That
-            // matches the spec's basic "<X> died recently" applying broadly.
             com.bannerbound.core.social.ThoughtKind kind =
                 com.bannerbound.core.social.ThoughtKind.deathThoughtFor(rel.tier());
             if (kind == null) continue;
@@ -102,10 +105,6 @@ public final class CitizenLifecycleEvents {
         }
     }
 
-    /** If the citizen died mid-sleep, clear the bed's OCCUPIED flag so the next homeless citizen
-     *  can claim it. SleepGoal.stop normally handles this, but dying short-circuits the goal
-     *  lifecycle (entity removal happens before the next goal tick), so without this the bed
-     *  stays "occupied" until something else writes that block state. */
     private static void releaseBedIfSleeping(ServerLevel sl, CitizenEntity citizen) {
         if (!citizen.isSleeping()) return;
         citizen.getSleepingPos().ifPresent(pos -> {
@@ -117,25 +116,15 @@ public final class CitizenLifecycleEvents {
                     bs.setValue(net.minecraft.world.level.block.BedBlock.OCCUPIED, false),
                     net.minecraft.world.level.block.Block.UPDATE_ALL);
             }
-            // Also release the SleepGoal's in-memory reservation. Death short-circuits the
-            // goal lifecycle so its stop() may never run — without this, the bed stays
-            // permanently "taken" in the reservation set even though OCCUPIED was cleared.
             com.bannerbound.core.entity.SleepGoal.releaseReservation(pos);
         });
     }
 
-    /** Drops the dead UUID from any {@code Home.residents} list. The freed bed is picked up by
-     *  the next homeless citizen's auto-assignment poll. Mirrors {@link
-     *  #forgetDeadCitizenInRelationships}'s eager cleanup pattern. */
     private static void evictDeadCitizenFromHome(Settlement settlement, UUID dead) {
         com.bannerbound.core.api.settlement.Home home = settlement.getHomeFor(dead);
         if (home != null) home.removeResident(dead);
     }
 
-    /** Iterates every still-living citizen in {@code settlement} and drops the dead UUID from
-     *  their {@code Relationships} map. Without this, stale entries accumulate forever (and
-     *  matter the moment Lover / Best Friend overflow bars exist — a stale UUID in a Lover
-     *  slot would be a silent soft bug). Eager cleanup is cheap (O(N) per death). */
     private static void forgetDeadCitizenInRelationships(ServerLevel sl, Settlement settlement, UUID dead) {
         for (com.bannerbound.core.api.settlement.Citizen c : settlement.citizens()) {
             if (!(sl.getEntity(c.entityId()) instanceof CitizenEntity other)) continue;
@@ -143,12 +132,6 @@ public final class CitizenLifecycleEvents {
         }
     }
 
-    /**
-     * Sends the vanilla "X was killed by Y" style death message to every settlement member.
-     * Uses {@link DamageSource#getLocalizedDeathMessage(net.minecraft.world.entity.LivingEntity)}
-     * which already resolves attacker name, weapon, and translation key — so e.g. "Magnus was
-     * slain by Zombie" or "Brom drowned" come out naturally per damage type.
-     */
     private static void broadcastDeathMessage(MinecraftServer server, Settlement settlement,
                                               CitizenEntity citizen, DamageSource source) {
         Component vanilla = source.getLocalizedDeathMessage(citizen);

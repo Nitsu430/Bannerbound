@@ -10,10 +10,9 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** S→C: small response carrying just the fields that change between
- *  {@link OpenCitizenScreenPayload} opens — currently compliance + the viewer's resentment.
- *  Health / stamina / happiness live in synced entity data and are already real-time via
- *  the existing client-side entity lookup. */
+/** S->C small response carrying just the fields that change between {@link OpenCitizenScreenPayload}
+ *  opens - currently compliance + the viewer's resentment. Health / stamina / happiness live in
+ *  synced entity data and are already real-time via the existing client-side entity lookup. */
 @ApiStatus.Internal
 public record CitizenLiveStatePayload(
     int entityId,

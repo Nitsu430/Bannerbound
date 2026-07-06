@@ -16,13 +16,16 @@ import net.minecraft.world.level.block.Blocks;
 import org.joml.Matrix4f;
 
 /**
- * Draws the liquid surface inside a clay tank pillar — a tinted quad (blue for water, pale for the
- * curing liquid) at the fill height, using the vanilla still-water sprite. Only the controller cell
- * ({@code PART == 0}) carries the block entity, so this renders the whole pillar's liquid from the
- * bottom; the tank walls themselves are the block's own baked model.
+ * Draws the liquid surface inside a clay tank pillar -- one upward-facing tinted quad (blue for
+ * water, pale for the curing liquid) at the fill height, textured with the vanilla still-water
+ * sprite and lit with the block's local light for a steady look. Only the controller cell
+ * (PART == 0) carries the block entity, so this renders the whole pillar's liquid from the bottom;
+ * the tank walls are the block's own baked model. INSET (1.1/16) tucks the quad just inside the
+ * 1px-thick walls (interior 1..15), and a near-empty tank's surface is lifted to a minimum 1.5/16
+ * so it still shows a film. shouldRenderOffScreen is true because the controller can be just
+ * off-screen while its tall pillar is not.
  */
 public class ClayTankRenderer implements BlockEntityRenderer<ClayTankBlockEntity> {
-    // Tank walls are 1px thick (interior 1..15); sit the surface just inside them, full width.
     private static final float INSET = 1.1F / 16.0F;
 
     public ClayTankRenderer(BlockEntityRendererProvider.Context ctx) {
@@ -36,9 +39,8 @@ public class ClayTankRenderer implements BlockEntityRenderer<ClayTankBlockEntity
             return;
         }
         int height = be.pillarHeight();
-        float surfaceY = be.fillFraction() * height;       // in block units, from the controller base
+        float surfaceY = be.fillFraction() * height;
         if (surfaceY <= 0.02F) return;
-        // Lift the surface slightly into the bottom interior so a near-empty tank still shows a film.
         surfaceY = Math.max(surfaceY, 1.5F / 16.0F);
 
         ModelManager models = Minecraft.getInstance().getModelManager();
@@ -51,7 +53,6 @@ public class ClayTankRenderer implements BlockEntityRenderer<ClayTankBlockEntity
         float g = ((color >> 8) & 0xFF) / 255.0F;
         float b = (color & 0xFF) / 255.0F;
 
-        // Use the block's local light for a steady look.
         int light = net.minecraft.client.renderer.LevelRenderer.getLightColor(be.getLevel(),
             be.getBlockPos());
 
@@ -63,7 +64,6 @@ public class ClayTankRenderer implements BlockEntityRenderer<ClayTankBlockEntity
         float u1 = sprite.getU1();
         float v0 = sprite.getV0();
         float v1 = sprite.getV1();
-        // Upward-facing quad at the liquid surface.
         quad(vc, mat, min, surfaceY, min, max, surfaceY, max, r, g, b, a, light, u0, u1, v0, v1);
     }
 
@@ -86,7 +86,6 @@ public class ClayTankRenderer implements BlockEntityRenderer<ClayTankBlockEntity
             .setNormal(0.0F, 1.0F, 0.0F);
     }
 
-    /** Render even when the controller is just off-screen but its tall pillar isn't. */
     @Override
     public boolean shouldRenderOffScreen(ClayTankBlockEntity be) {
         return true;

@@ -18,15 +18,16 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.ProjectileImpactEvent;
 
 /**
- * When a projectile NOT thrown by the camp lands inside a camp's territory, the camp realises it's under
- * attack: nearby members rally onto the shooter. Lets you provoke a camp from range (and means a hunter's
- * stray spear into a camp won't go unanswered).
+ * Overworld-only, server-side projectile hook: when a projectile NOT fired by the camp lands within
+ * TERRITORY_R of a camp's centre, members within ALERT_R of the impact that lack a live target rally onto
+ * the shooter. Lets the player provoke a camp from range and means a hunter's stray spear into a camp
+ * won't go unanswered. The camp's own volleys are ignored so members never turn on each other.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
 public final class BarbarianAlertEvents {
-    private static final double TERRITORY_R = 40.0; // impact this near a camp centre = "in our territory"
-    private static final double ALERT_R = 28.0;     // members within this of the impact rally
+    private static final double TERRITORY_R = 40.0;
+    private static final double ALERT_R = 28.0;
 
     private BarbarianAlertEvents() {
     }
@@ -36,8 +37,8 @@ public final class BarbarianAlertEvents {
         Projectile proj = event.getProjectile();
         if (!(proj.level() instanceof ServerLevel sl) || sl.dimension() != Level.OVERWORLD) return;
         Entity owner = proj.getOwner();
-        if (owner instanceof BarbarianEntity) return;        // our own volley — ignore
-        if (!(owner instanceof LivingEntity attacker) || !attacker.isAlive()) return; // need a foe to face
+        if (owner instanceof BarbarianEntity) return;
+        if (!(owner instanceof LivingEntity attacker) || !attacker.isAlive()) return;
         Vec3 hit = proj.position();
         BlockPos hitPos = BlockPos.containing(hit);
         BarbarianData data = BarbarianData.get(sl);
@@ -60,7 +61,7 @@ public final class BarbarianAlertEvents {
             LivingEntity cur = m.getTarget();
             if (cur == null || !cur.isAlive()) {
                 m.setTarget(attacker);
-                m.setLastHurtByMob(attacker); // also kicks HurtByTargetGoal's alert-others to rally the rest
+                m.setLastHurtByMob(attacker); // kicks HurtByTargetGoal's alert-others to rally the rest
             }
         }
     }

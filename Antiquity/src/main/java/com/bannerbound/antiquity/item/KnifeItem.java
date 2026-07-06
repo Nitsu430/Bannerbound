@@ -29,22 +29,22 @@ import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Base for primitive knives — a durable cutting edge that doubles as a light weapon. Knives are
+ * Base for primitive knives - a durable cutting edge that doubles as a light weapon. Knives are
  * in {@code #bannerboundantiquity:cutting_tools}, so they harvest plant fibers from grass and
  * sticks from leaves (see {@code AntiquityEvents.onCuttingHarvest}); that path damages them.
  * They're plain {@link Item}s (not tiered diggers), so durability loss on attack comes from the
- * {@link #hurtEnemy} override here.
+ * {@link #hurtEnemy} override here. {@link #knifeAttributes} takes the TOTAL displayed
+ * damage/speed values; the player's base (1 dmg, 4 speed) is subtracted to form the modifiers.
  *
- * <p>Every knife (flint, bone, …) can carve a Crafting Stone out of cobblestone / sandstone /
- * red_sandstone via {@link #useOn} — the resulting stone keeps the source rock's look.
+ * <p>Every knife (flint, bone, ...) can carve a Crafting Stone out of cobblestone / sandstone /
+ * red_sandstone via {@link #useOn} - replaced in place, oriented to face the player, skinned to
+ * match the source rock ({@link #materialFor}), for 1 durability.
  */
 public class KnifeItem extends Item {
     public KnifeItem(Properties properties, int durability, double attackDamage, double attackSpeed) {
         super(properties.durability(durability).attributes(knifeAttributes(attackDamage, attackSpeed)));
     }
 
-    /** Sword-style attack attributes. {@code damage}/{@code speed} are the TOTAL displayed values;
-     *  the player's base (1 dmg, 4 speed) is subtracted to get the modifier. */
     public static ItemAttributeModifiers knifeAttributes(double damage, double speed) {
         return ItemAttributeModifiers.builder()
             .add(Attributes.ATTACK_DAMAGE,
@@ -56,9 +56,6 @@ public class KnifeItem extends Item {
             .build();
     }
 
-    /** Carve a Crafting Stone out of cobblestone / sandstone / red_sandstone — replaced in place,
-     *  oriented to face the player, skinned to match the source rock, with a burst of that rock's
-     *  particles. The knife takes 1 durability. */
     @Override
     public InteractionResult useOn(UseOnContext ctx) {
         Level level = ctx.getLevel();
@@ -89,7 +86,6 @@ public class KnifeItem extends Item {
         return InteractionResult.sidedSuccess(level.isClientSide);
     }
 
-    /** The crafting-stone variant a given rock carves into, or {@code null} if it isn't carveable. */
     public static CraftingStoneBlock.Material materialFor(BlockState state) {
         if (state.is(Blocks.COBBLESTONE)) return CraftingStoneBlock.Material.STONE;
         if (state.is(Blocks.SANDSTONE)) return CraftingStoneBlock.Material.SANDSTONE;

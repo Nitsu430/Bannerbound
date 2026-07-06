@@ -5,25 +5,22 @@ import java.util.UUID;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
 
+/**
+ * Claim-protection gate. isProtected blocks an actor from acting on a chunk claimed by a
+ * settlement that isn't theirs (delegated to DiplomacyManager.canActInClaim). shouldBypass lets
+ * op-level-2+ players ignore protection, but only when opsBypassClaimProtection is enabled in
+ * config - it defaults OFF so protection applies to everyone, since a LAN world with cheats makes
+ * every player an op and would otherwise disable all grief protection; admins can flip it on for
+ * moderation.
+ */
 public final class ChunkProtection {
     private ChunkProtection() {
     }
 
-    /**
-     * Whether {@code actor} should be blocked from acting on {@code chunk}. Returns true if the
-     * chunk is claimed by a settlement that is not the actor's settlement.
-     *
-     */
     public static boolean isProtected(SettlementData data, ChunkPos chunk, UUID actorId) {
         return !DiplomacyManager.canActInClaim(data, chunk, actorId);
     }
 
-    /**
-     * Whether {@code player} bypasses claim protection. Only op-level-2+ players can, and only when
-     * {@code opsBypassClaimProtection} is enabled in the config — it defaults to OFF so protection
-     * applies to everyone (a LAN world with cheats makes every player an op, which would otherwise
-     * disable all grief protection). Admins can flip the config on for moderation.
-     */
     public static boolean shouldBypass(ServerPlayer player) {
         return com.bannerbound.core.Config.OPS_BYPASS_CLAIM_PROTECTION.get() && player.hasPermissions(2);
     }

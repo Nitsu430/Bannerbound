@@ -13,12 +13,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: open the settlement-to-settlement {@code TradeScreen} against {@code targetId}.
- * Carries the existing active deal (if any: {@code dealId} non-empty, {@code dealState} =
- * {@code TradeDeal.State} ordinal, {@code awaitingUs} = our side may accept/counter/reject) plus
- * both live pools: {@code myPool} = our show-for-trading stockpiles, {@code theirPool} = theirs
- * (knowledge-filtered server-side). {@code canAct} = the viewer's governance role allows
- * negotiating (chiefdom gates on the chief). Offer lists are viewer-relative: {@code myOffer} =
+ * Server -> client: open the settlement-to-settlement TradeScreen against targetId. Carries the
+ * existing active deal (if any: dealId non-empty, dealState = TradeDeal.State ordinal, awaitingUs =
+ * our side may accept/counter/reject) plus both live pools: myPool = our show-for-trading
+ * stockpiles, theirPool = theirs (knowledge-filtered server-side). canAct = the viewer's governance
+ * role allows negotiating (chiefdom gates on the chief). Offer lists are viewer-relative: myOffer =
  * what WE give.
  */
 @ApiStatus.Internal

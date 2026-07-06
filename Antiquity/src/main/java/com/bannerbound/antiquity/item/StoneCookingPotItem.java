@@ -25,7 +25,8 @@ import net.minecraft.world.phys.HitResult;
 /**
  * The stone cooking pot as a held/placed item. Right-click a water source to fill it (the
  * {@code STONE_POT_FILLED} boolean component), then place it; the block reads the component and starts
- * the placed pot with water. A pot already holding water won't refill.
+ * the placed pot with water. A pot already holding water won't refill, and only a single pot can be
+ * dipped (a stack of pots passes through untouched, keeping stack behaviour simple).
  */
 public class StoneCookingPotItem extends BlockItem {
     public StoneCookingPotItem(Block block, Properties properties) {
@@ -39,7 +40,6 @@ public class StoneCookingPotItem extends BlockItem {
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
-        // Only a single, empty pot can be dipped — keep stack-of-pots behaviour simple.
         if (stack.getCount() != 1 || isFilled(stack)) {
             return InteractionResultHolder.pass(stack);
         }

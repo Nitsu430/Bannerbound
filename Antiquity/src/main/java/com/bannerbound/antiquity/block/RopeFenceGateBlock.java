@@ -37,28 +37,29 @@ import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * A primitive lift-bar gate for the rope fence with TWO rope tie points — its left and right uprights
- * (slot 0 / slot 1). Right-click with a fiber rope ties to the nearer upright (so the gate joins a rope
- * fence line); right-click otherwise raises/lowers the bar (open/closed). Predates wooden fence gates.
- *
- * <p>The rope ties are independent of open/closed (the uprights don't move, only the rod lifts).
- * {@link #ROPED_LEFT}/{@link #ROPED_RIGHT} pick the model variant for each upright's coil.</p>
+ * A primitive lift-bar gate for the rope fence, predating wooden fence gates. It carries TWO rope
+ * tie points - the left upright (slot 0) and right upright (slot 1) - so a rope fence line can run
+ * through it: right-click with a fiber rope (non-shift) ties to the nearer upright via
+ * {@code RopeTies.slotForHit}; any other click toggles OPEN (bar raised = empty collision, and,
+ * like a vanilla fence gate, pathable to mobs ONLY while open). Ties are independent of open/closed
+ * (the uprights never move, only the rod lifts); ROPED_LEFT/ROPED_RIGHT just pick the model variant
+ * showing each upright's coil. Closed collision is 24px tall (jump-proof, vanilla fence
+ * convention). Breaking the gate breaks and drops all its ropes server-side.
  */
 public class RopeFenceGateBlock extends Block implements EntityBlock {
     public static final MapCodec<RopeFenceGateBlock> CODEC = simpleCodec(RopeFenceGateBlock::new);
     public static final EnumProperty<Direction> FACING = BlockStateProperties.HORIZONTAL_FACING;
     public static final BooleanProperty OPEN = BlockStateProperties.OPEN;
-    /** Coil shown on the left upright (slot 0) / right upright (slot 1). */
     public static final BooleanProperty ROPED_LEFT = BooleanProperty.create("roped_left");
     public static final BooleanProperty ROPED_RIGHT = BooleanProperty.create("roped_right");
 
-    /** Model-space X (0–1) of the left upright (slot 0, "Post Left", X12–16) and right (slot 1, X0–4). */
+    // Model-space X (0-1) of the uprights: left = "Post Left" spans X12-16 -> 14/16; right spans X0-4 -> 2/16.
     public static final double LEFT_X = 14.0 / 16.0;
     public static final double RIGHT_X = 2.0 / 16.0;
 
-    private static final VoxelShape SHAPE_X = Block.box(0.0, 0.0, 6.0, 16.0, 16.0, 10.0);      // facing N/S
+    private static final VoxelShape SHAPE_X = Block.box(0.0, 0.0, 6.0, 16.0, 16.0, 10.0);
     private static final VoxelShape COLLISION_X = Block.box(0.0, 0.0, 6.0, 16.0, 24.0, 10.0);
-    private static final VoxelShape SHAPE_Z = Block.box(6.0, 0.0, 0.0, 10.0, 16.0, 16.0);      // facing E/W
+    private static final VoxelShape SHAPE_Z = Block.box(6.0, 0.0, 0.0, 10.0, 16.0, 16.0);
     private static final VoxelShape COLLISION_Z = Block.box(6.0, 0.0, 0.0, 10.0, 24.0, 16.0);
 
     public RopeFenceGateBlock(BlockBehaviour.Properties properties) {
@@ -108,14 +109,11 @@ public class RopeFenceGateBlock extends Block implements EntityBlock {
         return alongX(state) ? COLLISION_X : COLLISION_Z;
     }
 
-    /** Like a vanilla fence gate: pathable only when open. Closed → mobs route around (it's a barrier);
-     *  open → they walk through the passage. */
     @Override
     protected boolean isPathfindable(BlockState state, PathComputationType type) {
         return state.getValue(OPEN);
     }
 
-    /** Fiber rope (non-shift) → tie to the nearer upright; anything else falls through to the toggle. */
     @Override
     protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
                                               Player player, InteractionHand hand, BlockHitResult hit) {

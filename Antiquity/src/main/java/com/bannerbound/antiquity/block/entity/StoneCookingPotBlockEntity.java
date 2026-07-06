@@ -44,24 +44,27 @@ import com.bannerbound.core.api.settlement.SettlementData;
 import com.bannerbound.core.api.settlement.data.FoodValueLoader;
 
 /**
- * Block entity for the stone cooking pot. Lives on a single block (not a multiblock). It holds water,
- * accepts raw food ingredients, and — while sitting on a lit campfire that is NOT the settlement's town
- * hall — cooks them over time into a {@link StewContents}. A finished stew is a finite, rot-proof food
- * store: the settlement larder draws its value down like stored items ({@code LarderHooks.FoodStore}),
- * and the player can right-click to eat a serving. When the value runs out the pot empties to plain
- * stone. See COOKING_PLAN.md / the food-economy overhaul.
+ * Block entity for the stone cooking pot (a single block, not a multiblock; COOKING_PLAN.md). Fill it
+ * with water, drop in raw food, and while it sits on a lit campfire that is NOT the settlement's
+ * town-hall campfire it cooks into a {@link StewContents}. Ingredients are accepted if they have a
+ * registered food value OR appear in some stew recipe (otherwise e.g. mushroom stew is unreachable);
+ * a stew's identity is the SET of ingredient types present - counts change value, never which stew.
+ * Cooked value = sum of each ingredient's value (the recipe's per-ingredient override, else its
+ * registered base) x the cook bonus (recipe's, else DEFAULT_COOK_BONUS = the payoff over eating raw),
+ * floored above zero so a food-less mix still finishes as a bland edible stew. A finished stew is a
+ * finite, rot-proof food store: the settlement larder drains its value like stored items
+ * (LarderHooks.FoodStore), players and citizens scoop servings, and at zero value the pot resets to
+ * plain stone. Off heat, cook progress decays 1/tick like the kiln. When ON_FIRE the entire visual
+ * (placed model, BER liquid/items, particles) drops by VISUAL_DROP (8/16 block) so the pot rests on
+ * the fire; the campfire's own flame is hidden by CampfireFireHideMixin. setChanged() doubles as the
+ * client sync point (sendBlockUpdated + full-state update tag).
  */
 @ApiStatus.Internal
 public class StoneCookingPotBlockEntity extends BlockEntity {
-    /** Cooked value = the food value of all ingredients × this (the cook's payoff over eating them raw);
-     *  a named recipe may set its own bonus. */
     public static final double DEFAULT_COOK_BONUS = 1.25;
     public static final int DEFAULT_SERVINGS = 6;
     public static final int DEFAULT_COOK_TICKS = 400;
     public static final int MAX_INGREDIENTS = 8;
-    /** How far the pot is rendered below its block when it sits on a campfire ({@code ON_FIRE}) so it
-     *  rests on the fire instead of floating above — the placed model, BER liquid/items, and particles
-     *  all drop by this. (The campfire flame itself is hidden by {@code CampfireFireHideMixin}.) */
     public static final double VISUAL_DROP = 8.0 / 16.0;
     private static final int GENERIC_TINT = 0xB5651D;
 
@@ -75,25 +78,19 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
         super(BannerboundAntiquity.STONE_COOKING_POT_BE.get(), pos, state);
     }
 
-    // ─── State queries ───────────────────────────────────────────────────────────────────────────
-
     public boolean hasWater() { return hasWater; }
     public boolean hasStew() { return stew != null && remainingFoodValue > 0.0; }
-    /** Filled = holds water or a stew (drives the FILLED model + tint). */
     public boolean isFilled() { return hasWater || hasStew(); }
     @Nullable public StewContents stew() { return stew; }
     public double remainingFoodValue() { return remainingFoodValue; }
     public int ingredientCount() { return rawIngredients.size(); }
 
-    /** Raw ingredients currently floating in the pot (read-only). Used by the renderer to draw them. */
     public List<ItemStack> ingredients() { return rawIngredients; }
 
-    /** Holds water + raw ingredients, no finished stew yet → it's simmering toward a stew. */
     public boolean isCooking() {
         return hasWater && stew == null && !rawIngredients.isEmpty();
     }
 
-    /** How far the current cook has progressed, 0..1 (drives the gradual ripening of the liquid tint). */
     public float cookFraction() {
         int need = cookTicksNeeded();
         if (need <= 0) return 0.0F;
@@ -101,24 +98,20 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
         return f < 0.0F ? 0.0F : (f > 1.0F ? 1.0F : f);
     }
 
-    /** The colour this brew WILL become, from the ingredients now simmering — for the cook-time tint. */
     public int previewTint() {
         StewRecipe r = matchRecipe();
         return r != null ? r.tint() : GENERIC_TINT;
     }
 
-    /** Lang key of the stew the current ingredients will become (the matched recipe, or generic). */
     public String previewName() {
         StewRecipe r = matchRecipe();
         return r != null ? r.name() : "stew.generic";
     }
 
-    /** Tint for the liquid layer: the stew colour when cooked, plain water (no tint) otherwise. */
     public int liquidTint() {
         return stew != null ? stew.tint() : 0xFFFFFF;
     }
 
-    /** How full the liquid sits, 0..1 — water/cooking stay full; a stew falls as its servings drain. */
     public float fillFraction() {
         if (hasStew()) {
             double total = stew.totalFoodValue();
@@ -129,14 +122,11 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
         return hasWater ? 1.0F : 0.0F;
     }
 
-    /** The on-fire visual drop — {@link #VISUAL_DROP} only when sitting on a campfire, else 0. Particles
-     *  use this so they track the lowered, on-fire liquid. */
     private double visualDrop() {
         BlockState st = getBlockState();
         return st.getBlock() instanceof StoneCookingPotBlock && st.getValue(StoneCookingPotBlock.ON_FIRE)
             ? VISUAL_DROP : 0.0;
     }
-
 
     public void setWater(boolean water) {
         this.hasWater = water;
@@ -144,13 +134,9 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    // ─── Ingredients ─────────────────────────────────────────────────────────────────────────────
-
-    /** Try to add one unit of {@code held} as an ingredient. Returns true if accepted (caller shrinks). */
     public boolean addIngredient(ItemStack held) {
         if (!hasWater || stew != null || rawIngredients.size() >= MAX_INGREDIENTS) return false;
-        // Accept real food, OR an item that's an ingredient in some stew recipe even if it has no
-        // standalone food value (e.g. mushrooms → mushroom stew). Otherwise such recipes are unreachable.
+        // Must also accept food-less stew-recipe ingredients (e.g. mushrooms) or those recipes are unreachable.
         if (FoodValueLoader.base(held.getItem()) <= 0.0
                 && !StewRecipeManager.isStewIngredient(held.getItem())) return false;
         ItemStack one = held.copy();
@@ -160,18 +146,15 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
         if (level != null) {
             level.playSound(null, getBlockPos(), SoundEvents.GENERIC_SPLASH, SoundSource.BLOCKS, 0.5F, 1.4F);
         }
-        splashParticles(10);   // the food plops into the water
+        splashParticles(10);
         setChanged();
         return true;
     }
 
-    // ─── Eating (player) ─────────────────────────────────────────────────────────────────────────
-
-    /** Right-click with an empty hand → eat one serving. Returns true if a serving was served. */
     public boolean eatServing(Player player) {
         if (!hasStew()) return false;
         double per = stew.foodPerServing();
-        int nutrition = Math.max(1, (int) Math.round(per * 2.0)); // haunch → hunger points
+        int nutrition = Math.max(1, (int) Math.round(per * 2.0)); // food value is in haunches; vanilla hunger points are half-haunches
         player.getFoodData().eat(nutrition, 0.3F);
         if (stew.poisoned()) {
             player.addEffect(new MobEffectInstance(MobEffects.POISON, 200, 0));
@@ -179,7 +162,7 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
         for (MobEffectInstance e : stew.effects()) {
             player.addEffect(new MobEffectInstance(e));
         }
-        splashParticles(5);    // a scoop ripples the surface (spawned before the drain lowers it)
+        splashParticles(5);
         drainValue(per);
         if (level != null) {
             level.playSound(null, getBlockPos(), SoundEvents.GENERIC_EAT, SoundSource.PLAYERS, 0.7F, 1.0F);
@@ -187,8 +170,6 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
         return true;
     }
 
-    /** A citizen scoops one serving (drains its food value); the StewEatGoal handles its own eat sound.
-     *  Returns true if a serving was taken. */
     public boolean takeServing() {
         if (!hasStew()) return false;
         splashParticles(5);
@@ -196,7 +177,6 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
         return true;
     }
 
-    /** Remove up to {@code maxValue} food value from the stew; returns how much was actually removed. */
     public double drainValue(double maxValue) {
         if (stew == null || remainingFoodValue <= 0.0 || maxValue <= 0.0) return 0.0;
         double drained = Math.min(maxValue, remainingFoodValue);
@@ -215,9 +195,6 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
         syncFilledState();
     }
 
-    // ─── Cooking ─────────────────────────────────────────────────────────────────────────────────
-
-    /** Block below is a lit campfire that is NOT this settlement's town-hall campfire. */
     public boolean isHeated() {
         if (!(level instanceof ServerLevel server)) {
             BlockState below = level.getBlockState(getBlockPos().below());
@@ -238,14 +215,11 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
     @Nullable
     private StewRecipe matchRecipe() {
         if (rawIngredients.isEmpty()) return null;
-        // Identity is the SET of ingredient TYPES present — counts don't change which stew it is.
         Set<net.minecraft.world.item.Item> types = new HashSet<>();
         for (ItemStack s : rawIngredients) types.add(s.getItem());
         return StewRecipeManager.findMatch(types);
     }
 
-    /** The cooking food value of one {@code item}: the matched recipe's per-ingredient override if it
-     *  supplies one, otherwise the item's own registered food value. */
     private static double ingredientValue(@Nullable StewRecipe recipe, net.minecraft.world.item.Item item) {
         if (recipe != null) {
             double v = recipe.valueFor(item);
@@ -258,8 +232,6 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
         StewRecipe recipe = matchRecipe();
         double bonus = recipe != null ? recipe.bonus() : DEFAULT_COOK_BONUS;
         int servings = recipe != null ? recipe.servings() : DEFAULT_SERVINGS;
-        // Cooked value = the food value of everything added (each ingredient's recipe override or its
-        // own) × the cook bonus — so MORE, and richer, ingredients make a heartier (more filling) stew.
         double valueSum = 0.0;
         boolean poisoned = false;
         for (ItemStack ing : rawIngredients) {
@@ -267,8 +239,6 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
             if (ing.get(BannerboundAntiquity.POISONED_FOOD.get()) != null) poisoned = true;
         }
         double total = valueSum * bonus;
-        // Never finish into a worthless 0-value pot (a mix of food-less ingredients with no recipe value):
-        // a bland mystery stew is at least edible.
         if (total <= 0.0) total = Math.max(1.0, rawIngredients.size());
         double perServing = total / Math.max(1, servings);
         String name = recipe != null ? recipe.name() : "stew.generic";
@@ -289,19 +259,14 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    // ─── Ticking ───────────────────────────────────────────────────────────────────────────────
-
     public static void tick(Level level, BlockPos pos, BlockState state, StoneCookingPotBlockEntity be) {
         if (level.isClientSide) {
             if (be.isFilled() && be.isHeated()) be.spawnSimmerParticles(level, pos);
             return;
         }
-        // Swap a vanilla campfire below for the flame-less variant (covers pots already placed in a
-        // loaded world, not just freshly-placed ones); no-op once already swapped.
+        // Ticked (not placement-only) so pots already placed in old worlds get the flame-less campfire swap; no-op after.
         StoneCookingPotBlock.hideCampfireFlame(level, pos);
-        // Don't cook (or decay progress) in a DORMANT settlement's claimed chunk: this tick fires
-        // whenever the chunk is loaded (force-loaded claims / a nearby outsider), so it would keep
-        // running for an offline tribe. Mirrors FoodSpoilageEvents' dormancy guard.
+        // Dormancy guard: claimed chunks stay loaded/ticking while a tribe is offline; never cook or decay then (mirrors FoodSpoilageEvents).
         if (level instanceof ServerLevel sl) {
             Settlement owner = SettlementData.get(sl).getByChunk(new ChunkPos(pos).toLong());
             if (owner != null && owner.isDormant()) return;
@@ -315,14 +280,11 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
                 be.setChanged();
             }
         } else if (be.cookProgress > 0 && !be.isHeated()) {
-            // Fire's out — progress slowly slips back, like the kiln.
             be.cookProgress = Math.max(0, be.cookProgress - 1);
         }
     }
 
     private void spawnSimmerParticles(Level level, BlockPos pos) {
-        // Bubble + smoke at the actual liquid surface (which lowers as a stew drains). Visual only —
-        // no looping ambient sound; sounds play on placing food in / scooping a serving out.
         double surfaceY = pos.getY() + (2.0 + fillFraction() * 7.0) / 16.0 - visualDrop() + 0.02;
         if (level.random.nextInt(3) == 0) {
             level.addParticle(stew != null ? ParticleTypes.BUBBLE_POP : ParticleTypes.SPLASH,
@@ -336,7 +298,6 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
         }
     }
 
-    /** A burst of water-splash particles at the liquid surface — food dropped in, a serving scooped out. */
     private void splashParticles(int count) {
         if (!(level instanceof ServerLevel sl)) return;
         BlockPos pos = getBlockPos();
@@ -345,7 +306,6 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
             count, 0.18, 0.04, 0.18, 0.0);
     }
 
-    /** Keep the FILLED blockstate in step with whether the pot holds water/stew. */
     private void syncFilledState() {
         if (level == null || level.isClientSide) return;
         BlockState st = getBlockState();
@@ -362,8 +322,6 @@ public class StoneCookingPotBlockEntity extends BlockEntity {
             level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
         }
     }
-
-    // ─── NBT + client sync ─────────────────────────────────────────────────────────────────────
 
     @Override
     protected void saveAdditional(CompoundTag tag, HolderLookup.Provider provider) {

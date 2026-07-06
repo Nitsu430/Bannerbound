@@ -12,13 +12,14 @@ import net.minecraft.client.resources.sounds.SimpleSoundInstance;
 import net.minecraft.sounds.SoundEvents;
 
 /**
- * 3D-software-style menu bar (File · Edit · View · Go) shared by the wall screens — the
+ * 3D-software-style menu bar (File / Edit / View / Go) shared by the wall screens -- the
  * "stuff above, as if it's a real 3D software" navigation layer (playtest 2026-06-12).
  *
- * <p>Deliberately NOT an AbstractWidget: the owning screen calls {@link #mouseClicked} FIRST
- * in its own handler (so the dropdown wins over widgets underneath) and {@link #render} LAST
- * in its render pass (so the dropdown draws over everything). One menu open at a time;
- * clicking elsewhere closes it and swallows that click.
+ * <p>Deliberately NOT an AbstractWidget: the owning screen calls mouseClicked FIRST in its own
+ * handler (so the dropdown wins over widgets underneath) and render LAST in its render pass (so
+ * the dropdown draws over everything). render() also lifts the whole bar to a high z so the
+ * dropdown clears the screens' depth bands. One menu open at a time; clicking elsewhere closes
+ * it and swallows that click.
  */
 @ApiStatus.Internal
 public final class WallMenuBar {
@@ -77,12 +78,10 @@ public final class WallMenuBar {
     }
 
     public void render(GuiGraphics g, int mouseX, int mouseY) {
-        // The whole bar + dropdown rides high above every screen's depth bands (panel text,
-        // viewport blocks at ~400, overlays at 600-700) — the dropdown rendered UNDER the
-        // inspector labels without this (playtest 2026-06-12).
         g.pose().pushPose();
+        // z=950: lift the bar + dropdown over every screen's depth bands, else the dropdown
+        // drew UNDER the inspector labels.
         g.pose().translate(0, 0, 950);
-        // Bar pill.
         g.fill(x - 2, y, x + barW() + 2, y + BAR_H, 0xC8101016);
         g.fill(x - 2, y + BAR_H - 1, x + barW() + 2, y + BAR_H, 0xFF2E2E36);
         for (int i = 0; i < menus.size(); i++) {
@@ -96,7 +95,6 @@ public final class WallMenuBar {
             g.drawString(font, menus.get(i).label(), lx + PAD_X, y + 3,
                 hot ? 0xFFFFFFFF : 0xFFB8B8C0);
         }
-        // Dropdown.
         if (openIndex >= 0) {
             Menu menu = menus.get(openIndex);
             int dx = labelX(openIndex);
@@ -123,7 +121,6 @@ public final class WallMenuBar {
         g.pose().popPose();
     }
 
-    /** Call FIRST in the owning screen's mouseClicked. Returns true when consumed. */
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (button != 0) {
             if (openIndex >= 0) {
@@ -132,7 +129,6 @@ public final class WallMenuBar {
             }
             return false;
         }
-        // Bar labels toggle their menu.
         if (mouseY >= y && mouseY < y + BAR_H) {
             for (int i = 0; i < menus.size(); i++) {
                 int lx = labelX(i);
@@ -160,7 +156,6 @@ public final class WallMenuBar {
                 }
                 return true;
             }
-            // Click elsewhere: close and SWALLOW so the map/viewport doesn't also react.
             openIndex = -1;
             return true;
         }

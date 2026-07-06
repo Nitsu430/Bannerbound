@@ -32,26 +32,37 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
-/** Client rope render event handlers (merged from RopeRenderEvents, RopeRenderEvents, RopeRenderEvents). */
+/**
+ * Client-side rope render event hub: every world-space plant-fibre green rope ribbon that is not a
+ * block model is drawn here at AFTER_ENTITIES via {@link RopeRenderer#drawRibbon} (a merge of three
+ * former event classes). Three independent handlers:
+ * <ul>
+ *   <li><b>Vanilla leashes</b> ({@code onRenderLevel}): fiber-rope leashing is pure vanilla leashing
+ *       (Mob.isLeashed/getLeashHolder, set by HerdingEvents); vanilla's brown ribbon is cancelled by
+ *       Core's MobRendererMixin and this draws the green ribbon in its place. The holder end uses
+ *       {@code getRopeHoldPosition} (hand / fence knot, matching where vanilla anchors a lead); the
+ *       mob end ties at TIE_FRACTION (~60% of body height, chest-ish, so it reads as a held lead).</li>
+ *   <li><b>Herder ropes</b> ({@code herderOnRenderLevel}): cosmetic rope from a herding citizen to each
+ *       animal it herds. The real follow is a leash-FREE server-side pull; this just reads Core's synced
+ *       HERDED_BY claim (the herder's entity id) off every rendered animal each frame.</li>
+ *   <li><b>Tie preview</b> ({@code tiePreviewOnRenderLevel} + {@code onClientTick}): while the local
+ *       player is mid-tie ({@link RopeTieState}) a live slack rope pays out from the selected tie point
+ *       (post centre or gate upright). The loose end snaps to an aimed post/gate when it is a valid,
+ *       in-reach second anchor (previewing the finished rope before committing); otherwise it trails
+ *       LEAD_DISTANCE blocks ahead of the aim, clamped to RopeTies.MAX_ROPE_HORIZONTAL/VERTICAL so it
+ *       visibly stops paying out at the limit (an out-of-reach aimed post also falls back to the
+ *       trailing end so you SEE it will not reach). The aimed post's roped-coil model is a client-only
+ *       blockstate flip (tracked in previewRopedTarget, applied via RopeTies.setRopedModel, reverted to
+ *       the server-authoritative state via RopeTies.refreshRoped); the committed rope's "zip taut"
+ *       settle lives in {@link RopeRenderer}. The mid-tie selection is only dropped when genuinely
+ *       stale (tie host gone / wrong dimension) - merely not holding the rope hides the preview.</li>
+ * </ul>
+ */
 @OnlyIn(Dist.CLIENT)
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
 public final class RopeRenderEvents {
 
-    // ==================== From RopeRenderEvents ====================
-
-    /*
-     * Draws the plant-fibre green rope for a VANILLA leash — the visible half of "leash animals with a
-     * fiber rope just like the vanilla lead". The mechanic is pure vanilla leashing ({@code Mob.isLeashed}
-     * /{@code getLeashHolder}, set by {@link com.bannerbound.antiquity.HerdingEvents}); vanilla's own
-     * brown ribbon is cancelled by Core's {@code MobRendererMixin}, and this draws the same green ribbon
-     * ({@link RopeRenderer#drawRibbon}) the rope fences / spear-fishing / herding use in its place.
-     *
-     * <p>Mirrors {@link StatusClientEffects}/{@link RopeRenderEvents} exactly, but reads the leash off
-     * vanilla state instead of a custom attachment: the holder end uses {@code getRopeHoldPosition} (the
-     * player's hand or a fence knot — matching where vanilla anchors a lead), the mob end ties chest-ish.</p>
-     */
-    /** Rope ties to the mob at ~60% of its height (chest-ish), so it reads as a held lead. */
     private static final double TIE_FRACTION = 0.6;
 
     private RopeRenderEvents() {}
@@ -83,7 +94,7 @@ public final class RopeRenderEvents {
 
             Vec3 a = lerpPos(mob, partial);
             double ay = a.y + mob.getBbHeight() * TIE_FRACTION;
-            Vec3 h = holder.getRopeHoldPosition(partial); // player's hand / fence knot, like vanilla
+            Vec3 h = holder.getRopeHoldPosition(partial);
             float dx = (float) (h.x - a.x);
             float dy = (float) (h.y - ay);
             float dz = (float) (h.z - a.z);
@@ -108,15 +119,6 @@ public final class RopeRenderEvents {
             Mth.lerp(partial, e.zOld, e.getZ()));
     }
 
-    // ==================== From RopeRenderEvents ====================
-
-    /*
-     * Cosmetic "rope" from a herder to each animal it's currently herding — the visible polish on the
-     * leash-FREE herding mechanic (the real follow is a server-side pull; there's no vanilla leash to tangle).
-     * Each frame it reads Core's synced {@code HERDED_BY} claim (the herding citizen's entity id) off every
-     * rendered animal and draws the same plant-fibre green ribbon used by rope fences / spear-fishing, via
-     * {@link RopeRenderer#drawRibbon}. Mirrors {@link RopeRenderEvents}'s world-space draw setup.
-     */
     @SubscribeEvent
     public static void herderOnRenderLevel(RenderLevelStageEvent event) {
         if (event.getStage() != RenderLevelStageEvent.Stage.AFTER_ENTITIES) {
@@ -168,23 +170,6 @@ public final class RopeRenderEvents {
         }
     }
 
-    // ==================== From RopeRenderEvents ====================
-
-    /*
-     * While the local player is mid-tie (see {@link RopeTieState}), draws a live rope paying out from the
-     * selected tie point (post centre or gate upright) as a real slack rope (deep droop when the loose end
-     * is near, taut near max reach). The loose end either:
-     * <ul>
-     *   <li><b>snaps to a post/gate you're aiming at</b> (if it's a valid, in-reach second tie point) — so
-     *       you see exactly what the finished rope will look like before committing; or</li>
-     *   <li>trails ~{@link #LEAD_DISTANCE} blocks ahead of your aim, clamped to the rope's max reach
-     *       ({@link RopeTies#MAX_ROPE_HORIZONTAL}/{@link RopeTies#MAX_ROPE_VERTICAL}) so it visibly stops
-     *       paying out at the limit.</li>
-     * </ul>
-     * The post's coil model is shown separately (server-authoritative blockstate). The committed rope's
-     * "zip taut" settle is handled in {@link RopeRenderer}.
-     */
-    /** How far ahead of the eyes the loose end trails while you aim at nothing tie-able (blocks). */
     private static final double LEAD_DISTANCE = 1.5;
 
     @SubscribeEvent
@@ -203,17 +188,15 @@ public final class RopeRenderEvents {
         }
         Level level = player.level();
         Vec3 tie = RopeAnchor.worldTie(level, anchor);
-        // Drop the selection only if it's genuinely stale (tie host gone / wrong dimension).
         if (tie == null || !RopeTieState.isAt(anchor, level.dimension())) {
             RopeTieState.clear();
             return;
         }
         if (!holdingRope(player)) {
-            return; // hide while not holding rope, but keep the selection
+            return; // hide the preview but deliberately KEEP the selection
         }
 
         float partial = event.getPartialTick().getGameTimeDeltaPartialTick(false);
-        // Prefer the post/gate you're aiming at (preview where it'll attach); else trail the loose end.
         RopeAnchor target = aimedTargetAnchor(mc, level, anchor);
         Vec3 snap = target != null ? RopeAnchor.worldTie(level, target) : null;
         Vec3 end = snap != null ? snap
@@ -231,15 +214,13 @@ public final class RopeRenderEvents {
         pose.popPose();
     }
 
-    /** The post/gate tie point the player is aiming at, if it's a valid in-reach second anchor; null
-     *  otherwise (then the loose end just trails the aim). */
     private static RopeAnchor aimedTargetAnchor(Minecraft mc, Level level, RopeAnchor from) {
         if (!(mc.hitResult instanceof BlockHitResult hit) || hit.getType() != HitResult.Type.BLOCK) {
             return null;
         }
         BlockPos pos = hit.getBlockPos();
         if (pos.equals(from.pos())) {
-            return null; // can't tie a post to itself
+            return null;
         }
         if (!(level.getBlockState(pos).getBlock() instanceof RopeFencePostBlock
                 || level.getBlockState(pos).getBlock() instanceof RopeFenceGateBlock)) {
@@ -253,19 +234,13 @@ public final class RopeRenderEvents {
         }
         double horiz = Math.sqrt((to.x - fromTie.x) * (to.x - fromTie.x) + (to.z - fromTie.z) * (to.z - fromTie.z));
         if (horiz > RopeTies.MAX_ROPE_HORIZONTAL || Math.abs(to.y - fromTie.y) > RopeTies.MAX_ROPE_VERTICAL) {
-            return null; // out of reach → fall back to the trailing end so you SEE it won't reach
+            return null;
         }
         return target;
     }
 
-    /** The post/gate currently shown a PREVIEW coil (client-only blockstate), so we can revert it. */
     private static RopeAnchor previewRopedTarget;
 
-    /**
-     * Each client tick, show the roped-coil model on the post you're aiming at while mid-tie (and clear
-     * it the moment you look away / finish), so you preview not just the rope line but the coil too.
-     * Purely a client blockstate flip; reverted to the post's real state via {@link RopeTies#refreshRoped}.
-     */
     @SubscribeEvent
     public static void onClientTick(net.neoforged.neoforge.client.event.ClientTickEvent.Post event) {
         Minecraft mc = Minecraft.getInstance();
@@ -282,15 +257,14 @@ public final class RopeRenderEvents {
             return;
         }
         if (previewRopedTarget != null && level != null) {
-            RopeTies.refreshRoped(level, previewRopedTarget); // restore the post's real (server) state
+            RopeTies.refreshRoped(level, previewRopedTarget);
         }
         previewRopedTarget = desired;
         if (desired != null && level != null) {
-            RopeTies.setRopedModel(level, desired, true); // preview the coil
+            RopeTies.setRopedModel(level, desired, true);
         }
     }
 
-    /** Reel {@code target} back toward {@code tie} so it never exceeds the rope's horizontal/vertical reach. */
     private static Vec3 clampToReach(Vec3 tie, Vec3 target) {
         double dx = target.x - tie.x, dy = target.y - tie.y, dz = target.z - tie.z;
         double horiz = Math.sqrt(dx * dx + dz * dz);

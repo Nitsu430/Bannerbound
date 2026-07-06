@@ -33,61 +33,64 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Miner {@link OrderedWorkGoal} — works the surface ore boulder of a marked resource chunk with the
- * <b>chip cycle</b>: swing at an ORE-state boulder block, swap it to the type's chipped/body state
- * (NEVER destroy it — block states change, the boulder's mass doesn't), and route the yield straight
- * into the marked drop-off (remote insert, like every other worker). The vein-regen ticker
- * ({@link com.bannerbound.core.territory.MinerVeinRegen}) slowly swaps chipped faces back to ore, so
- * the boulder is a permanent, self-refreshing work site and the chunk's identity marker forever.
+ * Miner OrderedWorkGoal -- works the surface ore boulder of a marked resource chunk with the chip
+ * cycle: swing at an ORE-state boulder block, swap it to the type's chipped/body state (NEVER
+ * destroy it -- block states change, the boulder's mass doesn't), and route the yield straight into
+ * the marked drop-off (remote insert, like every other worker). The vein-regen ticker
+ * (MinerVeinRegen) slowly swaps chipped faces back to ore, so the boulder is a permanent,
+ * self-refreshing work site and the chunk's identity marker forever. The miner's hard rule is the
+ * opposite of the digger's REMOVE-terrain job: zero terrain edits beyond the ore<->chipped swap.
  *
- * <p>Markers are committed by the Foreman's Rod (single click in an ore chunk → point selection of
- * type {@code "miner"}; the packed {@link BlockSelection#seedItemId()} carries resource + boulder
- * base height). Marker discovery mirrors the herder: bound markers are private, open markers are
- * reserved via {@link MinerClaims} so multiple miners spread across deposits. The chip mechanics
- * (reach + line-of-sight, approach tiles, swing pacing by tool age) mirror {@link DiggerWorkGoal} —
- * but where the digger's job is to REMOVE terrain, the miner's hard rule is the opposite: it makes
- * zero terrain edits beyond the ore↔chipped state swap.
+ * <p>Markers are committed by the Foreman's Rod (single click in an ore chunk -> point selection of
+ * type "miner"; the packed seed carries resource + boulder base height, packMine/mineResource/
+ * mineBaseY). Discovery mirrors the herder: bound markers are private, open markers are reserved via
+ * MinerClaims so miners spread across deposits. The chip mechanics (reach + line-of-sight, approach
+ * tiles, the two-track "chip everything in reach before moving" selection, swing pacing by tool age)
+ * mirror DiggerWorkGoal.
+ *
+ * <p>Outpost sites manage their own storage: the OUTPOST auto-assigns the nearest drop-off container
+ * inside the working-claimed chunk as the citizen's drop-off (the Job tab greys its button), so
+ * every downstream system sees an ordinary drop-off. ORDER TRAP in canStartWork: outpost detection
+ * is pure settlement data and MUST run before the chunk-load gate -- an appointed miner standing at
+ * home has to learn its remote site while that chunk is still unloaded, else SettlementPatrolGoal
+ * never commutes it out and the site never loads (the deadlock the old after-hasChunk order hit;
+ * HerderWorkGoal orders it the same way). A momentarily null settlement lookup must never clear the
+ * site, and a single marker miss must never forget it (only MARKER_MISS_FORGET consecutive confirmed
+ * recalls do) -- either would drop an actively-assigned miner to patrol and walk it all the way home.
+ *
+ * <p>Tool-tier gate: the pickaxe must be correct-tool for the ore block (vanilla needs_*_tool tags,
+ * same progression players obey) -- a bone pick never chips iron; tool age and quality then set
+ * SPEED on top, experience faster still. Status is published for the Job tab (WAITING when the vein
+ * is briefly worked out, BLOCKED on persistent reach trouble, NO_DROPOFF/NO_TOOL/STORAGE_FULL on the
+ * matching gate); stop() resets it so a re-jobbed worker can't carry a stale verdict. ORE_HARDNESS
+ * scales chip duration off the tool age's mine ticks and is tuned against MinerVeinRegen's interval
+ * so a working boulder stays mostly speckled instead of stripping bare.
  */
 @ApiStatus.Internal
 public class MinerWorkGoal extends OrderedWorkGoal {
-    /** Per-citizen job id (Job tab / unlocks / icons all key off this). */
     public static final String JOB_TYPE_ID = "miners_claim";
-    /** Type string the Foreman's Rod stamps on miner markers (the short unit name). */
     public static final String SELECTION_TYPE = "miner";
 
     private static final int DEFAULT_CHIP_TICKS = 80;
-    /** Ore is harder than the digger's dirt/stone — chip duration is the tool age's mine ticks
-     *  times this. Also the yield-rate knob, and tuned against MinerVeinRegen's interval so a
-     *  working boulder stays mostly speckled instead of stripping bare. */
     private static final int ORE_HARDNESS = 3;
     private static final int RESCAN_COOLDOWN_TICKS = 60;
-    /** Consecutive marker-not-found scans before we forget the outpost site. A single transient miss
-     *  (e.g. the settlement lookup momentarily unresolved) must NOT clear the site — that would drop
-     *  the worker to patrol and walk it home. Only a confirmed recall (the bound marker is genuinely
-     *  gone) accumulates this and lets go. */
     private static final int MARKER_MISS_FORGET = 4;
-    /** Same generous player-like reach + line-of-sight regime as the digger. */
     private static final double REACH = 4.0;
     private static final double REACH_SQ = REACH * REACH;
     private static final int TARGET_TIMEOUT_TICKS = 200;
     private static final int STAGNATION_LIMIT = 30;
-    /** A face that couldn't be reached is skipped this many ticks so the miner tries OTHER faces
-     *  instead of re-picking the same nearest-but-unreachable one forever (the digger's fix). */
     private static final int FAILED_TTL_TICKS = 80;
-    /** Pre-filter for the "already in reach → chip in place, no pathfinding" pick: only run the
-     *  (cheap) reach raycast on faces within this squared distance of the worker. */
     private static final double IMMEDIATE_PREFILTER_SQ = 30.0;
 
-    private BlockPos anchor;            // marker anchor (the clicked boulder block)
+    private BlockPos anchor;
     private ChunkResource resource = ChunkResource.NONE;
     private int baseY;
-    private BlockPos targetPos;         // ore-state boulder block being chipped
+    private BlockPos targetPos;
     private int chipTimer;
     private int targetAge;
     private int rescanCooldown;
-    private int markerMisses;           // consecutive findMineMarker() misses — debounces site forget
-    private int abandons;               // consecutive targets given up unreached — drives BLOCKED status
-    /** Faces that timed out / had no reachable approach, with their skip-until tick. Prunes on read. */
+    private int markerMisses;
+    private int abandons;
     private final java.util.Map<BlockPos, Integer> recentlyFailed = new java.util.HashMap<>();
     private java.util.List<BlockPos> approaches = java.util.List.of();
     private int approachIdx;
@@ -103,8 +106,6 @@ public class MinerWorkGoal extends OrderedWorkGoal {
     protected String workstationTypeId() {
         return JOB_TYPE_ID;
     }
-
-    // ─── Marker seed packing: "<resource>|<baseY>" ───────────────────────────────────────────────
 
     public static String packMine(ChunkResource type, int baseY) {
         return type.name() + "|" + baseY;
@@ -132,25 +133,16 @@ public class MinerWorkGoal extends OrderedWorkGoal {
         }
     }
 
-    // ─── Start / continue ────────────────────────────────────────────────────────────────────────
-
     @Override
     protected boolean canStartWork() {
         citizen.validateJobStorage();
         if (!(citizen.level() instanceof ServerLevel sl)) return false;
-        // Job + tool only at this point — the drop-off may be OUTPOST-managed and auto-assigned
-        // below, so the full isJobReady (which demands a drop-off) runs after marker resolution.
         if (!JOB_TYPE_ID.equals(citizen.getJobType()) || !citizen.hasJobTool()) return false;
         if (rescanCooldown-- > 0) return false;
 
-        MinerClaims.releaseAll(citizen.getId());   // fresh each evaluation; re-claims below
+        MinerClaims.releaseAll(citizen.getId());
         BlockSelection sel = findMineMarker(sl);
         if (sel == null) {
-            // Forget a remembered outpost site only after several CONSECUTIVE misses (a confirmed
-            // recall — the bound marker is gone for good), never on a one-scan blip. Clearing it on
-            // a transient miss (e.g. the settlement lookup momentarily unresolved) would drop an
-            // actively-assigned miner to patrol and walk it all the way home before the next scan
-            // re-appoints it — a visible "the worker wandered off the outpost" round-trip.
             if (citizen.getOutpostSite() != null && citizen.getSettlement() != null
                     && ++markerMisses >= MARKER_MISS_FORGET) {
                 citizen.setOutpostSite(null);
@@ -162,35 +154,24 @@ public class MinerWorkGoal extends OrderedWorkGoal {
         markerMisses = 0;
         anchor = new BlockPos(sel.minX(), sel.minY(), sel.minZ());
 
-        // Outpost detection is pure settlement data (no level read), so it MUST happen before the
-        // chunk-load gate below. An appointed miner standing at home has to learn its remote site
-        // even while that chunk is unloaded: that's what flips SettlementPatrolGoal to commute it
-        // out there (loading the site en route) and keeps it AI-active for the whole trip. Doing
-        // this only AFTER hasChunk (as it used to) deadlocked — the site never loads until a worker
-        // arrives, and no worker arrives until the site is set. HerderWorkGoal already orders it
-        // this way; the miner now matches.
+        // ORDER: outpost detection (settlement data, no level read) MUST precede the hasChunk gate,
+        // else the miner can never learn a remote site while it is unloaded and the commute deadlocks.
         Settlement settlement = citizen.getSettlement();
         ChunkPos siteChunk = new ChunkPos(anchor);
         boolean outpost = settlement != null && settlement.workingClaims().contains(siteChunk.toLong());
-        // Only (re)write the outpost site when the settlement actually resolved — a momentarily null
-        // lookup must not clear it and send the worker home (see the marker-miss debounce above).
+        // A null settlement lookup must NOT clear the site (would send the worker home).
         if (settlement != null) citizen.setOutpostSite(outpost ? anchor.immutable() : null);
 
-        if (!sl.hasChunk(anchor.getX() >> 4, anchor.getZ() >> 4)) return false; // still commuting — site not loaded
+        if (!sl.hasChunk(anchor.getX() >> 4, anchor.getZ() >> 4)) return false;
         resource = mineResource(sel.seedItemId());
         baseY = mineBaseY(sel.seedItemId());
         if (!BoulderLayout.isOreChunk(resource) || baseY == Integer.MIN_VALUE) return false;
         Item drop = BoulderLayout.dropFor(resource).orElse(null);
-        if (drop == null) return false; // drop item not in this install
+        if (drop == null) return false;
 
-        // Outpost sites manage their own storage: the OUTPOST decides the chest (nearest drop-off
-        // container inside the working-claimed chunk), not the Job tab — which greys its button.
-        // The chest is auto-assigned as the citizen's drop-off so every downstream system
-        // (resolveDepot, validateJobStorage, stocker pickup) sees a perfectly ordinary drop-off.
         if (outpost) {
             BlockPos storage = findOutpostStorage(sl, siteChunk, anchor);
             if (storage == null) {
-                // No chest at the outpost yet — nowhere for the yield, don't start.
                 citizen.setCurrentWorkStatus(CitizenWorkStatus.NO_DROPOFF);
                 rescanCooldown = RESCAN_COOLDOWN_TICKS * 2;
                 return false;
@@ -204,14 +185,11 @@ public class MinerWorkGoal extends OrderedWorkGoal {
             citizen.setCurrentWorkStatus(CitizenWorkStatus.NO_DROPOFF);
             return false;
         }
-        // Tool-tier gate: vanilla harvest rules decide what this pickaxe may chip (a bone pick
-        // works marble but not the needs_stone_tool metals) — progression, same tags as players.
         if (!canChipWithTool()) {
-            citizen.setCurrentWorkStatus(CitizenWorkStatus.NO_TOOL);   // has a pick, but too soft for this ore
+            citizen.setCurrentWorkStatus(CitizenWorkStatus.NO_TOOL);
             rescanCooldown = RESCAN_COOLDOWN_TICKS;
             return false;
         }
-        // Don't chip what the chest can't hold — back off rather than spill at our feet.
         if (DropOffContainers.roomFor(depot, new ItemStack(drop)) < 1) {
             citizen.setCurrentWorkStatus(CitizenWorkStatus.STORAGE_FULL);
             rescanCooldown = RESCAN_COOLDOWN_TICKS;
@@ -220,25 +198,17 @@ public class MinerWorkGoal extends OrderedWorkGoal {
 
         ChipPick pick = findChipPick(sl);
         if (pick == null) {
-            // No exposed, ore-state, not-recently-failed face right now — the reachable faces are
-            // chipped (or briefly skip-listed) and the vein refreshes in waves (MinerVeinRegen,
-            // ~8000 ticks apart). Publish WAITING so the Job tab reads "Waiting" (amber) instead of
-            // the misleading default "Working"; the citizen loiters tightly at the rock meanwhile.
             citizen.setCurrentWorkStatus(CitizenWorkStatus.WAITING);
             rescanCooldown = RESCAN_COOLDOWN_TICKS * 2;
             return false;
         }
         if (!commitTarget(sl, pick)) {
-            // Found a face but no standable, line-of-sight tile to chip it from — skip it briefly and
-            // try OTHER faces next scan (instead of re-locking onto the same unreachable one).
             markFailed(pick.pos());
             abandons++;
             citizen.setCurrentWorkStatus(CitizenWorkStatus.BLOCKED);
             rescanCooldown = RESCAN_COOLDOWN_TICKS;
             return false;
         }
-        // Cleared every gate — about to work. Persistent reach trouble (abandons piling up) still
-        // reads BLOCKED; otherwise the active chip cycle will publish IDLE→"Working" as it bites.
         citizen.setCurrentWorkStatus(abandons >= 2 ? CitizenWorkStatus.BLOCKED : CitizenWorkStatus.IDLE);
         return true;
     }
@@ -247,18 +217,14 @@ public class MinerWorkGoal extends OrderedWorkGoal {
     protected boolean canKeepWorking() {
         if (!citizen.isJobReady(JOB_TYPE_ID)) return false;
         if (resolveDepot() == null) return false;
-        if (!canChipWithTool()) return false;   // tool swapped mid-job to one below the ore's tier
+        if (!canChipWithTool()) return false;
         return targetPos != null && anchor != null && markerStillMine();
     }
 
-    /** Vanilla harvest-tier gate: the miner's pickaxe must be correct-tool for the resource's ORE
-     *  block (the same {@code needs_*_tool} tags players obey). Tier gives progression — a bone
-     *  pickaxe never chips iron; tool age still sets SPEED on top of this. */
     private boolean canChipWithTool() {
         return citizen.getJobTool().isCorrectToolForDrops(BoulderLayout.oreBlock(resource));
     }
 
-    /** The marker may be deleted (shift+left-click) or re-bound to someone else mid-job. */
     private boolean markerStillMine() {
         if (!(citizen.level() instanceof ServerLevel sl)) return false;
         Settlement settlement = citizen.getSettlement();
@@ -277,8 +243,6 @@ public class MinerWorkGoal extends OrderedWorkGoal {
     public void start() {
         chipTimer = 0;
         citizen.setWorking(true);
-        // Status was already published by canStartWork (IDLE→"Working", or BLOCKED if reach-troubled);
-        // don't clobber it here.
         citizen.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, citizen.getJobTool().copy());
         resetApproachWatchdog();
         navigateToTarget();
@@ -288,8 +252,6 @@ public class MinerWorkGoal extends OrderedWorkGoal {
     public void stop() {
         chipTimer = 0;
         citizen.setWorking(false);
-        // Clear our published verdict so a re-jobbed / unassigned worker can't carry a stale WAITING
-        // onto the Job tab. canStartWork re-publishes WAITING next scan if the vein's still empty.
         citizen.setCurrentWorkStatus(CitizenWorkStatus.IDLE);
         citizen.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, ItemStack.EMPTY);
         MinerClaims.releaseAll(citizen.getId());
@@ -306,7 +268,6 @@ public class MinerWorkGoal extends OrderedWorkGoal {
             targetPos.getX() + 0.5, targetPos.getY() + 0.5, targetPos.getZ() + 0.5);
 
         if (!(citizen.level() instanceof ServerLevel sl)) return;
-        // The face must still be ore-state — regen/players/another pass may have changed it.
         if (!isChippable(sl, targetPos)) { nextTarget(sl); return; }
 
         if (canMineFromHere(targetPos)) {
@@ -318,8 +279,6 @@ public class MinerWorkGoal extends OrderedWorkGoal {
             int budget = ORE_HARDNESS
                 * (toolAge != null ? toolAge.mineTicks().orElse(DEFAULT_CHIP_TICKS) : DEFAULT_CHIP_TICKS);
             budget = com.bannerbound.core.api.quality.QualityTier.scaleWorkTicks(tool, budget);
-            // Experience on top of pick age/quality: a veteran miner chips faster (interval and
-            // completion both scale, so the swing count per ore stays steady).
             budget = skilledWorkTicks(budget);
             int interval = Math.max(1, budget / 6);
             if (chipTimer % interval == 0) playSwing(sl, targetPos);
@@ -344,10 +303,6 @@ public class MinerWorkGoal extends OrderedWorkGoal {
         }
     }
 
-    // ─── The chip ────────────────────────────────────────────────────────────────────────────────
-
-    /** Swap the ore face to its chipped state (NEVER destroy), route the yield to the drop-off
-     *  (remote insert — consistent with the digger and every other worker), spend stamina. */
     private void chipBlock(ServerLevel sl) {
         if (!isChippable(sl, targetPos)) { nextTarget(sl); return; }
         BlockState before = sl.getBlockState(targetPos);
@@ -359,21 +314,18 @@ public class MinerWorkGoal extends OrderedWorkGoal {
         Item drop = BoulderLayout.dropFor(resource).orElse(null);
         if (drop != null) {
             ItemStack one = new ItemStack(drop);
-            // Same knowledge gate as every worker yield — an unknown item never reaches the chest.
             if (SettlementDropFilter.shouldDrop(citizen.getSettlement(), null, one)) {
                 Container depot = resolveDepot();
                 if (depot == null) {
                     citizen.spawnAtLocation(one);
                 } else {
                     ItemStack leftover = DropOffContainers.insert(depot, one);
-                    // Mined yield is valuable — spill overflow at the citizen's feet, never discard.
                     if (!leftover.isEmpty()) citizen.spawnAtLocation(leftover);
                 }
             }
         }
         citizen.grantJobXp(JOB_TYPE_ID, 1.0F, "ore");
         citizen.consumeStamina(1);
-        // Productive bite — clear the reach-trouble tally and read as "Working".
         abandons = 0;
         citizen.setCurrentWorkStatus(CitizenWorkStatus.IDLE);
         targetPos = null;
@@ -381,29 +333,18 @@ public class MinerWorkGoal extends OrderedWorkGoal {
         nextTarget(sl);
     }
 
-    /** Pick the next ore face; none left → the vein is worked out and the goal yields (the regen
-     *  ticker refreshes faces; the rescan cooldown paces the retry). */
     private void nextTarget(ServerLevel sl) {
         ChipPick next = findChipPick(sl);
         if (next != null && commitTarget(sl, next)) {
             chipTimer = 0;
             return;
         }
-        if (next != null) markFailed(next.pos());   // had a face but couldn't commit — skip & retry others
+        if (next != null) markFailed(next.pos());
         targetPos = null;
-        // canKeepWorking goes false next check; the rescan cooldown paces the restart.
     }
 
-    /** A chippable ore face plus whether it's reachable RIGHT NOW (chip in place, no pathfinding). */
     private record ChipPick(BlockPos pos, boolean immediate) {}
 
-    /**
-     * Pick the next ore face to chip — the digger's two-track selection. Among exposed, ore-state,
-     * not-recently-failed layout faces it tracks both the nearest overall AND the nearest that's
-     * already in reach + line of sight ({@link #canMineFromHere}). An immediate pick wins so the
-     * miner chips everything it can hit from where it's standing before ever moving — which is what
-     * makes it actually work a boulder instead of mining one face and stalling on the next.
-     */
     private ChipPick findChipPick(ServerLevel sl) {
         ChunkPos cp = new ChunkPos(anchor);
         BlockPos origin = citizen.blockPosition();
@@ -428,12 +369,6 @@ public class MinerWorkGoal extends OrderedWorkGoal {
         return best == null ? null : new ChipPick(best, false);
     }
 
-    /**
-     * Commit to a pick. An immediate pick mines in place (no approach, no pathfinding). A distant
-     * pick resolves its approach tiles; if none is walkable-with-sight AND we can't already mine it,
-     * return false so the caller skips it ({@link #markFailed}) and tries another face. Mirrors the
-     * digger's {@code tryStartDeposit} commit step.
-     */
     private boolean commitTarget(ServerLevel sl, ChipPick pick) {
         targetPos = pick.pos();
         if (pick.immediate()) {
@@ -453,7 +388,6 @@ public class MinerWorkGoal extends OrderedWorkGoal {
         return true;
     }
 
-    /** True if {@code pos} failed recently and its skip window hasn't elapsed (prunes on access). */
     private boolean isRecentlyFailed(BlockPos pos) {
         Integer expiry = recentlyFailed.get(pos);
         if (expiry == null) return false;
@@ -461,20 +395,14 @@ public class MinerWorkGoal extends OrderedWorkGoal {
         return true;
     }
 
-    /** Skip {@code pos} for {@link #FAILED_TTL_TICKS} so the miner works other faces meanwhile. */
     private void markFailed(BlockPos pos) {
         if (pos != null) recentlyFailed.put(pos.immutable(), citizen.tickCount + FAILED_TTL_TICKS);
     }
 
-    /** The world currently shows the resource's ORE block at {@code pos}. */
     private boolean isChippable(ServerLevel sl, BlockPos pos) {
         return pos != null && sl.getBlockState(pos).is(BoulderLayout.oreBlock(resource).getBlock());
     }
 
-    // ─── Marker discovery (herder pattern: bound → held → nearest open, with claims) ─────────────
-
-    /** Pick which marked deposit this miner works. Bound markers are private; open ones are
-     *  reserved via {@link MinerClaims} so miners spread across deposits. */
     private BlockSelection findMineMarker(ServerLevel sl) {
         Settlement settlement = citizen.getSettlement();
         if (settlement == null) return null;
@@ -489,7 +417,7 @@ public class MinerWorkGoal extends OrderedWorkGoal {
             boolean open = sel.targetsAllWorkers();
             int score;
             if (!open) {
-                score = 0;                                          // bound to me → top priority
+                score = 0;
             } else {
                 if (MinerClaims.isClaimedByOther(sl, a, citizen.getId())) continue;
                 score = MinerClaims.ownedBy(a, citizen.getId()) ? 1 : 2;
@@ -505,15 +433,10 @@ public class MinerWorkGoal extends OrderedWorkGoal {
         return best;
     }
 
-    // ─── Movement / reach (digger regime: stand near, raycast, generous reach) ───────────────────
-
     private Container resolveDepot() {
         return DropOffContainers.resolveOrPreferred(citizen, citizen.getDropOff());
     }
 
-    /** The outpost's storage: the drop-off container (chest/basket/stockpile rack) inside the
-     *  working-claimed chunk nearest the boulder. The outpost decides — never the Job tab.
-     *  Public: the Outpost Banner's status screen shows the same resolution. */
     public static BlockPos findOutpostStorage(ServerLevel sl, ChunkPos cp, BlockPos anchor) {
         BlockPos best = null;
         double bestD = Double.MAX_VALUE;
@@ -521,7 +444,7 @@ public class MinerWorkGoal extends OrderedWorkGoal {
             BlockPos pos = e.getKey();
             if (!(e.getValue() instanceof Container)) continue;
             if (!DropOffContainers.isDropOffBlock(sl, pos)) continue;
-            if (DropOffContainers.isWildStorage(sl, pos)) continue; // never a generated loot chest
+            if (DropOffContainers.isWildStorage(sl, pos)) continue;
             double d = anchor.distSqr(pos);
             if (d < bestD) { bestD = d; best = pos.immutable(); }
         }
@@ -595,7 +518,7 @@ public class MinerWorkGoal extends OrderedWorkGoal {
     }
 
     private void abandonTarget() {
-        if (targetPos != null) markFailed(targetPos);   // skip this face so the next scan tries others
+        if (targetPos != null) markFailed(targetPos);
         abandons++;
         targetPos = null;
         targetAge = 0;

@@ -1,9 +1,10 @@
 package com.bannerbound.core.territory;
 
 /**
- * The resource type a chunk can carry in the specialized-chunks system (the diplomacy scarcity layer).
- * {@code NONE} = an ordinary chunk. Derived deterministically from world seed + chunk coords + biome —
- * see {@link ChunkResources}. Design: repo-root {@code SPECIALIZED_CHUNKS_PLAN.md}.
+ * The resource type a chunk can carry in the specialized-chunks system (the diplomacy scarcity
+ * layer). NONE = an ordinary chunk. Derived deterministically from world seed + chunk coords +
+ * biome (see ChunkResources). code() returns a single-char glyph for the /bannerbound chunktype
+ * debug map. Design: repo-root SPECIALIZED_CHUNKS_PLAN.md.
  */
 public enum ChunkResource {
     NONE,
@@ -30,7 +31,6 @@ public enum ChunkResource {
     DIORITE,
     GRANITE;
 
-    /** Single-char glyph for the {@code /bannerbound chunktype} debug map. */
     public char code() {
         return switch (this) {
             case NONE -> '.';

@@ -20,12 +20,14 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Auto-popup shown to the player who created a farmer selection once tilling completes. Lists
- * the candidate seeds with their item icon + display name. Picking a seed ships
- * {@link PickSeedPayload} and the selection's farmer goal advances to PLANTING phase.
- * <p>
- * Skipping (Esc / "Skip" button) leaves the selection awaiting-seed; the prompt re-queues and
- * re-fires from the work goal next time it scans the selection or on next login.
+ * Auto-popup shown to the player who created a farmer selection once tilling completes. Lists the
+ * candidate seeds (icon + display name), hiding any the player has not learned yet; a seed whose
+ * crop chunk this field sits on harvests at 2x and is flagged green with a star. Picking a seed
+ * ships {@link PickSeedPayload} and the selection's farmer goal advances to PLANTING. Skipping (the
+ * "Skip" button, Esc, or window-close) sends an empty PickSeedPayload, which the server translates
+ * into "erase this selection" so the popup is truly one-shot. The decisionSent latch is the guard
+ * that makes this work: it must be set the instant any button fires so onClose never sends a second
+ * (erasing) skip after a real pick has already been confirmed.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -36,10 +38,7 @@ public class SeedPickerScreen extends PolishedScreen {
 
     private final UUID rodId;
     private final List<String> candidates;
-    /** Seed ids that earn the crop-chunk 2× bonus on this field — rendered green. */
     private final List<String> bonusSeeds;
-    /** Latches once the player picks a seed via a button — onClose then knows NOT to fire the
-     *  "skip" payload (which would erase the just-confirmed selection). */
     private boolean decisionSent;
 
     public SeedPickerScreen(UUID rodId, List<String> candidates, List<String> bonusSeeds) {
@@ -64,14 +63,12 @@ public class SeedPickerScreen extends PolishedScreen {
         int row = 0;
         for (String seedId : candidates) {
             Item item = resolveItem(seedId);
-            // Hide seeds the player hasn't learned yet (researched unlock or starting kit).
             if (item == Items.AIR || !UnknownItemHelper.isKnown(item)) {
                 continue;
             }
             final ItemStack icon = new ItemStack(item);
             final int rowY = listTop + row * ROW_HEIGHT;
             row++;
-            // A seed whose crop chunk this field sits on harvests at 2× — flag it green with a star.
             Component label = bonusSeeds.contains(seedId)
                 ? Component.literal("★ ").append(item.getDescription()).withStyle(ChatFormatting.GREEN)
                 : item.getDescription();
@@ -93,7 +90,6 @@ public class SeedPickerScreen extends PolishedScreen {
                 Component.translatable("bannerbound.seed_picker.skip")
                     .withStyle(ChatFormatting.YELLOW),
                 btn -> {
-                    // Skip is "decision made" — onClose must not fire its own empty-skip.
                     decisionSent = true;
                     PacketDistributor.sendToServer(new PickSeedPayload(rodId, ""));
                     this.onClose();
@@ -105,9 +101,6 @@ public class SeedPickerScreen extends PolishedScreen {
 
     @Override
     public void onClose() {
-        // Esc / window-close = the player walked away without picking. Treat as skip, which the
-        // server-side handler will translate into "erase this selection" so the popup is truly
-        // one-shot.
         if (!decisionSent) {
             decisionSent = true;
             PacketDistributor.sendToServer(new PickSeedPayload(rodId, ""));

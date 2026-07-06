@@ -10,11 +10,11 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Ponder storyboards for the Crucible — a portable single block that gathers a raw-metal charge and
- * is melted inside a Bloomery, then poured into moulds. Scenes under {@code bannerboundantiquity:crucible}.
- * <p>
- * The crucible's charge lives in a codec-encoded {@code Contents} tag, so these scenes teach the
- * interactions through control prompts rather than faking the molten render via raw NBT.
+ * Ponder storyboards for the Crucible - a portable single block that gathers a raw-metal charge,
+ * is melted inside a Bloomery, then poured into moulds at the Stone Anvil. Scenes registered
+ * under {@code bannerboundantiquity:crucible}. Unlike the other station scenes, the crucible's
+ * charge lives in a codec-encoded Contents tag, so these scenes teach the interactions purely
+ * through control prompts and text rather than faking the molten render via raw NBT pokes.
  */
 @OnlyIn(Dist.CLIENT)
 public final class CrucibleScenes {
@@ -53,7 +53,6 @@ public final class CrucibleScenes {
         scene.world().setBlock(pos, BannerboundAntiquity.CRUCIBLE_BLOCK.get().defaultBlockState(), false);
         scene.idle(10);
 
-        // Load raw ore.
         scene.overlay().showControls(util.vector().topOf(pos), Pointing.DOWN, 60)
             .rightClick().withItem(PonderUtil.stack("minecraft:raw_copper", 4));
         scene.idle(10);
@@ -70,7 +69,6 @@ public final class CrucibleScenes {
             .placeNearTarget();
         scene.idle(70);
 
-        // Melt it in the bloomery.
         scene.overlay().showText(90)
             .text("Place the charged Crucible inside a lit Bloomery to melt it into liquid metal.")
             .pointAt(util.vector().topOf(pos))

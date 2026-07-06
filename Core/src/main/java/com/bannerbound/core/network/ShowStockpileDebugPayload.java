@@ -15,7 +15,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: flash a {@code StockpileEnclosure} scan as a wireframe for {@code durationTicks} —
+ * Server -> client: flash a {@code StockpileEnclosure} scan as a wireframe for {@code durationTicks}:
  * the detected interior tiles (green), the connected container blocks (blue), and the exact failure
  * position if any (red). Reuses {@code SelectionRenderer}'s silhouette/box primitives; the data is
  * stashed client-side in {@code StockpileDebugState}. Debug aid until the storage terminal lands.

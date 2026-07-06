@@ -13,22 +13,17 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * What a crucible holds, stored as a {@code DataComponentType} on the crucible item (and mirrored on
- * the placed {@link com.bannerbound.antiquity.block.entity.CrucibleBlockEntity}). Two phases:
- *
- * <ul>
- *   <li><b>Charge</b> — a list of raw, smeltable items dropped in while the crucible sits on the ground
- *       (raw ore, metal heads, ingots…). Visible inside the block; kept when broken and re-inserted.</li>
- *   <li><b>Molten</b> — once heated in a bloomery the charge melts to {@code mb} of {@code metalId};
- *       the charge clears and {@code molten} flips true. Only a molten crucible can pour. Pulled out
- *       before it melts, the charge is still there (no loss).</li>
- * </ul>
- *
- * @param charge    raw items waiting to be melted (empty once molten)
- * @param molten    {@code true} while liquid (pourable)
- * @param metalId   resolved metal/alloy id once molten (e.g. {@code "bronze"}); {@code ""} pre-melt
- * @param mb        molten millibuckets once molten; 0 pre-melt
- * @param tintColor resolved packed 0xRRGGBB colour for the molten layer
+ * What a crucible holds, stored as a {@code DataComponentType} on the crucible item (and mirrored
+ * on the placed {@link com.bannerbound.antiquity.block.entity.CrucibleBlockEntity}). Two phases:
+ * the CHARGE phase - a list of raw smeltable items (raw ore, metal heads, ingots, ...) dropped in
+ * while the crucible sits on the ground, visible inside the block, kept when the crucible is
+ * broken and re-inserted, and recoverable with no loss if pulled out before it melts - and the
+ * MOLTEN phase - once heated in a bloomery the charge melts to {@code mb} millibuckets of
+ * {@code metalId} (the resolved metal/alloy id, e.g. "bronze"; empty pre-melt), the charge list
+ * clears and {@code molten} flips true; only a molten crucible can pour. {@code tintColor} is the
+ * resolved packed 0xRRGGBB colour for the molten layer. Immutable: withAdded/withoutLast/drain
+ * return new instances; lastItem/withoutLast let a still-solid charge be popped back out item by
+ * item, and drain empties to EMPTY when drained dry.
  */
 public record CrucibleContents(List<ItemStack> charge, boolean molten, String metalId, int mb, int tintColor) {
 
@@ -52,12 +47,10 @@ public record CrucibleContents(List<ItemStack> charge, boolean molten, String me
             ByteBufCodecs.INT, CrucibleContents::tintColor,
             CrucibleContents::new);
 
-    /** A pre-melt crucible carrying these raw items. */
     public static CrucibleContents ofCharge(List<ItemStack> items) {
         return new CrucibleContents(List.copyOf(items), false, "", 0, 0xFFFFFF);
     }
 
-    /** The molten result of a melt: liquid metal, charge cleared. */
     public static CrucibleContents molten(String metalId, int mb, int tintColor) {
         return new CrucibleContents(List.of(), true, metalId, mb, tintColor);
     }
@@ -70,7 +63,6 @@ public record CrucibleContents(List<ItemStack> charge, boolean molten, String me
         return !charge.isEmpty();
     }
 
-    /** Molten millibuckets (0 until melted). */
     public int totalMb() {
         return molten ? mb : 0;
     }
@@ -79,19 +71,16 @@ public record CrucibleContents(List<ItemStack> charge, boolean molten, String me
         return metalId;
     }
 
-    /** This crucible with {@code stack} added to its (pre-melt) charge. */
     public CrucibleContents withAdded(ItemStack stack) {
         List<ItemStack> next = new ArrayList<>(charge);
         next.add(stack.copyWithCount(1));
         return new CrucibleContents(next, false, "", 0, tintColor);
     }
 
-    /** The last charged item (for popping it back out while still solid), or EMPTY. */
     public ItemStack lastItem() {
         return charge.isEmpty() ? ItemStack.EMPTY : charge.get(charge.size() - 1).copy();
     }
 
-    /** This (pre-melt) charge minus its last item. */
     public CrucibleContents withoutLast() {
         if (charge.isEmpty()) return this;
         List<ItemStack> next = new ArrayList<>(charge);
@@ -99,7 +88,6 @@ public record CrucibleContents(List<ItemStack> charge, boolean molten, String me
         return new CrucibleContents(next, false, "", 0, tintColor);
     }
 
-    /** Same molten charge minus {@code drainMb}; empties when drained dry. */
     public CrucibleContents drain(int drainMb) {
         if (!molten || drainMb <= 0) return this;
         int left = Math.max(0, mb - drainMb);

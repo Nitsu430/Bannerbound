@@ -9,9 +9,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C, once per second to members of faithful settlements (and on faith changes): the
- * settlement's faith snapshot for the town hall — name/path/member count, devotion
- * stockpile + rate, and whether the Choose-Faith window is open.
+ * S->C, once per second to members of faithful settlements (and on faith changes): the settlement's
+ * faith snapshot for the town hall -- name/path/member count, devotion stockpile + rate, and whether
+ * the Choose-Faith window is open.
  */
 public record FaithStatePayload(
         boolean hasFaith,

@@ -30,14 +30,22 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The two-phase knapping screen (a {@link PolishedScreen}: crisp world behind it — no menu blur —
- * plus the open-settle polish). <b>Phase A (shaping):</b> a 3×3 grid of stone cells; left-click chips
- * a cell away (debris flash + stone-break sound). When the remaining cells match a known head
- * silhouette its preview + name show and <i>Knap</i> enables; chipping every cell away "breaks the
- * stone" (the rock is forfeit). <b>Phase B (knapping):</b> a rhythm minigame — one circle slides in
- * toward a fixed cursor per cell you chipped away; tap SPACE as each meets the cursor (perfect / good
- * / miss). The aggregated taps roll the head's {@link QualityTier}. The server owns the session, the
- * rock, and the roll.
+ * Two-phase knapping minigame screen (a PolishedScreen with the dimmed backdrop disabled: the world
+ * stays crisp behind it because this is an open-air hand-craft, not a menu). Opened by an
+ * OpenKnappingPayload carrying the known head silhouettes; the server owns the session, the rock,
+ * and the final quality roll - this screen only reports player actions via KnappingActionPayload:
+ * COMMIT on the first chip, then exactly one terminal action (COMPLETE / BROKE / CANCEL); closing
+ * the screen without finishing sends CANCEL so the server can release the rock.
+ * Phase A (shaping): a 3x3 grid of stone cells; left-click chips a cell away (debris flash +
+ * stone-break sound). When the bitmask of remaining cells equals a shape's keepMask, that head's
+ * preview and name show and the Knap button enables; chipping every cell away "breaks the stone"
+ * and forfeits the rock (BROKE). Phase B (knapping): after a 3-2-1 countdown (600ms per count,
+ * no scoring during it), one circle per chipped-away cell slides toward a fixed cursor at
+ * INTERVAL_MS spacing with TRAVEL_MS flight time; SPACE on the beat scores perfect within
+ * PERFECT_MS (~2 frames at 60fps - deliberately hard to nail) or good within GOOD_MS. A tap more
+ * than GOOD_MS early is a stray and scores nothing without consuming the note; a circle that sails
+ * past unhit resolves as a miss. Notes resolve strictly in order, and the per-note scores are sent
+ * with COMPLETE for the server-side QualityTier roll.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -46,12 +54,11 @@ public class KnappingScreen extends PolishedScreen {
         ResourceLocation.withDefaultNamespace("textures/block/stone.png");
     private static final int CELL = 38;
 
-    // Rhythm minigame (Phase B) tuning.
-    private static final long COUNTDOWN_MS = 1800L; // 3-2-1 (600ms each) before circles begin
-    private static final long INTERVAL_MS = 620L;   // spacing between circle arrivals
-    private static final long TRAVEL_MS = 920L;     // how long a circle is in flight before its beat
-    private static final long PERFECT_MS = 33L;     // |timing error| for a perfect (~2 frames — hard to nail)
-    private static final long GOOD_MS = 110L;       // |timing error| for a good (miss beyond this)
+    private static final long COUNTDOWN_MS = 1800L;
+    private static final long INTERVAL_MS = 620L;
+    private static final long TRAVEL_MS = 920L;
+    private static final long PERFECT_MS = 33L;
+    private static final long GOOD_MS = 110L;
     private static final long FEEDBACK_MS = 600L;
     private static final int GREEN_SCORE = 100;
     private static final int YELLOW_SCORE = 60;
@@ -67,19 +74,17 @@ public class KnappingScreen extends PolishedScreen {
     private final RandomSource rng = RandomSource.create();
 
     private Phase phase = Phase.SHAPING;
-    private boolean committed = false; // sent COMMIT on the first chip
-    private boolean finished = false;  // sent a terminal action (COMPLETE/BROKE/CANCEL)
+    private boolean committed = false;
+    private boolean finished = false;
 
-    // Phase A — the grid.
-    private final boolean[] stone = new boolean[9]; // true = cell still present
+    private final boolean[] stone = new boolean[9];
     private int gridLeft;
     private int gridTop;
-    private OpenKnappingPayload.ShapeView matched; // the shape the remaining cells form, or null
+    private OpenKnappingPayload.ShapeView matched;
     private Button knapButton;
     private long lastChipMs = 0L;
     private int lastChipCell = -1;
 
-    // Phase B — the rhythm reps (one circle per chipped-away cell).
     private int reps = 0;
     private long phaseStartMs = 0L;
     private boolean[] resolved = new boolean[0];
@@ -96,7 +101,6 @@ public class KnappingScreen extends PolishedScreen {
     private int hitRingColor = 0;
     private final List<Spark> sparks = new ArrayList<>();
 
-    /** A short-lived UI debris fleck flung from the cursor on a hit. */
     private static final class Spark {
         final float x0;
         final float y0;
@@ -123,7 +127,7 @@ public class KnappingScreen extends PolishedScreen {
 
     @Override
     protected boolean drawsDimmedBackground() {
-        return false; // crisp world behind — this is an open-air hand-craft, not a menu
+        return false;
     }
 
     @Override
@@ -141,8 +145,6 @@ public class KnappingScreen extends PolishedScreen {
         travelDist = this.width / 2 + 60;
         recomputeMatch();
     }
-
-    // ── Phase A: shaping ────────────────────────────────────────────────────────────────────
 
     private int currentMask() {
         int mask = 0;
@@ -212,13 +214,13 @@ public class KnappingScreen extends PolishedScreen {
                 return true;
             }
         }
-        return super.mouseClicked(mx, my, button); // lets the Knap button receive its click
+        return super.mouseClicked(mx, my, button);
     }
 
     private void startKnapping() {
         if (matched == null) return;
         phase = Phase.KNAPPING;
-        reps = Math.max(1, removedCount()); // one circle per stone chipped away
+        reps = Math.max(1, removedCount());
         resolved = new boolean[reps];
         noteScore = new int[reps];
         resolvedCount = 0;
@@ -227,19 +229,14 @@ public class KnappingScreen extends PolishedScreen {
         knapButton.active = false;
     }
 
-    // ── Phase B: the rhythm minigame ────────────────────────────────────────────────────────
-
-    /** When the 3-2-1 ends and circles begin arriving. */
     private long rhythmStart() {
         return phaseStartMs + COUNTDOWN_MS;
     }
 
-    /** When circle {@code i} should sit exactly on the cursor (first one spawns as the count ends). */
     private long beatTime(int i) {
         return rhythmStart() + TRAVEL_MS + (long) i * INTERVAL_MS;
     }
 
-    /** The first unresolved circle (the one the player is aiming at), or -1 when all are done. */
     private int activeNote() {
         for (int i = 0; i < reps; i++) {
             if (!resolved[i]) return i;
@@ -252,7 +249,7 @@ public class KnappingScreen extends PolishedScreen {
         if (i < 0) return;
         long d = now - beatTime(i);
         if (d < -GOOD_MS) {
-            playUi(SoundEvents.STONE_HIT, 0.6F, 0.5F); // way too early — stray tap, no score
+            playUi(SoundEvents.STONE_HIT, 0.6F, 0.5F);
             return;
         }
         long err = Math.abs(d);
@@ -271,7 +268,6 @@ public class KnappingScreen extends PolishedScreen {
             hitRingMs = now;
             hitRingColor = COL_GREEN;
             spawnSparks(COL_GREEN, 12, 130F, now);
-            // pitch climbs with the perfect streak for a satisfying run
             playUi(SoundEvents.NOTE_BLOCK_CHIME.value(), 1.0F + Math.min(0.5F, perfectStreak() * 0.06F), 0.9F);
         } else if (score >= YELLOW_SCORE) {
             lastFeedback = Component.translatable("bannerbound.fletching.good");
@@ -302,24 +298,21 @@ public class KnappingScreen extends PolishedScreen {
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (phase == Phase.KNAPPING && keyCode == GLFW.GLFW_KEY_SPACE && !finished) {
             long now = Util.getMillis();
-            if (now >= rhythmStart()) registerTap(now); // no scoring during the 3-2-1
+            if (now >= rhythmStart()) registerTap(now);
             return true;
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
-    /** Flings a handful of debris flecks from the cursor on a hit (color reads the result tier). */
     private void spawnSparks(int color, int count, float speed, long now) {
         for (int k = 0; k < count; k++) {
             float ang = (float) (rng.nextFloat() * Math.PI * 2.0);
             float sp = speed * (0.4F + rng.nextFloat());
             float vx = (float) Math.cos(ang) * sp;
-            float vy = (float) Math.sin(ang) * sp - speed * 0.4F; // slight upward bias
+            float vy = (float) Math.sin(ang) * sp - speed * 0.4F;
             sparks.add(new Spark(cursorX, trackY, vx, vy, now, color));
         }
     }
-
-    // ── Networking + sound ──────────────────────────────────────────────────────────────────
 
     private void sendAction(int action, ResourceLocation head, List<Integer> payloadScores) {
         PacketDistributor.sendToServer(new KnappingActionPayload(action, head, payloadScores));
@@ -330,8 +323,6 @@ public class KnappingScreen extends PolishedScreen {
             minecraft.getSoundManager().play(SimpleSoundInstance.forUI(sound, pitch, volume));
         }
     }
-
-    // ── Rendering (rides the PolishedScreen settle pose; widgets drawn after this) ────────────
 
     @Override
     protected void renderPolishedBackdrop(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
@@ -346,7 +337,6 @@ public class KnappingScreen extends PolishedScreen {
         int cx = this.width / 2;
         this.cursorX = cx - (travelDist / 2);
         Component hint = Component.translatable("bannerbound.knapping.shape_hint").withStyle(ChatFormatting.GRAY);
-        // Backing strip wide enough for BOTH the grid and the title (whichever is wider).
         int halfW = Math.max(3 * CELL / 2 + 14, this.font.width(hint) / 2 + 16);
         g.fill(cx - halfW, gridTop - 28, cx + halfW, gridTop + 3 * CELL + 66, COL_PANEL);
         g.drawCenteredString(this.font, hint, cx, gridTop - 20, 0xFFCCCCCC);
@@ -381,12 +371,11 @@ public class KnappingScreen extends PolishedScreen {
         if (!inCountdown) {
             int active = activeNote();
             if (active >= 0 && now - beatTime(active) > GOOD_MS) {
-                resolve(active, 0, now); // sailed past the cursor unhit
+                resolve(active, 0, now);
             }
         }
         int cx = this.width / 2;
 
-        // Backing strip + header.
         g.fill(cx - travelDist / 2 - 30, trackY - 60, cx + travelDist / 2 + 30, trackY + 44, COL_PANEL);
         g.drawCenteredString(this.font,
             Component.translatable("bannerbound.knapping.strike_hint").withStyle(ChatFormatting.BOLD),
@@ -397,10 +386,8 @@ public class KnappingScreen extends PolishedScreen {
         QualityTier tier = com.bannerbound.antiquity.Knapping.rollTier(matched.percentage_standard(), matched.percentage_fine(), scoresSoFar(), reps);
         g.drawCenteredString(this.font, tier.displayName(), cx, trackY - 34, 0xFFFFFFFF);
 
-        // Track baseline.
         g.fill(cursorX - 8, trackY - 1, cursorX + travelDist, trackY + 1, 0x66FFFFFF);
 
-        // How close the active circle is to its beat — drives the cursor's anticipation pulse.
         int active = activeNote();
         float windowT = 0F;
         if (!inCountdown && active >= 0) {
@@ -408,7 +395,6 @@ public class KnappingScreen extends PolishedScreen {
             if (toBeat <= GOOD_MS) windowT = 1F - toBeat / (float) GOOD_MS;
         }
 
-        // Incoming circles: discs with a soft glow, sliding toward the cursor.
         if (!inCountdown) {
             for (int i = 0; i < reps; i++) {
                 if (resolved[i]) continue;
@@ -416,20 +402,18 @@ public class KnappingScreen extends PolishedScreen {
                 if (toBeat > TRAVEL_MS || toBeat < -GOOD_MS - 120) continue;
                 int x = cursorX + (int) ((toBeat / (float) TRAVEL_MS) * travelDist);
                 boolean inWindow = Math.abs(toBeat) <= GOOD_MS;
-                fillDisc(g, x, trackY, inWindow ? 14 : 11, 0x33FFFFFF);              // glow
+                fillDisc(g, x, trackY, inWindow ? 14 : 11, 0x33FFFFFF);
                 fillDisc(g, x, trackY, inWindow ? 11 : 9, inWindow ? 0xFFFFFFFF : 0xFFBFD8FF);
-                fillDisc(g, x, trackY, inWindow ? 6 : 5, 0xFF2A2A2A);                // hole
+                fillDisc(g, x, trackY, inWindow ? 6 : 5, 0xFF2A2A2A);
             }
         }
 
-        // Expanding hit ring (perfect/good).
         if (now - hitRingMs < 300L && hitRingColor != 0) {
             float t = (now - hitRingMs) / 300F;
             int a = (int) ((1F - t) * 200F);
             drawRing(g, cursorX, trackY, 15 + (int) (t * 22F), 2, (a << 24) | (hitRingColor & 0xFFFFFF));
         }
 
-        // The cursor target ring — pulses bigger/brighter as a circle nears its beat.
         int ringR = 15 + (int) (windowT * 4F);
         int ringCol = windowT > 0F ? blend(0xFFFFE070, 0xFFFFFFFF, windowT) : 0xFFFFE070;
         drawRing(g, cursorX, trackY, ringR, 3, ringCol);
@@ -437,7 +421,6 @@ public class KnappingScreen extends PolishedScreen {
 
         renderSparks(g, now);
 
-        // The 3-2-1 countdown (replaces the circles until the rhythm starts).
         if (inCountdown) {
             int n = (int) Math.min(3, 3 - (now - phaseStartMs) / 600L);
             n = Math.max(1, n);
@@ -445,8 +428,8 @@ public class KnappingScreen extends PolishedScreen {
                 lastCountShown = n;
                 playUi(SoundEvents.NOTE_BLOCK_HAT.value(), 0.8F + (3 - n) * 0.25F, 0.7F);
             }
-            float into = ((now - phaseStartMs) % 600L) / 600F; // 0→1 within this tick
-            float scale = 3.2F - 0.7F * easeOutCubic(into);     // pops big then settles
+            float into = ((now - phaseStartMs) % 600L) / 600F;
+            float scale = 3.2F - 0.7F * easeOutCubic(into);
             g.pose().pushPose();
             g.pose().translate(cx, trackY - 4, 0);
             g.pose().scale(scale, scale, 1F);
@@ -456,7 +439,6 @@ public class KnappingScreen extends PolishedScreen {
             g.pose().popPose();
         }
 
-        // Result pips.
         int pipSize = 6;
         int pipPitch = 12;
         int pipsLeft = cx - (reps * pipPitch - (pipPitch - pipSize)) / 2;
@@ -472,7 +454,6 @@ public class KnappingScreen extends PolishedScreen {
             }
         }
 
-        // Floating Perfect/Good/Miss feedback near the cursor.
         if (lastFeedback != null && now - lastFeedbackMs < FEEDBACK_MS) {
             float t = (now - lastFeedbackMs) / (float) FEEDBACK_MS;
             int alpha = (int) ((1.0F - t) * 255.0F);
@@ -483,11 +464,10 @@ public class KnappingScreen extends PolishedScreen {
         }
     }
 
-    /** Advances + draws the UI sparks (gravity arc, ~0.5s life), culling dead ones. */
     private void renderSparks(GuiGraphics g, long now) {
         sparks.removeIf(s -> now - s.born >= 500L);
         for (Spark s : sparks) {
-            float t = (now - s.born) / 1000F; // seconds
+            float t = (now - s.born) / 1000F;
             int x = Math.round(s.x0 + s.vx * t);
             int y = Math.round(s.y0 + s.vy * t + 150F * t * t);
             int alpha = (int) ((1F - t / 0.5F) * 255F);
@@ -496,7 +476,6 @@ public class KnappingScreen extends PolishedScreen {
         }
     }
 
-    /** Per-channel lerp between two opaque ARGB colors. */
     private static int blend(int from, int to, float t) {
         int r = (int) (((from >> 16) & 0xFF) + (((to >> 16) & 0xFF) - ((from >> 16) & 0xFF)) * t);
         int gg = (int) (((from >> 8) & 0xFF) + (((to >> 8) & 0xFF) - ((from >> 8) & 0xFF)) * t);
@@ -504,7 +483,6 @@ public class KnappingScreen extends PolishedScreen {
         return 0xFF000000 | (r << 16) | (gg << 8) | b;
     }
 
-    /** Consecutive perfects ending at the most recently resolved circle (notes resolve in order). */
     private int perfectStreak() {
         int streak = 0;
         for (int i = resolvedCount - 1; i >= 0; i--) {
@@ -522,7 +500,6 @@ public class KnappingScreen extends PolishedScreen {
         return arr;
     }
 
-    /** Filled disc (a circle that shows the world only at its edge). */
     private static void fillDisc(GuiGraphics g, int cx, int cy, int r, int color) {
         for (int dy = -r; dy <= r; dy++) {
             int dx = (int) Math.sqrt((double) r * r - dy * dy);
@@ -530,7 +507,6 @@ public class KnappingScreen extends PolishedScreen {
         }
     }
 
-    /** Hollow ring of the given thickness (annulus — the center stays the live world). */
     private static void drawRing(GuiGraphics g, int cx, int cy, int r, int thick, int color) {
         for (int dy = -r; dy <= r; dy++) {
             int outer = (int) Math.sqrt((double) r * r - dy * dy);

@@ -22,22 +22,62 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The FACTION BANNER — the block a settlement is bound to (it's the mod's name). One main
+ * The FACTION BANNER - the block a settlement is bound to (it's the mod's name). One main
  * banner per settlement, auto-raised beside the campfire at founding in the faction's color.
- * While it is down (taken down by a member, or struck down by an enemy/explosion) the town
- * hall menu refuses to open, every open settlement menu is force-closed, and ALL citizen
- * labor halts — no banner, no command. Members may relocate it freely (break → re-place);
- * war-time relocation locks and the bedwars-style capture flow come with the war system.
+ * While it is down (taken down by a member, or struck down by an enemy/explosion) the town hall
+ * menu refuses to open ({@link #requireRaised}), every open settlement menu is force-closed,
+ * and ALL citizen labor halts - no banner, no command. Members may relocate it freely (break ->
+ * re-place); war-time relocation locks and the bedwars-style capture flow come with the war
+ * system. The banner is a plain vanilla banner block (color from {@link SettlementColor}), so
+ * it needs no custom block/BE, and the Heraldry editor layers vanilla banner patterns onto the
+ * same block. See FACTION_BANNER_PLAN.md.
  *
- * <p>The banner is a plain vanilla banner block (color from {@link SettlementColor}), so it
- * needs no custom block/BE — and the Heraldry editor can later layer vanilla banner patterns
- * onto the same block. See FACTION_BANNER_PLAN.md.
+ * <p>Design decisions and behaviours folded from around the class:
+ * <ul>
+ * <li>Banner detection is a {@code BlockTags.BANNERS} tag check and design conversion uses
+ *     block-state property checks (ROTATION/FACING), never instanceof - survives block-class
+ *     swaps. Whatever banner gets planted (command-given white, a looted foreign color) converts
+ *     to the faction-color block on registration, keeping its rotation (standing) or facing
+ *     (wall). Vanilla has no {@code byColor} for wall banners, hence the explicit switch.</li>
+ * <li>{@link #placeFoundingBanner} tries the four cardinal spots two blocks out first (one block
+ *     out, the banner's hitbox shadows campfire clicks), then diagonals, then flush cardinals,
+ *     each with +/-1 Y flex for uneven ground, front face turned toward the campfire. Returns
+ *     null when no spot takes - the founder then places one by hand (starting items include
+ *     banners precisely so this cannot soft-lock).</li>
+ * <li>{@link #applyDesignToBlock} (called on raise and on every design edit) is a no-op while
+ *     the banner chunk is unloaded: the design is data, so the next raise/edit in a loaded chunk
+ *     catches the block up. {@link #patternsFor} skips unresolvable pattern ids (datapack
+ *     removed) instead of failing - the rest of the design survives.</li>
+ * <li>{@link #identityDyes} is the "don't fight it" rule: paint the design layer by layer -
+ *     {@code PATTERN_COVERAGE} holds hand-estimated per-pattern cloth coverage (keys are pattern
+ *     PATHS with namespace stripped; unknown/modded patterns default to 0.25; the model only
+ *     needs to rank colors, not be pixel-exact), each layer's coverage claims its share and
+ *     proportionally hides what's underneath - then rank every dye holding at least
+ *     {@code IDENTITY_SHARE_FLOOR} (5%) of the cloth, most-present first. The list is as long as
+ *     the design is colorful; {@code [0]} is the settlement's primary color and the rest are its
+ *     accents, used for gradients and trim across the settlement GUI. Dye your banner mostly
+ *     magenta and you ARE a magenta settlement. Pure data math - safe on both sides, shared by
+ *     the server (save) and the editor's live identity preview. {@link #formattingFor} then maps
+ *     each dye to the nearest of the 16 {@code ChatFormatting} entries, so a couple share
+ *     (pink -> light_purple, brown -> gold) and unreadable ones go grey (black -> dark_gray).</li>
+ * <li>{@link #raise} assumes the caller already verified the placement is in the settlement's
+ *     own territory with no live banner registered; it clears the stale "banner lost" ALERT and
+ *     broadcasts so an open Statuses tab drops the entry instead of waiting out the 1h timeout,
+ *     and plays a bright chime (the inverse of the loss toll). {@link #lose}: a MEMBER takedown
+ *     (relocation) gets the quiet yellow note; anything else - enemy hand, creeper, piston - is
+ *     an attack: on-site toll, faction-wide toll for members out of earshot, red broadcast, and
+ *     an ALERT status entry so offline members still learn of it. Both force-close all open
+ *     settlement menus faction-wide (no cheesing menus through a war).</li>
+ * <li>{@link #validate} is the stale-registration sweep for removals that fire no player break
+ *     event (explosion, piston): it only checks when the chunk is loaded - an unloaded banner is
+ *     presumed standing - and runs from the gates (town hall open, banner re-placement), which
+ *     is cheap and exactly where staleness matters.</li>
+ * </ul>
  */
 public final class FactionBanner {
 
     private FactionBanner() {}
 
-    /** Settlement color → the vanilla dye whose banner best matches the faction's chat color. */
     public static DyeColor dyeFor(SettlementColor color) {
         return switch (color) {
             case WHITE -> DyeColor.WHITE;
@@ -51,17 +91,14 @@ public final class FactionBanner {
         };
     }
 
-    /** The faction's standing banner block (vanilla, per-color). */
     public static BannerBlock standingBlockFor(SettlementColor color) {
         return (BannerBlock) BannerBlock.byColor(dyeFor(color));
     }
 
-    /** The faction's banner item (vanilla, per-color). */
     public static Item itemFor(SettlementColor color) {
         return standingBlockFor(color).asItem();
     }
 
-    /** The faction's WALL banner block — vanilla has no {@code byColor} for wall banners. */
     public static net.minecraft.world.level.block.Block wallBlockFor(SettlementColor color) {
         return switch (dyeFor(color)) {
             case WHITE -> net.minecraft.world.level.block.Blocks.WHITE_WALL_BANNER;
@@ -72,18 +109,11 @@ public final class FactionBanner {
             case LIGHT_BLUE -> net.minecraft.world.level.block.Blocks.LIGHT_BLUE_WALL_BANNER;
             case BLUE -> net.minecraft.world.level.block.Blocks.BLUE_WALL_BANNER;
             case MAGENTA -> net.minecraft.world.level.block.Blocks.MAGENTA_WALL_BANNER;
-            // Unreachable today — dyeFor only returns the eight above — but the switch must
-            // be exhaustive, and a future color addition should fail soft, not crash.
+            // Unreachable today (dyeFor returns only the 8 above) but the switch must stay exhaustive; fail soft, not crash.
             default -> net.minecraft.world.level.block.Blocks.WHITE_WALL_BANNER;
         };
     }
 
-    /**
-     * THE faction banner always shows the faction's design: whatever banner was planted —
-     * command-given white, a looted foreign color — converts to the faction-color block on
-     * registration, keeping its rotation (standing) or facing (wall). Property checks, not
-     * instanceof, so it survives block-class swaps. Heraldry patterns layer on here later.
-     */
     private static void convertToFactionDesign(ServerLevel level, Settlement settlement, BlockPos pos) {
         BlockState current = level.getBlockState(pos);
         if (!isBanner(current)) return;
@@ -101,14 +131,6 @@ public final class FactionBanner {
         }
     }
 
-    /**
-     * Founding generation: raises the faction banner on clear ground beside the campfire,
-     * front face turned toward it. Tries the four cardinal spots two blocks out first (one
-     * block out, the banner's hitbox shadows campfire clicks), then the diagonals, then flush
-     * cardinals, each with ±1 block of Y flex for uneven ground. Returns the banner position,
-     * or null if no spot took — the founder then places one by hand (starting items include
-     * banners precisely so this can't soft-lock).
-     */
     @Nullable
     public static BlockPos placeFoundingBanner(ServerLevel level, Settlement settlement, BlockPos campfire) {
         BlockState banner = standingBlockFor(settlement.color()).defaultBlockState();
@@ -131,11 +153,6 @@ public final class FactionBanner {
         return null;
     }
 
-    // ─── Heraldry design (phase 2) ─────────────────────────────────────────────────────────
-
-    /** Resolves the settlement's stored Heraldry design into vanilla banner pattern layers.
-     *  Unresolvable pattern ids (datapack removed) are skipped, not fatal — the rest of the
-     *  design survives. */
     public static net.minecraft.world.level.block.entity.BannerPatternLayers patternsFor(
             Settlement settlement, net.minecraft.core.RegistryAccess registries) {
         if (settlement.bannerDesign().isEmpty()) {
@@ -160,7 +177,6 @@ public final class FactionBanner {
             : new net.minecraft.world.level.block.entity.BannerPatternLayers(java.util.List.copyOf(layers));
     }
 
-    /** The full faction banner as an item: faction base color + Heraldry pattern layers. */
     public static net.minecraft.world.item.ItemStack designedItem(
             Settlement settlement, net.minecraft.core.RegistryAccess registries, int count) {
         net.minecraft.world.item.ItemStack stack =
@@ -172,10 +188,6 @@ public final class FactionBanner {
         return stack;
     }
 
-    /** Pushes the current Heraldry design onto the standing main banner's block entity —
-     *  called on raise and whenever the design is edited, so the flag in the plaza always
-     *  shows the live design. No-op while the banner chunk is unloaded (the design is data;
-     *  the next raise/edit in a loaded chunk catches it up). */
     public static void applyDesignToBlock(ServerLevel level, Settlement settlement) {
         BlockPos pos = settlement.bannerPos();
         if (pos == null || !level.isLoaded(pos)) return;
@@ -190,11 +202,6 @@ public final class FactionBanner {
         }
     }
 
-    // ─── Banner-driven identity colors ─────────────────────────────────────────────────────
-
-    /** Approximate fraction of the cloth each vanilla pattern paints. Keys are pattern PATHS
-     *  (namespace stripped). Hand-estimated from the textures — the model only needs to rank
-     *  colors, not be pixel-exact. Unknown/modded patterns default to 0.25. */
     private static final java.util.Map<String, Float> PATTERN_COVERAGE = java.util.Map.ofEntries(
         java.util.Map.entry("base", 1.0f),
         java.util.Map.entry("half_vertical", 0.5f),
@@ -239,20 +246,8 @@ public final class FactionBanner {
         return known != null ? known : 0.25f;
     }
 
-    /** A color must hold at least this share of the cloth to count toward the identity. */
     private static final float IDENTITY_SHARE_FLOOR = 0.05f;
 
-    /**
-     * The identity colors a banner design EARNS: paint the design layer by layer (each layer's
-     * coverage claims its share and proportionally hides what's underneath), then rank every
-     * dye holding ≥5% of the cloth, most-present first. The list is AS LONG AS THE DESIGN IS
-     * COLORFUL — a one-color banner yields one identity color, a two-color banner two, a wild
-     * five-color banner five. {@code [0]} = the settlement's primary color; the rest are its
-     * accents in order, used for gradients and trim across the settlement GUI.
-     * This is the "don't fight it" rule: dye your banner mostly magenta and you ARE a magenta
-     * settlement now. Pure data math — safe on both sides, shared by server (save) and the
-     * editor's live identity preview.
-     */
     public static java.util.List<DyeColor> identityDyes(DyeColor base,
             java.util.List<Settlement.BannerLayer> layers) {
         float[] share = new float[16];
@@ -270,13 +265,10 @@ public final class FactionBanner {
         ranked.sort((a, b) -> Float.compare(shares[b], shares[a]));
         java.util.List<DyeColor> out = new java.util.ArrayList<>(ranked.size());
         for (int id : ranked) out.add(DyeColor.byId(id));
-        if (out.isEmpty()) out.add(base); // floor ate everything (can't really happen) — base
+        if (out.isEmpty()) out.add(base);
         return out;
     }
 
-    /** Nearest chat color for an identity dye — chat/team colors are limited to the 16
-     *  {@code ChatFormatting} entries, so a couple of dyes share (pink→light_purple,
-     *  brown→gold) and the unreadable ones go grey (black→dark_gray). */
     public static ChatFormatting formattingFor(DyeColor dye) {
         return switch (dye) {
             case WHITE -> ChatFormatting.WHITE;
@@ -298,34 +290,25 @@ public final class FactionBanner {
         };
     }
 
-    /** Minecraft yaw (0 = south) pointing from {@code from} toward {@code to}. */
     private static float yawToward(BlockPos from, BlockPos to) {
         double dx = to.getX() - from.getX();
         double dz = to.getZ() - from.getZ();
+        // Minecraft yaw convention: 0 = south, hence the -90 offset on the atan2 angle.
         return (float) (Mth.atan2(dz, dx) * (180.0 / Math.PI)) - 90.0F;
     }
 
-    /** True when this state is any vanilla banner (standing or wall). Tag check, never instanceof. */
     public static boolean isBanner(BlockState state) {
         return state.is(BlockTags.BANNERS);
     }
 
-    /**
-     * Registers a freshly placed banner as THE faction banner and tells the whole faction the
-     * settlement is back under command. Caller has already verified the placement is in the
-     * settlement's own territory and that no live banner is registered.
-     */
     public static void raise(ServerLevel level, Settlement settlement, BlockPos pos) {
         convertToFactionDesign(level, settlement, pos);
         settlement.setBannerPos(pos.immutable());
         applyDesignToBlock(level, settlement);
-        // Clear the "banner lost" alert — the banner is back up, the warning is stale. Broadcast
-        // so the open Statuses tab drops the entry instead of holding it until the 1h timeout.
         if (settlement.removeStatusEffectsByKey("bannerbound.status.banner_lost")) {
             SettlementManager.broadcastStatusEffectsToMembers(level.getServer(), settlement);
         }
         SettlementData.get(level.getServer().overworld()).setDirty();
-        // A bright, short chime on site — the inverse of the loss toll.
         level.playSound(null, pos, net.minecraft.sounds.SoundEvents.BELL_BLOCK,
             net.minecraft.sounds.SoundSource.BLOCKS, 1.0f, 1.4f);
         for (UUID memberId : settlement.members()) {
@@ -336,13 +319,6 @@ public final class FactionBanner {
         }
     }
 
-    /**
-     * The faction banner is down. Clears the registration, force-closes every open settlement
-     * menu faction-wide (no banner, no command — and no cheesing menus through a war), and
-     * announces it. A MEMBER taking it down (relocation) gets the quiet yellow note; anything
-     * else — enemy hand, creeper, piston — is an attack: on-site toll, faction-wide toll, red
-     * broadcast, and an ALERT status entry so offline members still learn of it.
-     */
     public static void lose(ServerLevel level, Settlement settlement, BlockPos pos,
                             boolean memberBreak, String breakerName) {
         MinecraftServer server = level.getServer();
@@ -377,12 +353,6 @@ public final class FactionBanner {
         }
     }
 
-    /**
-     * Stale-registration sweep: if the registered banner block no longer exists (explosion,
-     * piston — removals that fire no player break event), treat it as struck down. Only checks
-     * when the chunk is loaded; an unloaded banner is presumed standing. Called from the gates
-     * (town hall open, banner re-placement) — cheap, and exactly where staleness matters.
-     */
     public static void validate(ServerLevel level, Settlement settlement) {
         BlockPos pos = settlement.bannerPos();
         if (pos == null || !level.isLoaded(pos)) return;
@@ -398,10 +368,6 @@ public final class FactionBanner {
         }
     }
 
-    /**
-     * Town-hall gate: validates, then refuses with the red "raise your banner" line when the
-     * faction banner is down. Returns true when the banner stands and menus may open.
-     */
     public static boolean requireRaised(ServerLevel level, ServerPlayer player, Settlement settlement) {
         validate(level, settlement);
         if (settlement.hasFactionBanner()

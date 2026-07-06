@@ -11,14 +11,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: set a workshop's min-stock row from its menu's Stock tab. {@code value ≤ 0}
- * clears the row. The minimum is SETTLEMENT-WIDE (stockpiles + workshop storages, quality ignored):
- * the workers craft this output only while the census is below it — and once ANY row is set, the
- * workshop only crafts configured outputs (the governor; see CRAFTER_PLAN.md Phase 3).
- *
- * @param workshopId the workshop's id (UUID string)
- * @param itemId     the output item's registry id
- * @param value      the new settlement-wide minimum (≤0 = off)
+ * Client -> server: set a workshop's min-stock row from its menu's Stock tab. value <= 0 clears the
+ * row. The minimum is SETTLEMENT-WIDE (stockpiles + workshop storages, quality ignored): the workers
+ * craft this output only while the census is below it - and once ANY row is set, the workshop only
+ * crafts configured outputs (the governor; see CRAFTER_PLAN.md Phase 3).
  */
 @ApiStatus.Internal
 public record SetWorkshopMinStockPayload(String workshopId, int itemId, int value)

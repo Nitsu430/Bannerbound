@@ -25,15 +25,14 @@ import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
  * Loads faith-tree nodes from {@code data/<namespace>/faith/<id>.json} (FAITH_PLAN.md
- * Part 2.5 â€” the THIRD tree). Same {@link ResearchDefinition} record and JSON schema as
- * science/culture, plus the {@code "faith_path"} gate ("ASTROLOGY"/"TOTEMIC") â€” the
+ * Part 2.5 - the THIRD tree). Same {@link ResearchDefinition} record and JSON schema as
+ * science/culture, plus the {@code "faith_path"} gate ("ASTROLOGY"/"TOTEMIC") - the
  * faith-tree analog of {@code government_type}: path-gated branches share one tree, the
- * other path's nodes simply don't render.
- * <p>
- * Authoring convention: the faith tree grows UPWARD (y decreases as the tree ascends) â€”
- * the heavens direction. Costs are in DEVOTION points; the faith's summed member devotion
- * rate fills them (per-FAITH shared progress â€” adopting an established faith inherits its
- * climbed tree).
+ * other path's nodes simply don't render, and a node without {@code faith_path} is the
+ * shared trunk. Authoring convention: the faith tree grows UPWARD (y decreases as the
+ * tree ascends) - the heavens direction. Costs are in DEVOTION points; the faith's summed
+ * member devotion rate fills them (per-FAITH shared progress - adopting an established
+ * faith inherits its climbed tree).
  */
 public class FaithTreeLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "faith";
@@ -87,7 +86,6 @@ public class FaithTreeLoader extends SimpleJsonResourceReloadListener {
         BannerboundCore.LOGGER.info("Loaded faith tree with {} nodes", map.size());
     }
 
-    /** Optional {@code "faith_path"} â†’ FaithPath, null when absent (shared trunk). */
     private static FaithPath parseFaithPath(JsonObject obj, ResourceLocation key) {
         if (!obj.has("faith_path")) return null;
         String raw = GsonHelper.getAsString(obj, "faith_path");

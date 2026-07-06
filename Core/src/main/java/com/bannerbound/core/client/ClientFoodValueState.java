@@ -18,7 +18,8 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * Client-side cache of the base per-item food values. Loaded from the server via
  * {@link com.bannerbound.core.network.FoodValueSyncPayload} on join + datapack reload. Read by
- * the green "Food value" tooltip line — see {@code TooltipHandlers}.
+ * the green "Food value" tooltip line - see {@code TooltipHandlers}. A value of 0 means the item
+ * is not food (the tooltip line is gated off it).
  *
  * <p>Expansions can register per-stack <b>value modifiers</b> (e.g. Antiquity halving the line for
  * bland food) via {@link #addModifier}, so the tooltip shows the value a stack would actually
@@ -44,26 +45,20 @@ public final class ClientFoodValueState {
         VALUES = Map.copyOf(map);
     }
 
-    /** Food value of {@code item}; {@code 0f} when not in the table (treated as "not food"). */
     public static float valueOf(Item item) {
         return VALUES.getOrDefault(item, 0f);
     }
 
-    /** True iff {@code item} has a non-zero food value — used by the tooltip handler to gate
-     *  the green line off non-food items. */
     public static boolean isFood(Item item) {
         return valueOf(item) > 0f;
     }
 
-    /** Register a per-stack value modifier; return {@code 1.0} when it does not apply. */
     public static void addModifier(ToDoubleFunction<ItemStack> modifier) {
         List<ToDoubleFunction<ItemStack>> list = new ArrayList<>(MODIFIERS);
         list.add(modifier);
         MODIFIERS = List.copyOf(list);
     }
 
-    /** This {@code stack}'s effective food value: its item's base value times every registered
-     *  per-stack modifier (so e.g. bland food shows half). {@code 0f} when the item is not food. */
     public static float effectiveValue(ItemStack stack) {
         float v = valueOf(stack.getItem());
         if (v <= 0f) return v;

@@ -17,6 +17,24 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
+/**
+ * Client-side dispatch target for every S->C Bannerbound payload: network registration maps each
+ * payload type to one static handleXxx method here. Every handler body runs inside
+ * context.enqueueWork(...) so client-state mutation and Minecraft.setScreen happen on the render
+ * thread, never the netty thread - do not touch client state outside that lambda.
+ *
+ * Two recurring patterns to preserve when editing:
+ *  - Refresh-in-place: open-screen handlers check whether the target screen is already the current
+ *    Minecraft.screen and refresh it (keeping camera / scroll / tab / half-typed text) rather than
+ *    constructing a new screen on top; skipping this ejects or resets the player on every server push.
+ *  - Parent back-target: a screen opened from the Town Hall stashes it as its parent so Escape
+ *    returns there instead of dumping to the world.
+ *
+ * Era note: every era uses the flat default screens now (TownHallScreen, SettlementCitizensScreen);
+ * the old per-era reskins are no longer dispatched (AncientTownHallScreen still exists in the tree).
+ * reopenCitizenJobTabEntityId is a one-shot handshake: set when the citizen screen closes to enter
+ * drop-location edit, consumed on the next citizen-screen open to reopen straight to the Job tab.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientPayloadHandler {
@@ -67,8 +85,6 @@ public final class ClientPayloadHandler {
     public static void handleFaithState(FaithStatePayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             com.bannerbound.core.client.ClientFaithState.replace(payload);
-            // The choice resolved (or the window closed) while the vote screen was up —
-            // dismiss it; the chat broadcast + fanfare announce the outcome.
             if (Minecraft.getInstance().screen instanceof com.bannerbound.core.client.ChooseFaithScreen
                     && (payload.hasFaith() || !payload.choiceWindowOpen())) {
                 Minecraft.getInstance().setScreen(null);
@@ -108,8 +124,6 @@ public final class ClientPayloadHandler {
             if (payload.forceOpen()) {
                 mc.setScreen(new com.bannerbound.core.client.CrisisScreen(payload));
             } else if (mc.screen instanceof com.bannerbound.core.client.CrisisScreen current) {
-                // Live tally/advice update: refresh the already-open screen in place (never pops
-                // the screen on a member who closed it).
                 current.refresh(payload);
             }
         });
@@ -122,7 +136,6 @@ public final class ClientPayloadHandler {
     public static void handleLaborState(LaborStatePayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             com.bannerbound.core.client.ClientLaborState.replace(payload);
-            // Refresh the Town Hall Labor tab if it's open (rebuilds only when the job list changed).
             if (Minecraft.getInstance().screen instanceof com.bannerbound.core.client.TownHallScreen townHall) {
                 townHall.onLaborStateSynced();
             }
@@ -166,15 +179,6 @@ public final class ClientPayloadHandler {
             Minecraft mc = Minecraft.getInstance();
             SettlementColor color = SettlementColor.byIndex(payload.colorOrdinal());
             Era era = Era.fromOrdinalOrDefault(payload.eraOrdinal());
-            // Per-era Town Hall skins. Antiquity + Renaissance have reskins; other eras keep
-            // the original flat TownHallScreen until their skins are built.
-            // Selection-window priority: while a political decision is mid-flight, the
-            // campfire click routes the player to the relevant sub-screen instead of the
-            // regular menu. Two windows in priority order:
-            //   1. Choose-Government vote — code-of-laws prompt fired, no government yet.
-            //   2. Chief election — Chiefdom declared, no chief elected yet.
-            // Both are short-lived; the regular town-hall menu reopens automatically the
-            // tick the decision resolves.
             if (payload.governmentChoiceWindowOpen()) {
                 mc.setScreen(new com.bannerbound.core.client.ChooseGovernmentScreen(
                     null,
@@ -192,18 +196,7 @@ public final class ClientPayloadHandler {
                     payload.playerChiefNomination()));
                 return;
             }
-            // Every era uses the default TownHallScreen. The old per-era reskins
-            // (AncientTownHallScreen, RenaissanceTownHallScreen) are no longer dispatched;
-            // AncientTownHallScreen remains in the codebase, the Renaissance one was removed
-            // (slated for a fresh design when Renaissance work begins).
-            // Chiefdom-with-non-Chief = read-only-ish menu. The Disband + Expand buttons get
-            // greyed out; Research / Citizens / Tablet stay clickable (non-chiefs can browse
-            // and, for Research, send suggestions). Council always passes false.
             boolean isChief = payload.playerIsChief();
-            // Cache the chief / regent state so child screens opened from the town hall
-            // (Research, Culture) can decide whether to route clicks as suggestions instead
-            // of start-research packets. Regent counts as "has chief authority" for routine
-            // actions — Step 15 grants them research starts without the suggestion detour.
             boolean isRegent = payload.playerIsRegent();
             com.bannerbound.core.client.ClientPopulationState.setChiefState(
                 payload.governmentOrdinal(), isChief || isRegent);
@@ -329,8 +322,6 @@ public final class ClientPayloadHandler {
     public static void handlePolicyStateSync(PolicyStateSyncPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             com.bannerbound.core.client.ClientPolicyState.replace(payload);
-            // Live-refresh an open town hall so the Policies-tab buttons (Agree/Disagree, Confirm)
-            // and suggestion badges reflect the new state immediately, not on next interaction.
             if (Minecraft.getInstance().screen
                     instanceof com.bannerbound.core.client.TownHallScreen townHall) {
                 townHall.onPolicyStateSynced();
@@ -341,7 +332,6 @@ public final class ClientPayloadHandler {
     public static void handlePaletteStateSync(PaletteStateSyncPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             com.bannerbound.core.client.ClientPaletteState.replace(payload);
-            // Live-refresh an open town hall so the Palettes tab reflects the new state immediately.
             if (Minecraft.getInstance().screen
                     instanceof com.bannerbound.core.client.TownHallScreen townHall) {
                 townHall.onPaletteStateSynced();
@@ -354,9 +344,7 @@ public final class ClientPayloadHandler {
             Minecraft mc = Minecraft.getInstance();
             net.minecraft.client.gui.screens.Screen s = mc.screen;
             if (s == null) return;
-            // Match any Bannerbound settlement-related screen. Listed explicitly (not
-            // package-scan) so an unrelated future screen in the same package doesn't get
-            // collateral-closed by a stray disband packet.
+            // Explicit list (not package-scan) so an unrelated future screen isn't collateral-closed.
             boolean isSettlementScreen =
                 s instanceof com.bannerbound.core.client.TownHallScreen
                 || s instanceof com.bannerbound.core.client.AncientTownHallScreen
@@ -380,8 +368,6 @@ public final class ClientPayloadHandler {
     public static void handleOpenBannerEditor(OpenBannerEditorPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             Minecraft mc = Minecraft.getInstance();
-            // A save round-trips through here as a refresh; don't re-open (and reset) the
-            // editor the player is already looking at.
             if (mc.screen instanceof com.bannerbound.core.client.BannerEditorScreen editor) {
                 editor.applyServerState(payload);
             } else {
@@ -396,8 +382,7 @@ public final class ClientPayloadHandler {
             if (mc.gui == null) {
                 return;
             }
-            // The mixin on ChatComponent implements ProximityChatSink — push the line at the
-            // distance-derived alpha so distant chatter renders faintly.
+            // mc.gui.getChat() is mixin'd to implement ProximityChatSink; alpha fades distant chatter.
             ((com.bannerbound.core.client.ProximityChatSink) mc.gui.getChat())
                 .bannerbound$addProximityMessage(payload.message(), payload.alpha());
         });
@@ -406,8 +391,6 @@ public final class ClientPayloadHandler {
     public static void handleCloseSettleScreen(CloseSettleScreenPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             Minecraft mc = Minecraft.getInstance();
-            // Only dismiss the founding screen — leave every other screen (incl. town halls of
-            // already-established settlements) untouched, since this is broadcast server-wide.
             if (mc.screen instanceof com.bannerbound.core.client.SettleScreen) {
                 mc.setScreen(null);
             }
@@ -456,7 +439,6 @@ public final class ClientPayloadHandler {
     public static void handleWorkstationList(WorkstationListPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             Minecraft mc = Minecraft.getInstance();
-            // The citizen UUID we need to send back is the live entity's UUID; resolve it via id.
             net.minecraft.world.entity.Entity entity = mc.level == null ? null
                 : mc.level.getEntity(payload.citizenEntityId());
             if (entity == null) return;
@@ -477,8 +459,6 @@ public final class ClientPayloadHandler {
     public static void handleOpenHouseStatus(OpenHouseStatusPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             Minecraft mc = Minecraft.getInstance();
-            // Refresh in place if it's already showing (e.g. after an inline resident unassign)
-            // so the residents list keeps its scroll position instead of jumping back to the top.
             if (mc.screen instanceof com.bannerbound.core.client.HouseStatusScreen existing) {
                 existing.refresh(payload);
             } else {
@@ -487,8 +467,6 @@ public final class ClientPayloadHandler {
         });
     }
 
-    /** Job-tab state: pushed right after the citizen screen opens and on each live poll. Applied to
-     *  the open {@link com.bannerbound.core.client.CitizenScreen} if it's the matching citizen. */
     public static void handleCitizenJobState(CitizenJobStatePayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             Minecraft mc = Minecraft.getInstance();
@@ -498,8 +476,6 @@ public final class ClientPayloadHandler {
         });
     }
 
-    /** Enter the in-world drop-location edit mode (closes the menu screen, starts the wireframe +
-     *  action-bar prompt). */
     public static void handleOpenDropLocationEdit(OpenDropLocationEditPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             Minecraft mc = Minecraft.getInstance();
@@ -515,14 +491,10 @@ public final class ClientPayloadHandler {
         });
     }
 
-    /** Server marked the drop-off (or the citizen is gone) — leave edit mode (stop the wireframe). */
     public static void handleEndDropLocationEdit(EndDropLocationEditPayload payload, IPayloadContext context) {
         context.enqueueWork(com.bannerbound.core.client.DropLocationEditState::clear);
     }
 
-    /** Open or refresh the resident picker. Refreshes in place if it's already showing so the
-     *  player can chain assign/unassign clicks without the screen flickering closed each time —
-     *  same pattern as {@link #handleOpenExpandTerritoryScreen}. */
     public static void handleHomeCitizenList(HomeCitizenListPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             Minecraft mc = Minecraft.getInstance();
@@ -624,8 +596,6 @@ public final class ClientPayloadHandler {
         context.enqueueWork(() -> {
             Minecraft mc = Minecraft.getInstance();
             var next = new com.bannerbound.core.client.WorkshopScreen(payload);
-            // A refresh of the already-open workshop (rename / assign / min-stock ±) keeps the
-            // player's tab, scroll position and half-typed name instead of bouncing to Workers.
             if (mc.screen instanceof com.bannerbound.core.client.WorkshopScreen prev
                     && prev.showsWorkshop(payload.workshopId())) {
                 next.carryUiStateFrom(prev);
@@ -683,11 +653,6 @@ public final class ClientPayloadHandler {
     public static void handleSettlementCitizensList(SettlementCitizensListPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             Minecraft mc = Minecraft.getInstance();
-            // Every era uses the flat SettlementCitizensScreen. The old Renaissance reskin was
-            // removed pending a fresh design (see handleOpenTownHallScreen).
-            // QoL: opened from the Town Hall (its Citizens button / Suggestions [Resolve]) the
-            // town hall is still the current screen when this reply lands — keep it as the
-            // back-target. A re-push while the roster is already open carries the target over.
             net.minecraft.client.gui.screens.Screen parent = null;
             if (mc.screen instanceof com.bannerbound.core.client.TownHallScreen townHall) {
                 parent = townHall;
@@ -721,17 +686,11 @@ public final class ClientPayloadHandler {
                                                         IPayloadContext context) {
         context.enqueueWork(() -> {
             Minecraft mc = Minecraft.getInstance();
-            // If the territory screen is already open (e.g., server is pushing a fresh state
-            // after a claim), refresh in-place instead of opening a new screen on top. Keeps
-            // the camera + drag position + animation phase intact so the player doesn't get
-            // ejected after every claim.
             if (mc.screen instanceof com.bannerbound.core.client.ExpandTerritoryScreen existing) {
                 existing.refreshData(payload);
             } else {
                 com.bannerbound.core.client.ExpandTerritoryScreen screen =
                     new com.bannerbound.core.client.ExpandTerritoryScreen(payload);
-                // QoL: when opened from the Town Hall's Expand Territory button (the town hall is
-                // still the current screen when this reply lands), closing returns to it.
                 if (mc.screen instanceof com.bannerbound.core.client.TownHallScreen townHall) {
                     screen.setParent(townHall);
                 }
@@ -772,17 +731,12 @@ public final class ClientPayloadHandler {
                                               IPayloadContext context) {
         context.enqueueWork(() -> {
             Minecraft mc = Minecraft.getInstance();
-            // Already open (a save/delete pushed a fresh payload): refresh the library list
-            // in place — the working models and camera stay untouched.
             if (mc.screen instanceof com.bannerbound.core.client.WallDesignerScreen open) {
                 open.refreshLibrary(payload);
                 return;
             }
             com.bannerbound.core.client.WallDesignerScreen screen =
                 new com.bannerbound.core.client.WallDesignerScreen(payload);
-            // Back-navigation: Escape returns to the screen the designer was opened from
-            // (Town Hall walls tab or the wall preview) instead of dumping to the world
-            // ("escaping constantly resets you", playtest 2026-06-12).
             if (mc.screen instanceof com.bannerbound.core.client.TownHallScreen
                 || mc.screen instanceof com.bannerbound.core.client.WallPreviewScreen) {
                 screen.setParentScreen(mc.screen);
@@ -804,8 +758,6 @@ public final class ClientPayloadHandler {
             } else {
                 com.bannerbound.core.client.WallPreviewScreen wallScreen =
                     new com.bannerbound.core.client.WallPreviewScreen(payload);
-                // Escape exits back to the Town Hall it was opened from (same parent pattern
-                // as the expand-territory screen).
                 if (mc.screen instanceof com.bannerbound.core.client.TownHallScreen townHall) {
                     wallScreen.setParent(townHall);
                 }

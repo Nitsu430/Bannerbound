@@ -17,38 +17,38 @@ import net.neoforged.neoforge.client.event.EntityRenderersEvent;
 import net.neoforged.neoforge.client.gui.ConfigurationScreen;
 import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
 
-// This class will not load on dedicated servers. Accessing client side code from here is safe.
+/**
+ * Client-only mod entry (dist = CLIENT, so this class never loads on a dedicated server and may
+ * safely touch client-side code). Registers the NeoForge config screen extension point, the entity
+ * renderers, and the Stockpile menu screen; static methods are auto-subscribed via
+ * {@code @EventBusSubscriber}. Client setup also extends the vanilla fishing-rod "cast" item
+ * predicate so a citizen who is currently fishing renders the bent rod variant.
+ * <p>
+ * Renderer notes: CitizenRenderer uses vanilla ModelLayers.PLAYER (+ PLAYER_INNER/OUTER_ARMOR),
+ * which Mojang pre-registers, so no layer-definition registration is needed here. Barbarians and
+ * mercenaries reuse the same renderer - they are distinct logical entity types only, with the same
+ * body/model/skin as a citizen.
+ */
 @Mod(value = BannerboundCore.MODID, dist = Dist.CLIENT)
-// You can use EventBusSubscriber to automatically register all static methods in the class annotated with @SubscribeEvent
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
 public class BannerboundCoreClient {
     public BannerboundCoreClient(ModContainer container) {
-        // Allows NeoForge to create a config screen for this mod's configs.
-        // The config screen is accessed by going to the Mods screen > clicking on your mod > clicking on config.
-        // Do not forget to add translations for your config options to the en_us.json file.
         container.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
     }
 
     @SubscribeEvent
     static void onClientSetup(FMLClientSetupEvent event) {
-        // Some client setup code
         BannerboundCore.LOGGER.info("HELLO FROM CLIENT SETUP");
         BannerboundCore.LOGGER.info("MINECRAFT NAME >> {}", Minecraft.getInstance().getUser().getName());
-        // Extend the vanilla fishing-rod "cast" item predicate so a citizen who's currently
-        // fishing also renders the bent (cast) rod variant.
         event.enqueueWork(com.bannerbound.core.client.FishingRodCastOverride::register);
     }
 
     @SubscribeEvent
     static void onRegisterRenderers(EntityRenderersEvent.RegisterRenderers event) {
-        // Citizen uses vanilla ModelLayers.PLAYER (+ PLAYER_INNER/OUTER_ARMOR), which Mojang
-        // pre-registers — no layer-definition registration needed on our side.
         event.registerEntityRenderer(BannerboundCore.CITIZEN.get(), CitizenRenderer::new);
-        // Barbarians reuse the citizen renderer (same model/skin) — they're only a distinct logical type.
         event.registerEntityRenderer(BannerboundCore.BARBARIAN.get(),
             ctx -> new CitizenRenderer(ctx));
-        // Mercenaries reuse the citizen renderer too (distinct logical type, same body/skin).
         event.registerEntityRenderer(BannerboundCore.MERCENARY.get(),
             ctx -> new CitizenRenderer(ctx));
         event.registerEntityRenderer(BannerboundCore.FISHER_BOBBER.get(),

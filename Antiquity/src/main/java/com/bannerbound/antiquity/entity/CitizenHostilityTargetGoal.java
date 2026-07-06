@@ -14,7 +14,7 @@ import net.minecraft.world.entity.ai.goal.target.NearestAttackableTargetGoal;
  * to {@link PlayerHostilityTargetGoal}. A thin {@link NearestAttackableTargetGoal} subclass so it can
  * be {@code instanceof}-matched for dedup (the way the repo dedups on its own goal classes). The
  * mob's existing melee goal (wolf {@code MeleeAttackGoal}) does the actual attacking once a target is
- * set. Unlike the player goal there's no food/bone pacify path — citizens can't be relied on to hold
+ * set. Unlike the player goal there's no food/bone pacify path: citizens can't be relied on to hold
  * a calming item the way a player can.
  */
 public class CitizenHostilityTargetGoal extends NearestAttackableTargetGoal<CitizenEntity> {

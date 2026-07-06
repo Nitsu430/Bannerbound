@@ -16,13 +16,16 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * A crucible sitting on the ground (METALWORKING_PLAN.md Part 2 — overhauled): holds a charge of raw,
- * smeltable items dropped in by right-clicking. The renderer shows them inside. Breaking the block
- * returns a crucible item carrying this charge (see {@code CrucibleBlock#getDrops}); insert that into
- * a bloomery to melt it.
+ * A crucible sitting on the ground (METALWORKING_PLAN.md Part 2, overhauled): holds a charge of
+ * raw smeltable items (MetalworkingItems.isSmeltable) dropped in by right-clicking, rendered
+ * inside the bowl. CAPACITY is 8 items (~4 raw ore = a sword's worth). Items can only be added or
+ * popped back out while the charge is still solid -- once molten it is sealed. setContents adopts
+ * a placed crucible item's charge (called from the block's setPlacedBy), and breaking the block
+ * returns a crucible item carrying the charge (CrucibleBlock#getDrops); insert that into a
+ * bloomery to melt it. Contents persist via CrucibleContents.CODEC and every mutation pushes a
+ * full block-update sync to clients.
  */
 public class CrucibleBlockEntity extends BlockEntity {
-    /** How many items the crucible holds (≈ 4 raw ore = a sword's worth). */
     public static final int CAPACITY = 8;
 
     private CrucibleContents contents = CrucibleContents.EMPTY;
@@ -35,7 +38,6 @@ public class CrucibleBlockEntity extends BlockEntity {
         return contents;
     }
 
-    /** Adopt the placed item's charge (called from the block's setPlacedBy). */
     public void setContents(CrucibleContents c) {
         this.contents = c;
         sync();
@@ -45,7 +47,6 @@ public class CrucibleBlockEntity extends BlockEntity {
         return contents.charge().size() >= CAPACITY;
     }
 
-    /** Add one smeltable item to the charge; false if not smeltable, full, or already molten. */
     public boolean addItem(ItemStack stack) {
         if (contents.molten() || isFull() || !MetalworkingItems.isSmeltable(stack)) return false;
         contents = contents.withAdded(stack);
@@ -53,7 +54,6 @@ public class CrucibleBlockEntity extends BlockEntity {
         return true;
     }
 
-    /** Pop the last charged item back out — only while still solid. EMPTY if molten or empty. */
     public ItemStack removeLast() {
         if (contents.molten() || !contents.hasCharge()) return ItemStack.EMPTY;
         ItemStack popped = contents.lastItem();

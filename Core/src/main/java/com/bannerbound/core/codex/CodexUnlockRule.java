@@ -6,7 +6,13 @@ import com.bannerbound.core.api.settlement.Settlement;
 
 import net.minecraft.server.level.ServerPlayer;
 
-/** Any/all/default unlock rule for a Chronicle entry. */
+/**
+ * The unlock rule for a Chronicle entry: a Mode (NONE = always unlocked, ANY, ALL) over a list
+ * of conditions. startsUnlocked() (NONE or empty) means grant on sight; canReconcileFromState()
+ * is true only when every condition can be re-checked from current state, so CodexManager knows
+ * which entries to re-evaluate on login/reload versus which need a live event; mayMatchEvent()
+ * pre-filters the per-event unlock scan.
+ */
 public record CodexUnlockRule(Mode mode, List<CodexCondition> conditions) {
     public enum Mode {
         NONE,

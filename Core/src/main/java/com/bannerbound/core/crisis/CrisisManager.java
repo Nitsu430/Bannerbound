@@ -47,7 +47,31 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.neoforged.neoforge.network.PacketDistributor;
 
-/** Server-side scripted-crisis runtime. */
+/**
+ * Server-side runtime for data-authored "scripted crises": one active crisis per Settlement, loaded
+ * from JSON via CrisisDefinitionLoader. tickAll runs each server tick (passive triggers and objective
+ * progress re-evaluate every 20 ticks); the on* hooks (government/research/item/block events) start
+ * trigger-matched crises immediately or after a delay; handleChoice applies the player's screen
+ * decision; state/screen payloads are broadcast to members.
+ *
+ * Selection: completed and failed crises never re-fire; ties break by priority (highest first); a
+ * requires_government crisis waits for a non-anarchy government, since anarchy has no chief/council to
+ * answer it. A "in amber" (dormant - every member offline) settlement starts no new crises; dormancy
+ * is refreshed earlier in the same tick by ResearchEvents, so this code must trust that flag.
+ *
+ * Governance: chiefdom leaders alone decide, but members may ADVISE via a non-binding vote tally the
+ * chief sees; a council needs councilThreshold matching votes before a choice applies.
+ *
+ * Objective gates worth preserving: at choice time a baseline of lifetime food-produced is snapshotted
+ * so "produce N from <source>" counts only post-choice output. food_sustained measures TOTAL production
+ * as an EMA FLOW (not stored stock, not one source - no lone source reaches a full tribe's rate) against
+ * a target anchored to the population HIGH-WATER MARK, not live survivors, so a die-off cannot "solve"
+ * hunger by shrinking the mouths to feed. Choice-viability warnings mirror the real worker spot tests
+ * (the fish path is SPEAR fishing: shallow claimed shore water, no depth demand) to avoid false "no spots".
+ *
+ * PENDING_STARTS (delayed starts) and PASSIVE_TRIGGER_STREAKS (duration gating) are in-memory static
+ * maps keyed by settlement id; both must be cleared in onSettlementRemoved or they leak/misfire.
+ */
 public final class CrisisManager {
     private static final String SOURCE_TYPE = "crisis";
     private static final Map<String, Integer> PASSIVE_TRIGGER_STREAKS = new HashMap<>();
@@ -70,8 +94,6 @@ public final class CrisisManager {
                 if (passiveTick) dirty |= tickActive(server, settlement, active, now);
                 continue;
             }
-            // Frozen "in amber": no new crises start (pending or passive-trigger) while every
-            // member is offline. Dormancy is refreshed at the top of the tick (ResearchEvents).
             if (settlement.isDormant()) continue;
             dirty |= tickPendingStart(server, settlement, now);
             if (!passiveTick || settlement.activeCrisis() != null) continue;
@@ -171,8 +193,6 @@ public final class CrisisManager {
         for (CrisisDefinition def : CrisisDefinitionLoader.getAll().values()) {
             if (settlement.completedCrises().contains(def.id())) continue;
             if (settlement.failedCrises().contains(def.id())) continue;
-            // A crisis flagged requires_government waits for a tribe: an anarchy settlement (no
-            // government enacted) has no chief/council to answer it, so it must not fire yet.
             if (def.trigger().requiresGovernment()
                     && settlement.governmentType() == Settlement.Government.NONE) continue;
             if (predicate.test(def)) matches.add(def);
@@ -350,8 +370,6 @@ public final class CrisisManager {
         return true;
     }
 
-    /** Clears all crisis runtime state tied to a settlement that is being deleted, and pushes an
-     *  empty client mirror to former members so the HUD/markers don't outlive the settlement. */
     public static void onSettlementRemoved(MinecraftServer server, Settlement settlement,
                                            Iterable<UUID> formerMembers) {
         if (settlement == null) return;
@@ -366,7 +384,6 @@ public final class CrisisManager {
         }
     }
 
-    /** Clears one client's crisis HUD/marker mirror, used when they leave a settlement. */
     public static void sendEmptyStateTo(ServerPlayer player) {
         if (player != null) {
             PacketDistributor.sendToPlayer(player, CrisisStatePayload.empty());
@@ -389,8 +406,6 @@ public final class CrisisManager {
 
         if (settlement.governmentType() == Settlement.Government.CHIEFDOM
                 && !settlement.canActWeighty(player.getUUID())) {
-            // Members can't decide a chiefdom crisis, but they can ADVISE: record their preferred
-            // option as a non-binding tally the chief sees, then live-refresh open screens.
             state.vote(player.getUUID(), choiceId);
             data.setDirty();
             broadcastState(server, settlement);
@@ -419,8 +434,7 @@ public final class CrisisManager {
                                     CrisisState state, CrisisChoice choice, UUID chooserId) {
         long now = server.overworld().getGameTime();
         state.choose(choice.id(), chooserId, now);
-        // Baseline for "produce N from your <source>" objectives: count only production from here on,
-        // not whatever the settlement already produced (e.g. anarchy fishers before the crisis).
+        // snapshot at choice time so "produce N" objectives count only post-choice production.
         state.snapshotProducedBaseline(settlement.foodProducedTotals());
         updateJournal(server, settlement, def, state, false, now);
         SettlementManager.broadcastToSettlement(server, settlement,
@@ -530,8 +544,6 @@ public final class CrisisManager {
         String type = objective.type().toLowerCase(Locale.ROOT);
         return switch (type) {
             case "food_produced", "produced_food" -> {
-                // Cumulative food-stuff produced from a source SINCE the choice was made (lifetime total
-                // minus the baseline snapshotted at choice time). The real "build your food source" gate.
                 double made = settlement.foodProducedFrom(objective.source())
                     - state.producedBaselineFor(objective.source());
                 double target = objective.targetCount() > 0 ? objective.targetCount() : objective.targetRate();
@@ -539,17 +551,7 @@ public final class CrisisManager {
                     String.format(Locale.ROOT, "%.0f/%.0f produced", Math.max(0.0, made), target));
             }
             case "food_sustained", "income_covers_consumption" -> {
-                // Production-flow gate against a FULL TRIBE's appetite. Two deliberate choices:
-                //  • TOTAL production, not one source — totalFoodProductionRate() sums every source's EMA of
-                //    food actually HARVESTED/CULLED/CAUGHT into storage (addFoodProduced), because no single
-                //    source can reach a 7-mouth rate alone (2 spear fishers ≈ 0.27 vs 0.875 food/s). It is a
-                //    FLOW (not the stored-food stock), so a one-time stockpile + a trickle still never passes;
-                //    it takes real, ongoing fishing/farming/herding. Being an EMA, it only reaches the bar
-                //    after steady production (a permanent catch, not a lucky day).
-                //  • FULL-TRIBE target — targetFoodConsumptionPerSecond() anchors to the settlement's
-                //    population high-water mark, NOT the live survivor count, so a die-off can't trivially
-                //    "solve" hunger by shrinking the mouths to feed: a tribe that grew to 7 then starved to 1
-                //    must still rebuild food for a full tribe, not for its lone survivor.
+                // full-tribe target = population high-water mark, not live survivors -> a die-off can't shrink the demand.
                 double consumption = settlement.targetFoodConsumptionPerSecond();
                 double sourceRate = settlement.totalFoodProductionRate();
                 boolean covering = consumption > 0.0 && sourceRate + 1.0e-6 >= consumption;
@@ -600,8 +602,6 @@ public final class CrisisManager {
                 yield new ObjectiveStatus(pop >= target, pop + "/" + target);
             }
             case "housed_all", "homeless_count", "house_citizens" -> {
-                // Complete when no more than targetCount citizens remain homeless (default 0 →
-                // everyone has a home). The "answer the housing demand" gate.
                 int allowed = Math.max(0, objective.targetCount());
                 int homeless = settlement.homelessCitizens().size();
                 yield new ObjectiveStatus(homeless <= allowed,
@@ -683,8 +683,6 @@ public final class CrisisManager {
         int online = onlineMembers(server, settlement);
         boolean councilVote = settlement.governmentType() == Settlement.Government.COUNCIL;
         boolean canChoose = state.awaitingChoice() && settlement.canActWeighty(player.getUUID());
-        // In a chiefdom, members who can't decide may still ADVISE the chief (their pick is
-        // tallied as a non-binding vote the chief sees before choosing).
         boolean canAdvise = state.awaitingChoice() && !canChoose
             && settlement.governmentType() == Settlement.Government.CHIEFDOM
             && settlement.members().contains(player.getUUID());
@@ -696,8 +694,6 @@ public final class CrisisManager {
         );
     }
 
-    /** Re-pushes the crisis screen payload to every member WITHOUT force-opening it — only clients
-     *  that already have the crisis screen open refresh in place. Used for live vote/advice tallies. */
     public static void refreshOpenScreens(MinecraftServer server, Settlement settlement) {
         for (UUID memberId : settlement.members()) {
             ServerPlayer member = server.getPlayerList().getPlayer(memberId);
@@ -831,11 +827,6 @@ public final class CrisisManager {
     }
 
     private static boolean hasFishableWater(ServerLevel level, Settlement settlement) {
-        // The early "feed through fish" path is SPEAR fishing — shore-only and effective in shallow
-        // water — not the deep-cast rod fishery. So mirror the spear fisher's own spot test
-        // (SpearFisherWorkGoal): claimed surface water with a small open pool around it and ANY
-        // walkable shore beside it to stand on. No minimum depth and no wide-open-water demand, so a
-        // shallow mesa pond reads as fishable instead of falsely warning "no spots".
         return scanClaimSurfaces(level, settlement, pos ->
             isSurfaceWater(level, pos)
                 && openWaterCount(level, pos, 1) >= 3
@@ -865,10 +856,6 @@ public final class CrisisManager {
         return false;
     }
 
-    /** A walkable tile beside {@code water} to stand on and fish. Matches the spear fisher, which
-     *  stands on any reachable shore (claimed or not) as long as the water itself is claimed — and the
-     *  scan only ever reaches claimed water, so the stand needn't be re-checked for the claim. This is
-     *  the part that fixes the false "no spots" when a claimed lake's banks spill into a neighbour chunk. */
     private static boolean hasWalkableShore(ServerLevel level, BlockPos water) {
         for (Direction dir : Direction.Plane.HORIZONTAL) {
             BlockPos shore = water.relative(dir);

@@ -14,7 +14,7 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * Vanilla leash-knot renderer, except it hides the knot when it sits on a rope-fence post that's
  * showing its "with rope" model. A fiber rope tied to a raft drives that post's {@code ROPED}
- * blockstate (see RaftEntity#reconcileRopedPost), and the post's coil stands in for the knot — so a
+ * blockstate (see RaftEntity#reconcileRopedPost), and the post's coil stands in for the knot - so a
  * second little leash knot on top would be visual clutter. Lead ties don't set {@code ROPED}, so
  * their knot still shows; ordinary fences (no such blockstate) always render the knot normally.
  */
@@ -29,7 +29,7 @@ public class RopedPostKnotRenderer extends LeashKnotRenderer {
                        MultiBufferSource buffer, int packedLight) {
         BlockState state = knot.level().getBlockState(knot.getPos());
         if (state.getBlock() instanceof RopeFencePostBlock && state.getValue(RopeFencePostBlock.ROPED)) {
-            return; // the post's with-rope model already shows the tie
+            return;
         }
         super.render(knot, yaw, partialTick, poseStack, buffer, packedLight);
     }

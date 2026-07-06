@@ -19,42 +19,42 @@ import net.minecraft.world.level.block.CropBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * The crop-field analogue of {@link BoulderLayout}: the per-type block/seed mappings that make a
- * {@code WHEAT}/{@code CARROT}/{@code BEETROOT}/{@code POTATO} chunk a farmland resource, plus the
- * world-gen "dress" that scatters its visible <b>wild farmland patches</b>.
+ * The crop-field analogue of BoulderLayout: the per-type block/seed mappings that make a
+ * WHEAT/CARROT/BEETROOT/POTATO chunk a farmland resource, plus the world-gen "dress" that scatters
+ * its visible wild farmland patches. cropBlock/seedFor give a chunk its vanilla crop and the seed a
+ * farmer plants; cropChunkFor/bonusSeedIds run the reverse -- a field earns a 2x harvest bonus on
+ * seeds whose crop chunk it overlaps (drives the green hint in the seed UI).
  *
  * <p>Unlike the ore boulder, nothing here needs a deterministic per-position layout: the farmer
- * just tends whatever crops stand on the farmland, and the forager picks whatever is ripe — neither
- * has to re-derive exact tile coordinates. So {@link #dressWildField} is a one-shot deterministic
- * scatter (seeded by chunk), not a recoverable {@code spots()}-style layout.
+ * just tends whatever crops stand on the farmland and the forager picks whatever is ripe -- neither
+ * re-derives exact tile coordinates. So dressWildField is a one-shot deterministic scatter (seeded
+ * by chunk), not a recoverable spots()-style layout, placing dry farmland only on natural
+ * grass/dirt with a crop at random maturity above.
  *
- * <p>All edits stay within ±5 of the chunk's +8 centre, so the ±6 ring probe in
- * {@link ChunkResources#typeAt} never reads them and the chunk's type stays a pure function of the
- * natural terrain (same guarantee the boulder relies on).
+ * <p>All edits stay within +/-5 of the chunk's +8 centre, so the +/-6 ring probe in
+ * ChunkResources.typeAt never reads them and the chunk's type stays a pure function of the natural
+ * terrain (the same guarantee the boulder relies on).
  */
 @ApiStatus.Internal
 public final class CropChunks {
     private CropChunks() {
     }
 
-    /** True for the four crop-field chunk types. */
     public static boolean isCropChunk(ChunkResource type) {
         return type == ChunkResource.WHEAT || type == ChunkResource.CARROT
             || type == ChunkResource.BEETROOT || type == ChunkResource.POTATO;
     }
 
-    /** The {@link CropBlock} grown in a crop chunk (vanilla crops; handles beetroot's own age range). */
     public static CropBlock cropBlock(ChunkResource type) {
         return (CropBlock) switch (type) {
             case WHEAT -> Blocks.WHEAT;
             case CARROT -> Blocks.CARROTS;
             case BEETROOT -> Blocks.BEETROOTS;
             case POTATO -> Blocks.POTATOES;
-            default -> Blocks.WHEAT;   // never reached (callers gate on isCropChunk)
+            default -> Blocks.WHEAT;
         };
     }
 
-    /** The seed item a farmer plants on this crop chunk (and the seed the bonus matches on). */
     public static Item seedFor(ChunkResource type) {
         return switch (type) {
             case WHEAT -> Items.WHEAT_SEEDS;
@@ -65,7 +65,6 @@ public final class CropChunks {
         };
     }
 
-    /** The crop chunk type that {@code seed} gets a yield bonus on, or {@link ChunkResource#NONE}. */
     public static ChunkResource cropChunkFor(Item seed) {
         if (seed == Items.WHEAT_SEEDS) return ChunkResource.WHEAT;
         if (seed == Items.CARROT) return ChunkResource.CARROT;
@@ -74,8 +73,6 @@ public final class CropChunks {
         return ChunkResource.NONE;
     }
 
-    /** Seed item ids whose crop chunk overlaps the box [{@code minX..maxX} × {@code minZ..maxZ}] — the
-     *  seeds a field in that box earns the 2× harvest bonus on. Drives the green hint in the seed UI. */
     public static List<String> bonusSeedIds(ServerLevel sl, int minX, int minZ, int maxX, int maxZ) {
         List<String> out = new ArrayList<>();
         EnumSet<ChunkResource> seen = EnumSet.noneOf(ChunkResource.class);
@@ -91,18 +88,11 @@ public final class CropChunks {
         return out;
     }
 
-    /** Number of wild-farmland tiles scattered per crop chunk. */
     private static final int MIN_TILES = 10;
-    private static final int TILE_SPREAD = 7;   // MIN_TILES .. MIN_TILES+TILE_SPREAD-1
-    /** Horizontal half-extent of the scatter (±5) — strictly inside the ring probe. */
+    private static final int TILE_SPREAD = 7;
+    // Must stay inside ChunkResources.typeAt's +/-6 ring probe or dressing flips the chunk's own type reading.
     private static final int FIELD_RADIUS = 5;
 
-    /**
-     * Scatters the chunk's wild farmland patches: dry {@link Blocks#FARMLAND} on grass/dirt with a
-     * crop at a <b>random maturity</b> above. Deterministic per chunk (stable on regen), like the
-     * livestock decorate and ore boulder. Only replaces natural ground ({@link BoulderLayout#canCarve}),
-     * never player/structure blocks.
-     */
     public static void dressWildField(ServerLevel sl, ChunkPos cp) {
         ChunkResource type = ChunkResources.typeAt(sl, cp);
         if (!isCropChunk(type)) return;
@@ -118,10 +108,9 @@ public final class CropChunks {
             int y = BoulderLayout.groundSurfaceY(sl, x, z);
             BlockPos ground = new BlockPos(x, y, z);
             BlockState gs = sl.getBlockState(ground);
-            // Farmland only on tillable natural ground, with room for the crop above.
             if (!(gs.is(Blocks.GRASS_BLOCK) || gs.is(Blocks.DIRT) || gs.is(Blocks.COARSE_DIRT))) continue;
             if (!sl.getBlockState(ground.above()).isAir()) continue;
-            sl.setBlock(ground, Blocks.FARMLAND.defaultBlockState(), 3);   // dry (moisture 0 by default)
+            sl.setBlock(ground, Blocks.FARMLAND.defaultBlockState(), 3);
             sl.setBlock(ground.above(), crop.getStateForAge(rand.nextInt(maxAge + 1)), 3);
         }
     }

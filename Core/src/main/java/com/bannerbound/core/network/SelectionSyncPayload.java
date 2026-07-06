@@ -16,12 +16,19 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client. Full snapshot of every active {@link BlockSelection} on the server. Pushed on
- * player join, on registry mutation (register / unregister / complete), and on settlement
- * disband cleanup. The client mirror feeds the rod-held selection renderer.
+ * S->C full snapshot of every active {@link BlockSelection} on the server. Pushed on player join,
+ * on registry mutation (register / unregister / complete), and on settlement disband cleanup. The
+ * client mirror feeds the rod-held selection renderer. Snapshot rather than delta because the
+ * registry is small (settlements x few-jobs) and rebuilding the client cache is cheap; this trades
+ * bandwidth to kill a class of "drift" bugs.
  * <p>
- * Snapshot rather than delta because the registry is small (settlements × few-jobs) and the
- * client-side cache rebuild is cheap. Cuts a class of "drift" bugs at the cost of bandwidth.
+ * Each selection is hand-serialized, so encode and decode must stay in lockstep field-for-field.
+ * Every field is always written (both ends are the same mod version, so there is no optional/legacy
+ * framing). Notable fields: creatorId + seedItemId are the farmer-pipeline extras; the kind
+ * discriminator plus homeId/homePos drive the client renderer's split between the
+ * workstation-outline and home-tint paths AND the per-bound-rod visibility filter (the client
+ * matches its rod's BOUND_HOME_POS against homePos); assignedCitizenId pins the selection to one
+ * citizen, with NO_CITIZEN meaning it is open to all workers of the type.
  */
 @ApiStatus.Internal
 public record SelectionSyncPayload(List<BlockSelection> selections) implements CustomPacketPayload {
@@ -41,21 +48,15 @@ public record SelectionSyncPayload(List<BlockSelection> selections) implements C
                 buf.writeInt(s.b().getX()); buf.writeInt(s.b().getY()); buf.writeInt(s.b().getZ());
                 ByteBufCodecs.STRING_UTF8.encode(buf, s.workstationType());
                 buf.writeBoolean(s.completed());
-                // Farmer pipeline extras: creatorId + seed item id.
                 buf.writeLong(s.creatorId().getMostSignificantBits());
                 buf.writeLong(s.creatorId().getLeastSignificantBits());
                 ByteBufCodecs.STRING_UTF8.encode(buf, s.seedItemId());
-                // Kind discriminator + home id + home pos — drive the client renderer's split
-                // between workstation-outline and home-tint paths AND the per-bound-rod
-                // visibility filter (the client matches its rod's BOUND_HOME_POS against the
-                // selection's homePos). Always written; both ends are matched mod versions.
                 ByteBufCodecs.VAR_INT.encode(buf, s.kind().ordinal());
                 buf.writeLong(s.homeId().getMostSignificantBits());
                 buf.writeLong(s.homeId().getLeastSignificantBits());
                 buf.writeInt(s.homePos().getX());
                 buf.writeInt(s.homePos().getY());
                 buf.writeInt(s.homePos().getZ());
-                // Per-citizen binding (NO_CITIZEN = open to all workers of the type).
                 buf.writeLong(s.assignedCitizenId().getMostSignificantBits());
                 buf.writeLong(s.assignedCitizenId().getLeastSignificantBits());
             }

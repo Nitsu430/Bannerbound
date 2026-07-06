@@ -14,6 +14,12 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RegisterShadersEvent;
 
+/**
+ * Registers and holds the "crisis_reveal" post-effect shader (POSITION_TEX). Registered on the
+ * MOD event bus, CLIENT dist -- RegisterShadersEvent only fires there. If the shader fails to load
+ * the held instance is left null and crisisReveal() returns null, letting callers fall back to a
+ * simple reveal rather than crashing the render pipeline.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 @EventBusSubscriber(modid = BannerboundCore.MODID, bus = EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)

@@ -23,11 +23,11 @@ import net.minecraft.world.entity.player.Inventory;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The Stockpile terminal screen — Tom's-style but simpler. The top region is a virtual, scrollable,
+ * The Stockpile terminal screen - Tom's-style but simpler. The top region is a virtual, scrollable,
  * searchable grid summed across all enclosed containers ({@link StockpileMenu#contents()}, synced
  * each tick): left-click a cell withdraws a stack, right-click/shift withdraws half. The bottom is
  * the player's real inventory; shift-click a player item to deposit it into the stockpile. A first
- * pass — the layout/colours are programmatic and may want polishing in-game.
+ * pass - the layout/colours are programmatic and may want polishing in-game.
  */
 public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
     private static final int COLS = 9;
@@ -41,8 +41,6 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
     private static final int SHADOW = 0xFF555555;
     private static final int DARK = 0xFF373737;
 
-    /** Identity trim only — the beige bevel stays (slots need that contrast); the settlement's
-     *  banner colors are worn as a border over the same rect. Resolved once at construction. */
     private final java.util.List<Integer> identityAccents;
 
     private EditBox search;
@@ -61,7 +59,6 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
         super(menu, inv, title);
         this.identityAccents = GuiPalette.localIdentityAccents();
         this.imageWidth = 176;
-        // Tall enough for a worker-access toggle row between the storage grid and player inventory.
         this.imageHeight = 250;
         this.inventoryLabelY = this.imageHeight - 94;
     }
@@ -76,14 +73,10 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
         search.setHint(Component.translatable("bannerbound.stockpile.search"));
         search.setResponder(s -> { scrollRow = 0; refilter(); });
         addRenderableWidget(search);
-        // Detect button (top-right) — re-scans the enclosure and flashes its wireframe behind the GUI.
         addRenderableWidget(PolishButton.polished(
                 Component.translatable("bannerbound.stockpile.detect"),
                 b -> PacketDistributor.sendToServer(new StockpileDetectPayload(menu.menuId())))
             .bounds(leftPos + imageWidth - 50, topPos + 4, 46, 14).build());
-        // Worker-access toggles (row between the storage grid and player inventory): whether
-        // autonomous workers may deposit into / take from this stockpile. Loose baskets are always
-        // open; this governs the managed stockpile only.
         int toggleY = topPos + GRID_Y + VISIBLE_ROWS * CELL + 2;
         depositToggle = addRenderableWidget(PolishButton.polished(
                 toggleLabel(StockpileTogglePayload.TOGGLE_DEPOSIT, menu.allowDeposit()),
@@ -95,8 +88,6 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
                 b -> PacketDistributor.sendToServer(new StockpileTogglePayload(
                     menu.menuId(), StockpileTogglePayload.TOGGLE_TAKE, !menu.allowTake())))
             .bounds(leftPos + GRID_X + 82, toggleY, 78, 14).build());
-        // Trade toggle on its own full-width row below — whether this stockpile's contents are
-        // offered in settlement-to-settlement trade (visible to partners; deals draw/deliver here).
         tradeToggle = addRenderableWidget(PolishButton.polished(
                 toggleLabel(StockpileTogglePayload.TOGGLE_TRADE, menu.showTrade()),
                 b -> PacketDistributor.sendToServer(new StockpileTogglePayload(
@@ -105,7 +96,6 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
         refilter();
     }
 
-    /** Button label for a terminal toggle, e.g. "Deposit: On" / "Take: Off" / "Trade: Off". */
     private static Component toggleLabel(int toggle, boolean on) {
         String key = switch (toggle) {
             case StockpileTogglePayload.TOGGLE_DEPOSIT -> "bannerbound.stockpile.workers_deposit";
@@ -135,9 +125,8 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
     @Override
     protected void containerTick() {
         super.containerTick();
-        refilter(); // contents sync each tick — keep the filtered view fresh
+        refilter();
         if (scrollRow > maxScroll()) scrollRow = maxScroll();
-        // Reflect the server-synced toggle state on the buttons (also confirms a click landed).
         if (depositToggle != null) depositToggle.setMessage(
             toggleLabel(StockpileTogglePayload.TOGGLE_DEPOSIT, menu.allowDeposit()));
         if (takeToggle != null) takeToggle.setMessage(
@@ -150,17 +139,14 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
     protected void renderBg(GuiGraphics g, float partialTick, int mouseX, int mouseY) {
         int x = leftPos;
         int y = topPos;
-        // Raised beige window (vanilla-style bevel: light top/left, dark bottom/right).
         g.fill(x, y, x + imageWidth, y + imageHeight, PANEL);
         g.fill(x, y, x + imageWidth, y + 1, LIGHT);
         g.fill(x, y, x + 1, y + imageHeight, LIGHT);
         g.fill(x + imageWidth - 1, y, x + imageWidth, y + imageHeight, SHADOW);
         g.fill(x, y + imageHeight - 1, x + imageWidth, y + imageHeight, SHADOW);
-        // Identity trim: the settlement's banner colors over the exact bevel rect (no-op unclaimed).
         if (!identityAccents.isEmpty()) {
             PolishedScreen.drawIdentityBorder(g, x, y, imageWidth, imageHeight, identityAccents);
         }
-        // Recessed slots — pass each slot's 16x16 content origin.
         for (int row = 0; row < VISIBLE_ROWS; row++) {
             for (int col = 0; col < COLS; col++) {
                 slot(g, x + GRID_X + col * CELL + 1, y + GRID_Y + row * CELL + 1);
@@ -174,7 +160,6 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
         for (int col = 0; col < COLS; col++) {
             slot(g, x + StockpileMenu.PLAYER_INV_X + col * CELL, y + StockpileMenu.PLAYER_INV_Y + 58);
         }
-        // Virtual items + counts; track which cell the mouse is over for the tooltip.
         hovered = null;
         for (int row = 0; row < VISIBLE_ROWS; row++) {
             for (int col = 0; col < COLS; col++) {
@@ -190,8 +175,6 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
                 }
             }
         }
-        // Vanilla-style cursor highlight over the hovered storage cell (real slots get theirs from
-        // super; the virtual cells aren't slots, so draw it ourselves — translucent white on top).
         if (insideGrid(mouseX, mouseY)) {
             int hc = (int) ((mouseX - (x + GRID_X)) / CELL);
             int hr = (int) ((mouseY - (y + GRID_Y)) / CELL);
@@ -204,16 +187,15 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
     }
 
     private static String abbreviate(int n) {
-        if (n >= 1_000_000) return (n / 1_000_000) + "m"; // ≤ ~14k realistically (8-container cap),
-        if (n >= 1_000) return (n / 1_000) + "k";         // so this keeps the label to ≤ 3 chars and
-        return Integer.toString(n);                        // never overflows the slot, like vanilla.
+        if (n >= 1_000_000) return (n / 1_000_000) + "m";
+        if (n >= 1_000) return (n / 1_000) + "k";
+        return Integer.toString(n);
     }
 
-    /** Draws a vanilla-style recessed slot whose 16x16 content sits at {@code (cx, cy)}. */
     private void slot(GuiGraphics g, int cx, int cy) {
-        g.fill(cx - 1, cy - 1, cx + 17, cy + 17, DARK);   // dark frame → top + left edge
-        g.fill(cx, cy, cx + 17, cy + 17, LIGHT);          // light → bottom + right edge
-        g.fill(cx, cy, cx + 16, cy + 16, SLOT_BG);        // inner
+        g.fill(cx - 1, cy - 1, cx + 17, cy + 17, DARK);
+        g.fill(cx, cy, cx + 17, cy + 17, LIGHT);
+        g.fill(cx, cy, cx + 16, cy + 16, SLOT_BG);
     }
 
     @Override
@@ -228,8 +210,6 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
     protected void renderLabels(GuiGraphics g, int mouseX, int mouseY) {
         g.drawString(this.font, this.title, GRID_X, titleLabelY, 0x404040, false);
         g.drawString(this.font, this.playerInventoryTitle, StockpileMenu.PLAYER_INV_X, this.inventoryLabelY, 0x404040, false);
-        // Status header gets the whole top line: "Storage N/8   <status>" with the status word coloured
-        // green (ready) / red, so even long statuses ("Too many containers") have room to breathe.
         Stockpile.Status st = Stockpile.Status.fromOrdinalOrDefault(menu.statusOrdinal());
         String count = "Storage " + menu.containerCount() + "/" + Stockpile.MAX_CONTAINERS;
         g.drawString(this.font, count, GRID_X, 19, 0x404040, false);
@@ -237,15 +217,11 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
         int color = st == Stockpile.Status.VALID ? 0x2E7D32 : 0xB00020;
         g.drawString(this.font, Component.translatable("bannerbound.stockpile.short." + st.name().toLowerCase()),
             sx, 19, color, false);
-        // Capacity readout — how many slots are still empty across the enclosed containers. Lives on the
-        // player-inventory label line (right-aligned, opposite "Inventory") rather than the crowded top
-        // line: it sits next to where you deposit from, and never collides with the status word.
         if (menu.totalSlots() > 0) {
             int free = menu.freeSlots();
             Component cap = free == 0
                 ? Component.translatable("bannerbound.stockpile.slots_full")
                 : Component.translatable("bannerbound.stockpile.slots_free", free);
-            // Green when roomy, amber under ~15% free, red when full.
             int capColor = free == 0 ? 0xB00020
                 : (free * 100 < menu.totalSlots() * 15 ? 0xC08000 : 0x2E7D32);
             int cx = imageWidth - 8 - this.font.width(cap);
@@ -261,12 +237,10 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
         if (insideGrid(mx, my) && (button == 0 || button == 1)) {
-            // Holding an item → clicking the grid deposits it (left = all, right = one).
             if (!menu.getCarried().isEmpty()) {
                 PacketDistributor.sendToServer(new StockpileDepositPayload(menu.menuId(), button == 1));
                 return true;
             }
-            // Empty cursor → clicking a filled cell withdraws (left = stack, right/shift = half).
             int col = (int) ((mx - (leftPos + GRID_X)) / CELL);
             int row = (int) ((my - (topPos + GRID_Y)) / CELL);
             int idx = (scrollRow + row) * COLS + col;
@@ -275,7 +249,7 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
                 PacketDistributor.sendToServer(
                     new StockpileWithdrawPayload(menu.menuId(), filtered.get(idx).display(), half));
             }
-            return true; // consume all grid clicks (the cells aren't real slots)
+            return true;
         }
         return super.mouseClicked(mx, my, button);
     }
@@ -291,7 +265,7 @@ public class StockpileScreen extends AbstractContainerScreen<StockpileMenu> {
 
     @Override
     public boolean keyPressed(int key, int scan, int mods) {
-        // Let the search box capture typing (incl. the inventory key) while focused; ESC still closes.
+        // key 256 = GLFW ESC: let it fall through to close; the focused search box eats all other keys (incl. the inventory key).
         if (key != 256 && search.isFocused()) {
             search.keyPressed(key, scan, mods);
             return true;

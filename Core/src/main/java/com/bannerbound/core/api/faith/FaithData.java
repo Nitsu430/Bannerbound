@@ -16,13 +16,15 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.saveddata.SavedData;
 
 /**
- * Server-level faith storage (FAITH_PLAN.md Part 2) — the cross-faction layer, attached
+ * Server-level faith storage (FAITH_PLAN.md Part 2) - the cross-faction layer, attached
  * to the overworld like {@link com.bannerbound.core.api.settlement.SettlementData}.
  * <p>
- * Holds the SKY SEED (the one random long every client's sky is generated from — see
+ * Holds the SKY SEED (the one random long every client's sky is generated from - see
  * {@link com.bannerbound.core.celestial.SkyField}; deliberately NOT the world seed) and
  * the registry of all founded {@link Faith}s. Settlements reference faiths by UUID
  * ({@code Settlement.faithId}); membership lives on BOTH sides for cheap lookup either way.
+ * The sky seed is rolled once on first {@code skySeed()} access and persisted forever; an
+ * empty faith is dropped ({@code removeIfEmpty}) since the gods fade when no one believes.
  */
 public class FaithData extends SavedData {
     private static final String DATA_NAME = "bannerbound_faiths";
@@ -33,8 +35,6 @@ public class FaithData extends SavedData {
 
     public FaithData() {
     }
-
-    // ── Faith registry ───────────────────────────────────────────────────────────
 
     public Faith createFaith(String name, FaithPath path, UUID founderSettlement) {
         Faith faith = new Faith(UUID.randomUUID(), name, path, founderSettlement);
@@ -53,7 +53,6 @@ public class FaithData extends SavedData {
         return Collections.unmodifiableCollection(faiths.values());
     }
 
-    /** Removes a faith with no members left (the gods fade when no one believes). */
     public void removeIfEmpty(UUID faithId) {
         Faith faith = faiths.get(faithId);
         if (faith != null && faith.memberSettlements().isEmpty()) {
@@ -70,7 +69,6 @@ public class FaithData extends SavedData {
         return new Factory<>(FaithData::new, FaithData::load);
     }
 
-    /** The world's sky seed, rolled once on first access and persisted forever after. */
     public long skySeed() {
         if (!hasSkySeed) {
             skySeed = new java.util.Random().nextLong();
@@ -80,7 +78,6 @@ public class FaithData extends SavedData {
         return skySeed;
     }
 
-    /** Debug only (/bannerbound sky reroll): a renamed planet must never survive this. */
     public long rerollSkySeed() {
         skySeed = new java.util.Random().nextLong();
         hasSkySeed = true;

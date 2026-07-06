@@ -11,9 +11,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: open the workshop menu by id (the Job tab's "Open" button beside a crafter's
- * bound workshop — no rod needed). The server resolves + re-validates and replies with the usual
- * {@code OpenWorkshopMenuPayload}.
+ * Client -> server: open the workshop menu by id (the Job tab's "Open" button beside a crafter's
+ * bound workshop - no rod needed). The server resolves and re-validates, then replies with the
+ * usual OpenWorkshopMenuPayload.
  */
 @ApiStatus.Internal
 public record OpenWorkshopMenuRequestPayload(String workshopId) implements CustomPacketPayload {

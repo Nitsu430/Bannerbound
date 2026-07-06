@@ -23,25 +23,36 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * A purely-cosmetic ground decal for the hunting tracker — either a blood splat (a bleeding wound)
- * or a footprint track (a walking animal). It lies flat on the ground and fades after a lifetime.
- * Each decal remembers the {@code heading} the animal was moving; right-clicking it stamps a
- * {@code revealTick}, and the renderer draws a translucent white "search cone" pointing that way
- * (Hunter: Call of the Wild–style), fading client-side over ~3s and re-armed by another click.
+ * Purely-cosmetic ground decal for the hunting tracker: either a blood splat (KIND_BLOOD, a bleeding
+ * wound) or a footprint track (KIND_TRACK, a walking animal). It lies flat on the ground and the
+ * renderer fades it out over a config lifetime keyed off {@code tickCount} (which also drives the
+ * cone fade, so {@code super.tick()} must keep running). Decals never float: spawn clamps down to the
+ * top surface of the nearest solid block within MAX_DROP of the column and silently spawns nothing if
+ * there is none. No collision or gravity, not attackable (left-click must not destroy it), never
+ * saved to disk ({@code shouldBeSaved()} is false; the save-data overrides exist only because Entity
+ * requires them) - but pickable so the crosshair can right-click it.
  *
- * <p>Decals never float: on spawn they clamp down to the top of the nearest solid block in their
- * column (and simply don't spawn if there's none within range). Not saved to disk; no collision or
- * gravity, but pickable so the cursor can right-click it.
+ * <p>Right-clicking "examines" the decal: the server stamps DATA_REVEAL_TICK and the renderer draws a
+ * translucent white search cone along DATA_DIRECTION (Hunter: Call of the Wild style), fading
+ * client-side over ~3s and re-armed by another click. Examining a footprint additionally highlights
+ * every other active track from the same animal in cyan - gated by the {@code hunting_instincts}
+ * research and triggered purely client-side since it is cosmetic. All tracks from one animal share
+ * DATA_GROUP_ID = the source animal's entity id (stable for its lifetime, unique among loaded
+ * entities; -1 = unknown), which is how the tracker groups them.
+ *
+ * <p>Heading: mob yaw twitches and spins on sharp turns, so instead of trusting the animal's facing,
+ * for the first HEADING_SETTLE_TICKS (~2s) the server keeps re-pointing DATA_DIRECTION along the
+ * animal's net displacement away from the decal (once it has travelled MIN_TRACK_DIST), then locks
+ * it. {@code sourceAnimalId} is server-side only and is dropped once settled or when the animal
+ * despawns, keeping the last good heading.
  */
 public class GroundDecalEntity extends Entity {
     public static final int KIND_BLOOD = 0;
     public static final int KIND_TRACK = 1;
-    private static final int MAX_DROP = 16; // how far down we'll search for a surface
-    private static final int HEADING_SETTLE_TICKS = 40; // watch ~2s of travel for the true bearing
-    private static final double MIN_TRACK_DIST = 0.5;   // animal must move this far to read a direction
+    private static final int MAX_DROP = 16;
+    private static final int HEADING_SETTLE_TICKS = 40;
+    private static final double MIN_TRACK_DIST = 0.5;
 
-    // Server-side only: the animal we read the heading from for the first couple of seconds. Mob
-    // facing twitches/spins, so we instead track its net displacement away from the decal.
     private int sourceAnimalId = -1;
 
     private static final EntityDataAccessor<Integer> DATA_KIND =
@@ -54,8 +65,6 @@ public class GroundDecalEntity extends Entity {
         SynchedEntityData.defineId(GroundDecalEntity.class, EntityDataSerializers.FLOAT);
     private static final EntityDataAccessor<Integer> DATA_REVEAL_TICK =
         SynchedEntityData.defineId(GroundDecalEntity.class, EntityDataSerializers.INT);
-    // Grouping key so the tracker can tell which tracks belong to the same animal: the source
-    // animal's entity id (stable for its lifetime; unique among loaded entities). -1 = unknown.
     private static final EntityDataAccessor<Integer> DATA_GROUP_ID =
         SynchedEntityData.defineId(GroundDecalEntity.class, EntityDataSerializers.INT);
 
@@ -65,12 +74,10 @@ public class GroundDecalEntity extends Entity {
         this.setNoGravity(true);
     }
 
-    /** Blood splat from {@code source}: {@code variant} seeds the texture pick + rotation. */
     public static void spawnBlood(Level level, double x, double y, double z, int variant, Entity source) {
         spawn(level, x, y, z, source, KIND_BLOOD, variant, "");
     }
 
-    /** Footprint track for {@code species} (e.g. "cow") left by {@code source}. */
     public static void spawnTrack(Level level, double x, double y, double z, String species, Entity source) {
         spawn(level, x, y, z, source, KIND_TRACK, 0, species);
     }
@@ -79,20 +86,19 @@ public class GroundDecalEntity extends Entity {
                               int kind, int variant, String species) {
         OptionalDouble surface = groundSurface(level, x, y, z);
         if (surface.isEmpty()) {
-            return; // no ground beneath — don't leave a floating decal
+            return;
         }
         GroundDecalEntity decal = new GroundDecalEntity(BannerboundAntiquity.GROUND_DECAL.get(), level);
         decal.setPos(x, surface.getAsDouble() + 0.02, z);
         decal.entityData.set(DATA_KIND, kind);
         decal.entityData.set(DATA_VARIANT, variant);
         decal.entityData.set(DATA_SPECIES, species);
-        decal.entityData.set(DATA_DIRECTION, source.getYRot()); // provisional; refined from travel over ~2s
-        decal.entityData.set(DATA_GROUP_ID, source.getId()); // groups every track left by this one animal
+        decal.entityData.set(DATA_DIRECTION, source.getYRot());
+        decal.entityData.set(DATA_GROUP_ID, source.getId());
         decal.sourceAnimalId = source.getId();
         level.addFreshEntity(decal);
     }
 
-    /** Top surface Y of the nearest solid block at or below {@code startY} in this column. */
     private static OptionalDouble groundSurface(Level level, double x, double startY, double z) {
         BlockPos.MutableBlockPos pos =
             new BlockPos.MutableBlockPos(Mth.floor(x), Mth.floor(startY), Mth.floor(z));
@@ -119,17 +125,14 @@ public class GroundDecalEntity extends Entity {
         return this.entityData.get(DATA_SPECIES);
     }
 
-    /** Yaw (degrees) the animal was heading when it left this decal. */
     public float getHeading() {
         return this.entityData.get(DATA_DIRECTION);
     }
 
-    /** Entity tick at which the cone was last revealed, or -1 if never. Drives the client-side fade. */
     public int getRevealTick() {
         return this.entityData.get(DATA_REVEAL_TICK);
     }
 
-    /** Id of the animal that left this decal — shared by every track from the same animal, -1 if unknown. */
     public int getGroupId() {
         return this.entityData.get(DATA_GROUP_ID);
     }
@@ -144,18 +147,13 @@ public class GroundDecalEntity extends Entity {
         builder.define(DATA_GROUP_ID, -1);
     }
 
-    /**
-     * Right-click to "examine the track": (re)arm the direction cone at full opacity. On the client,
-     * examining a footprint also lights up every other active track left by the same animal in cyan —
-     * but only once the player's settlement has researched {@code hunting_instincts} (the highlight is a
-     * purely-cosmetic client effect, so it's triggered and gated client-side).
-     */
     @Override
     public InteractionResult interact(Player player, InteractionHand hand) {
         if (!this.level().isClientSide) {
             this.entityData.set(DATA_REVEAL_TICK, this.tickCount);
         } else if (getKind() == KIND_TRACK
                 && net.neoforged.fml.loading.FMLEnvironment.dist.isClient()) {
+            // Dist guard: FootprintHighlight is client-only; keep it fully-qualified and behind isClient() or a dedicated server can crash on classload.
             com.bannerbound.antiquity.client.FootprintHighlight.examine(this);
         }
         return InteractionResult.sidedSuccess(this.level().isClientSide);
@@ -163,7 +161,7 @@ public class GroundDecalEntity extends Entity {
 
     @Override
     public void tick() {
-        super.tick(); // advances tickCount (renderer uses it for both the lifetime fade and cone fade)
+        super.tick();
         if (this.level() instanceof ServerLevel server) {
             settleHeading(server);
             int lifetime = getKind() == KIND_TRACK
@@ -175,44 +173,39 @@ public class GroundDecalEntity extends Entity {
         }
     }
 
-    /**
-     * For the first {@link #HEADING_SETTLE_TICKS} ticks, point the heading along the animal's net
-     * displacement away from the decal (where it actually went), not its twitchy instantaneous
-     * facing — then lock it. Mob yaw spins on sharp turns; the decal→animal vector doesn't.
-     */
     private void settleHeading(ServerLevel server) {
         if (sourceAnimalId < 0) {
             return;
         }
         Entity source = server.getEntity(sourceAnimalId);
         if (source == null || !source.isAlive()) {
-            sourceAnimalId = -1; // lost it — keep the last good heading
+            sourceAnimalId = -1;
             return;
         }
         double dx = source.getX() - this.getX();
         double dz = source.getZ() - this.getZ();
         if (dx * dx + dz * dz >= MIN_TRACK_DIST * MIN_TRACK_DIST) {
-            // Yaw whose forward vector (-sin, cos) points from the decal toward the animal.
+            // MC yaw forward vector is (-sin, cos), so decal->animal yaw = atan2(-dx, dz).
             this.entityData.set(DATA_DIRECTION, (float) (Mth.atan2(-dx, dz) * (180.0 / Math.PI)));
         }
         if (this.tickCount >= HEADING_SETTLE_TICKS) {
-            sourceAnimalId = -1; // settle: lock the heading in
+            sourceAnimalId = -1;
         }
     }
 
     @Override
     public boolean isPickable() {
-        return !this.isRemoved(); // targetable by the cursor so it can be right-clicked
+        return !this.isRemoved();
     }
 
     @Override
     public boolean isAttackable() {
-        return false; // left-click shouldn't destroy a decal
+        return false;
     }
 
     @Override
     public boolean shouldBeSaved() {
-        return false; // ephemeral decoration — gone on reload
+        return false;
     }
 
     @Override

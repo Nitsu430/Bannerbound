@@ -18,8 +18,12 @@ import net.neoforged.neoforge.event.tick.EntityTickEvent;
  * (solid) deck and not riding it, carry them along by the raft's per-tick movement. The raft's deck
  * is already a hard surface (see {@link RaftPart}), but a moving entity doesn't drag a passenger the
  * way a moving block does, so without this you'd slide off the back the moment it moves. Done on the
- * client for the local player only — the player is client-authoritative, so nudging their position
+ * client for the local player only - the player is client-authoritative, so nudging their position
  * here syncs cleanly with no rubber-banding (mobs / remote players just stand, which is fine).
+ * The carry applies translation AND rotation: the player's offset from the raft's old centre is
+ * spun by the yaw delta, then re-anchored to the new centre, so a turning raft can't swing out from
+ * under them (translation-only would). The view is deliberately not rotated - players keep aiming
+ * where they look, which is what you want when throwing spears off a turning raft.
  */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID, value = Dist.CLIENT)
 public final class RaftWalkEvents {
@@ -35,11 +39,6 @@ public final class RaftWalkEvents {
         if (raft == null) {
             return;
         }
-        // Carry the player by the raft's per-tick motion AND rotation: take the player's offset from
-        // the raft's OLD centre, spin it by the raft's yaw change, and re-anchor it to the NEW centre.
-        // That keeps them planted on the deck whether it slides or turns (translation-only would let a
-        // turning raft swing out from under them). We don't rotate their view — they keep aiming where
-        // they look, which is what you want for throwing spears off a turning raft.
         double dyaw = net.minecraft.util.Mth.wrapDegrees(raft.getYRot() - raft.yRotO);
         double dx = raft.getX() - raft.xo;
         double dz = raft.getZ() - raft.zo;
@@ -51,7 +50,6 @@ public final class RaftWalkEvents {
         player.setPos(raft.getX() + rel.x, player.getY(), raft.getZ() + rel.z);
     }
 
-    /** The raft whose deck the player is standing on, or null. */
     private static RaftEntity raftUnderfoot(LocalPlayer player) {
         AABB box = player.getBoundingBox();
         AABB probe = new AABB(box.minX, box.minY - 0.5, box.minZ, box.maxX, box.minY + 0.05, box.maxZ);

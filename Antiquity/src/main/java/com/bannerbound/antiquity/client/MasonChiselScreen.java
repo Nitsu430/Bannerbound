@@ -22,18 +22,21 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Transparent input layer for the mason's-bench chisel-strike minigame. A marker sweeps left-right
- * across a bar; left-click (or space) when it's inside the centre strike zone to land a strike —
- * miss and nothing happens (non-skill: building materials carry no quality, so a miss just costs a
- * beat, never the batch). N strikes finish the queued batch. The world and bench animation stay
- * visible behind a compact HUD.
+ * Transparent input layer for the mason's-bench chisel-strike minigame: the world and the bench
+ * animation stay visible behind a compact HUD at the bottom of the screen. A marker sweeps
+ * left-right across a bar as a triangle wave (SWEEP_MS = full sweep period); left-click, space, or
+ * enter while it is inside the centre strike zone (ZONE_HALF of the bar to each side of centre)
+ * lands a strike, and strikesNeeded landed strikes finish the queued batch. Misses are deliberately
+ * non-punishing - building materials carry no quality tier, so a miss only costs a beat, never the
+ * batch. Opened by OpenMasonChiselPayload; init() seeds MasonChiselState (which
+ * MasonsBenchRenderer reads to animate the bench, with the worker yaw snapped toward the camera)
+ * and every hit advances it. The server is told MasonryActionPayload.COMPLETE on the final strike,
+ * or CANCEL if the screen closes early; removed() always clears MasonChiselState.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class MasonChiselScreen extends Screen {
-    /** Full left→right→left sweep period (ms). */
     private static final double SWEEP_MS = 1100.0;
-    /** Half-width of the centre strike zone as a fraction of the bar (0–1, from centre). */
     private static final double ZONE_HALF = 0.13;
 
     private final BlockPos pos;
@@ -69,10 +72,9 @@ public class MasonChiselScreen extends Screen {
         openedAt = System.currentTimeMillis();
     }
 
-    /** Marker position 0–1 across the bar, derived from the sweep clock (triangle wave). */
     private double markerPos() {
-        double phase = ((System.currentTimeMillis() - openedAt) % (long) SWEEP_MS) / SWEEP_MS; // 0–1
-        return phase < 0.5 ? phase * 2.0 : (1.0 - phase) * 2.0; // 0→1→0
+        double phase = ((System.currentTimeMillis() - openedAt) % (long) SWEEP_MS) / SWEEP_MS;
+        return phase < 0.5 ? phase * 2.0 : (1.0 - phase) * 2.0;
     }
 
     @Override
@@ -86,7 +88,7 @@ public class MasonChiselScreen extends Screen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        if (!completed && (keyCode == 32 /* space */ || keyCode == 257 /* enter */)) {
+        if (!completed && (keyCode == 32 || keyCode == 257)) { // GLFW keycodes: 32=space, 257=enter
             attemptStrike();
             return true;
         }
@@ -174,13 +176,11 @@ public class MasonChiselScreen extends Screen {
         g.fill(barLeft + barW, barTop, barLeft + barW + 1, barBottom + 1, 0xFFD0C8B0);
         g.fill(barLeft, barTop, barLeft + barW, barBottom, COL_TRACK);
 
-        // The centre strike zone.
         boolean hitFlash = System.currentTimeMillis() < hitFlashUntil;
         int zoneLeft = barLeft + (int) ((0.5 - ZONE_HALF) * barW);
         int zoneRight = barLeft + (int) ((0.5 + ZONE_HALF) * barW);
         g.fill(zoneLeft, barTop, zoneRight, barBottom, hitFlash ? COL_ZONE_HIT : COL_ZONE);
 
-        // The sweeping marker.
         int markerX = barLeft + (int) (markerPos() * barW);
         boolean missFlash = System.currentTimeMillis() < missFlashUntil;
         g.fill(markerX - 2, barTop - 3, markerX + 2, barBottom + 3, missFlash ? 0xFFE06040 : COL_MARKER);

@@ -14,7 +14,7 @@ import net.minecraft.world.item.DyeColor;
 
 /**
  * The decoration on ONE face of ONE block: an optional plaster coat (the lower layer) and an optional
- * trim ({@link TrimShape} + {@link DyeColor}, the upper layer). Plaster and trim are independent — a
+ * trim ({@link TrimShape} + {@link DyeColor}, the upper layer). Plaster and trim are independent: a
  * face may have either, both, or (when {@link #isEmpty()}) neither, in which case it is not stored.
  */
 public record FaceDeco(boolean plaster, Optional<TrimShape> trim, DyeColor trimColor) {

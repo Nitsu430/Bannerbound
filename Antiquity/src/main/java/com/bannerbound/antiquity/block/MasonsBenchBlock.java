@@ -36,23 +36,22 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * Mason's Bench — a 2-block multiblock and the stone analogue of the Carpenter's Table: a MASTER cell
- * (holds the block entity, renders the full model that extends one block toward {@code FACING}) plus
- * a SECONDARY cell at {@code master + FACING} (renders nothing, forwards interactions). The item
- * places both halves bed-style; interactions on either half resolve to the master's block entity.
- * <ul>
- *   <li>Right-click with base stone (cobblestone, stone, sandstone…) → place one on the budget pile
- *       (sneak = the whole stack).</li>
- *   <li>Right-click with the stone chisel → start the chisel-strike minigame (needs a queued list).</li>
- *   <li>Right-click empty-handed → take the last (uncommitted) stone back; sneak = undo last queue.</li>
- * </ul>
+ * Mason's Bench - a 2-block multiblock and the stone analogue of the Carpenter's Table. The MASTER
+ * cell (MAIN=true) holds the block entity and renders the full model extending one block toward
+ * FACING (away from the placer); the SECONDARY cell at master+FACING renders nothing and forwards
+ * every interaction to the master via masterPos. The item places both halves bed-style, and breaking
+ * either half tears down the other, with drops and minigame-session cleanup running once from the
+ * master side. Interactions (all refused with a "station busy" message while WorkBlockLocks says an
+ * NPC holds the station): right-click with base stone (cobblestone, stone, sandstone, ...) puts one
+ * on the budget pile (sneak = the whole stack); right-click with the stone chisel starts the
+ * chisel-strike minigame (needs a queued build list); right-click empty-handed takes the last
+ * uncommitted stone back (sneak = undo the last queued entry). SHAPE is the full 14px-tall bench
+ * body shared by both cells - rotation-invariant, so no per-facing shape; it extends down with legs,
+ * unlike the carpenter's floating-slab shape.
  */
 public class MasonsBenchBlock extends HorizontalDirectionalBlock implements EntityBlock {
     public static final MapCodec<MasonsBenchBlock> CODEC = simpleCodec(MasonsBenchBlock::new);
-    /** True for the master cell (model + block entity); false for the secondary cell. */
     public static final BooleanProperty MAIN = BooleanProperty.create("main");
-    /** The full bench body (floor → top face at 14px), shared by both cells — rotation-invariant, so
-     *  no per-facing shape. Extends down (legs + body), unlike the carpenter's floating-slab shape. */
     public static final VoxelShape SHAPE = Block.box(0.0, 0.0, 0.0, 16.0, 14.0, 16.0);
 
     public MasonsBenchBlock(BlockBehaviour.Properties properties) {
@@ -72,7 +71,7 @@ public class MasonsBenchBlock extends HorizontalDirectionalBlock implements Enti
 
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
-        Direction facing = context.getHorizontalDirection(); // the bench extends away from the player
+        Direction facing = context.getHorizontalDirection();
         BlockPos secondary = context.getClickedPos().relative(facing);
         if (!context.getLevel().getBlockState(secondary).canBeReplaced(context)) return null;
         return defaultBlockState().setValue(FACING, facing).setValue(MAIN, true);
@@ -92,14 +91,10 @@ public class MasonsBenchBlock extends HorizontalDirectionalBlock implements Enti
         return SHAPE;
     }
 
-    /**
-     * The collision box isn't a full block, so vanilla classifies the cell as walkable and NPCs path
-     * onto it and snag. Mark it un-pathfindable so every pathfinder routes around it.
-     */
     @Override
     protected boolean isPathfindable(BlockState state,
                                      net.minecraft.world.level.pathfinder.PathComputationType type) {
-        return false;
+        return false; // non-full-cube shape: must stay un-pathfindable or NPCs path onto the bench and snag
     }
 
     @Override
@@ -115,7 +110,6 @@ public class MasonsBenchBlock extends HorizontalDirectionalBlock implements Enti
             MasonsBenchBlockEntity.tick(lvl, pos, st, (MasonsBenchBlockEntity) be);
     }
 
-    /** The master cell of this multiblock (the cell that holds the block entity). */
     private static BlockPos masterPos(BlockPos pos, BlockState state) {
         return state.getValue(MAIN) ? pos : pos.relative(state.getValue(FACING).getOpposite());
     }
@@ -214,14 +208,13 @@ public class MasonsBenchBlock extends HorizontalDirectionalBlock implements Enti
         if (!oldState.is(newState.getBlock())) {
             Direction facing = oldState.getValue(FACING);
             boolean main = oldState.getValue(MAIN);
-            // Drops + session cleanup happen once, from the master side.
             if (main) {
                 if (level.getBlockEntity(pos) instanceof MasonsBenchBlockEntity be) {
                     be.dropStones(level);
                 }
                 Masonry.abortSessionAt(pos);
             }
-            // Tear down the other half (terminates: by the time this fires this cell is already air).
+            // Removing the other half recurses into onRemove; terminates because this cell is already air.
             BlockPos other = main ? pos.relative(facing) : pos.relative(facing.getOpposite());
             if (level.getBlockState(other).is(this)) {
                 level.removeBlock(other, false);

@@ -9,8 +9,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: forget a god (PantheonScreen). Governance-gated like creation; the constellation
- * fades and its stars return to the faith's claimable pool. No devotion refund.
+ * C->S: forget a god (PantheonScreen). Governance-gated like creation; the constellation fades and
+ * its stars return to the faith's claimable pool. No devotion refund.
  */
 public record ForgetConstellationPayload(String constellationId) implements CustomPacketPayload {
 

@@ -22,9 +22,22 @@ import net.neoforged.neoforge.event.entity.player.AttackEntityEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 
 /**
- * Stops players from using, placing, equipping, attacking-with, or otherwise interacting with items
- * their bannerbound doesn't know yet. Effective known set = global starting items + this
- * settlement's research unlocks. No settlement = starting items only.
+ * Server-side gate that stops players using, placing, equipping, attacking-with, or otherwise
+ * interacting with items their settlement doesn't know yet. Effective known set = global starting
+ * items + the settlement's research unlocks; no settlement = starting items only (mirrors the
+ * server-side SettlementDropFilter). Creative players are exempt -- item gating is a survival-only
+ * constraint -- and isUnknownForPlayer is the single choke point that exempts every block path at
+ * once.
+ *
+ * Two knowledge checks: the item-id form (isUnknownForPlayer) for slot sweeps, and a stack-aware
+ * form (isUnknown) that also catches component-gated items -- e.g. a modular arrow whose material
+ * the civ hasn't researched -- which the bare item-id check would wrongly pass. All interaction
+ * handlers run at EventPriority.HIGHEST so the deny lands before anything else consumes the click.
+ *
+ * unequipUnknownGear sweeps armor + offhand and removes anything now unknown (e.g. iron armor after
+ * the player disbands their iron-researching settlement), pushing it to the main inventory or
+ * dropping it if full; call it after any change that shrinks the known set (disband, leave, age
+ * regression).
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -33,14 +46,9 @@ public final class UnknownItemBlocker {
     }
 
     public static boolean isUnknownForPlayer(ServerPlayer player, Item item) {
-        // Creative players understand everything — item gating is a survival-only constraint.
-        // This funnels every server-side block (interactions, attacks, equip, crafting gate),
-        // so the single check here exempts all of them at once.
         if (player.isCreative()) {
             return false;
         }
-        // Single source of truth: the player's settlement knows starting items + its research
-        // unlocks; no settlement → starting items only. Mirrors the server-side drop filter.
         Settlement settlement =
             com.bannerbound.core.api.research.SettlementDropFilter.settlementOf(player);
         return !com.bannerbound.core.api.research.ItemKnowledge.isKnown(settlement, item);
@@ -50,20 +58,11 @@ public final class UnknownItemBlocker {
         if (stack.isEmpty() || player.isCreative()) {
             return false;
         }
-        // Stack-aware: catches component-gated items (e.g. a modular arrow whose material the civ
-        // hasn't researched) that the bare item-id check would wrongly pass.
         Settlement settlement =
             com.bannerbound.core.api.research.SettlementDropFilter.settlementOf(player);
         return !com.bannerbound.core.api.research.ItemKnowledge.isKnown(settlement, stack);
     }
 
-    /**
-     * Sweeps the player's armor + offhand slots: any item that's currently unknown to them
-     * (e.g. iron armor after they disbanded their iron-researching settlement) is removed,
-     * pushed into the main inventory, or dropped if the inventory is full.
-     * Call this after any change that shrinks the player's effective known set
-     * (disband, leave, age regression, etc.).
-     */
     public static void unequipUnknownGear(ServerPlayer player) {
         boolean anyRemoved = false;
         for (EquipmentSlot slot : EquipmentSlot.values()) {

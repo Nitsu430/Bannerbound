@@ -12,8 +12,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C on login + datapack reload: the full faith-tree definitions (third tree —
- * FAITH_PLAN Part 2.5). Mirror of {@link CultureTreeSyncPayload}.
+ * S->C on login + datapack reload: the full faith-tree definitions (third tree -- FAITH_PLAN Part
+ * 2.5). Mirror of CultureTreeSyncPayload.
  */
 public record FaithTreeSyncPayload(List<ResearchDefinition> definitions) implements CustomPacketPayload {
 

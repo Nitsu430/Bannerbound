@@ -17,10 +17,10 @@ import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.items.IItemHandler;
 
 /**
- * Structure rules for Antiquity masonry workshops — the stone analogue of
- * {@link CarpentryWorkshopRules}. A masonry workshop needs a {@code stone_chisel} kept in its
- * storage to operate (the chisel moved off the worker onto the workshop, like the carpenter's saw);
- * the Crafter who staffs it stays tool-free.
+ * Structure rules for Antiquity masonry workshops - the stone analogue of
+ * {@link CarpentryWorkshopRules}. Validation requires a stone_chisel somewhere in the workshop's
+ * reachable storage (the chisel lives on the workshop, like the carpenter's saw, so the Crafter
+ * who staffs it stays tool-free); otherwise the workshop reports MISSING_TOOL.
  */
 @ApiStatus.Internal
 public final class MasonryWorkshopRules {
@@ -35,7 +35,6 @@ public final class MasonryWorkshopRules {
         return hasChiselInStorage(sl, reachableStorage) ? null : Workshop.Status.MISSING_TOOL;
     }
 
-    /** True when any reachable storage block holds a stone chisel. */
     private static boolean hasChiselInStorage(ServerLevel sl, List<BlockPos> reachableStorage) {
         for (BlockPos p : reachableStorage) {
             IItemHandler h = sl.getCapability(Capabilities.ItemHandler.BLOCK, p, null);

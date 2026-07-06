@@ -12,6 +12,8 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/** S->C: the player's known/starting item id list, mirrored wholesale into the client store that
+ *  feeds the JEI knowledge gate (unknown items stay masked as "?"). */
 @ApiStatus.Internal
 public record StartingItemsSyncPayload(List<String> itemIds) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<StartingItemsSyncPayload> TYPE =

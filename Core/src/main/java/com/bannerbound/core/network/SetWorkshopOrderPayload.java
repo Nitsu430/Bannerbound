@@ -11,15 +11,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: set an output's queued-order count from the workshop menu's Stock tab.
- * {@code value ≤ 0} clears the row. Orders are an explicit FIFO queue: they OUTRANK and ignore
- * the min-stock governor (a queued item crafts regardless of configured minimums), and each
- * finished craft of the item decrements the order by one. An order whose ingredients are missing
- * is skipped, never blocking the rest of the queue.
- *
- * @param workshopId the workshop's id (UUID string)
- * @param itemId     the output item's registry id
- * @param value      the new queued count (≤0 = cancel the order)
+ * Client -> server: set an output's queued-order count from the workshop menu's Stock tab. value
+ * <= 0 clears the row. Orders are an explicit FIFO queue: they OUTRANK and ignore the min-stock
+ * governor (a queued item crafts regardless of configured minimums), and each finished craft of the
+ * item decrements the order by one. An order whose ingredients are missing is skipped, never
+ * blocking the rest of the queue.
  */
 @ApiStatus.Internal
 public record SetWorkshopOrderPayload(String workshopId, int itemId, int value)

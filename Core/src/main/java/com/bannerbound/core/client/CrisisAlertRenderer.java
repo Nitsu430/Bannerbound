@@ -18,7 +18,13 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
-/** Floating town-hall alert for unanswered crises. */
+/**
+ * Renders the floating alert icon above the town hall while a crisis awaits the player's choice.
+ * CLIENT-dist EventBusSubscriber hooked to RenderLevelStageEvent; it only draws during the
+ * AFTER_TRANSLUCENT_BLOCKS stage (translucent text-type quad) and culls beyond MAX_DIST_SQ. The icon
+ * is a camera-facing billboard drawn as a double-sided quad (both winding orders) at full brightness
+ * so it reads regardless of view angle or world light.
+ */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
 public final class CrisisAlertRenderer {

@@ -20,12 +20,14 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * The modular arrow's inventory/hand/ground icon — composited at render time from the three part
+ * The modular arrow's inventory/hand/ground icon -- composited at render time from the three part
  * sprites named in the {@link ArrowPart} registry, so a modpack-added material's icon appears with NO
- * model files (the layered combo-model approach can't be extended by a datapack). Each layer is a flat
- * textured quad drawn from the item atlas (vanilla already stitches every {@code textures/item/**}); the
- * arrow.json model is {@code builtin/entity} so this renderer runs in every display context with the
- * standard item transforms. Mirrors the flat-quad technique of {@link CompositeArrowRenderer}.
+ * model files (the layered combo-model approach can't be extended by a datapack). Each layer is a
+ * flat double-sided quad textured from the item atlas (vanilla already stitches everything under
+ * {@code textures/item}); layers stack back -> shaft -> tip, each lifted 0.001 in z so overlapping
+ * pixels never fight. The arrow.json model is {@code builtin/entity} so this renderer runs in every
+ * display context with the standard item transforms. Mirrors the flat-quad technique of
+ * {@link CompositeArrowRenderer}.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -40,14 +42,12 @@ public class CompositeArrowItemRenderer extends BlockEntityWithoutLevelRenderer 
     public void renderByItem(ItemStack stack, ItemDisplayContext ctx, PoseStack pose,
                              MultiBufferSource buffer, int light, int overlay) {
         VertexConsumer vc = buffer.getBuffer(RenderType.entityCutout(TextureAtlas.LOCATION_BLOCKS));
-        // Back (lowest) → shaft → tip, each lifted a hair in z so overlapping pixels never fight.
         float z = 0.5F;
         z = layer(vc, pose, light, overlay, ArrowParts.itemTexture(ArrowPart.SLOT_BACK, ArrowParts.back(stack)), z);
         z = layer(vc, pose, light, overlay, ArrowParts.itemTexture(ArrowPart.SLOT_SHAFT, ArrowParts.shaft(stack)), z);
         layer(vc, pose, light, overlay, ArrowParts.itemTexture(ArrowPart.SLOT_TIP, ArrowParts.tip(stack)), z);
     }
 
-    /** Draws one part layer as a double-sided flat quad filling the icon, returns the next z to use. */
     private static float layer(VertexConsumer vc, PoseStack pose, int light, int overlay,
                                ResourceLocation texture, float z) {
         if (texture == null) return z;
@@ -55,12 +55,11 @@ public class CompositeArrowItemRenderer extends BlockEntityWithoutLevelRenderer 
             .getAtlas(TextureAtlas.LOCATION_BLOCKS).getSprite(texture);
         float u0 = sprite.getU0(), u1 = sprite.getU1(), v0 = sprite.getV0(), v1 = sprite.getV1();
         PoseStack.Pose p = pose.last();
-        // Front face (+Z, toward the GUI camera).
         v(vc, p, 0, 0, z, u0, v1, 0, 0, 1, light, overlay);
         v(vc, p, 1, 0, z, u1, v1, 0, 0, 1, light, overlay);
         v(vc, p, 1, 1, z, u1, v0, 0, 0, 1, light, overlay);
         v(vc, p, 0, 1, z, u0, v0, 0, 0, 1, light, overlay);
-        // Back face (−Z), reversed winding, so the icon is visible from behind in third person.
+        // Back face (-Z) with reversed winding: keeps the icon visible from behind in third person.
         v(vc, p, 0, 0, z, u0, v1, 0, 0, -1, light, overlay);
         v(vc, p, 0, 1, z, u0, v0, 0, 0, -1, light, overlay);
         v(vc, p, 1, 1, z, u1, v0, 0, 0, -1, light, overlay);

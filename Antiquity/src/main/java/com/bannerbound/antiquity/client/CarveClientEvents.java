@@ -43,16 +43,35 @@ import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 
-/** Client-side event handlers for the carve ghost preview (merged from CarveClientEvents, CarveClientEvents, CarveClientEvents). */
+/**
+ * Client-only ghost preview for block carving (see {@link Carves}): while the local player aims at a
+ * carveable block with the right tool, the target cell(s) are hidden CLIENT-side by setting them to air
+ * (the supported relight/remesh path, the same idiom as RopeTies' coil preview) and the carve result is
+ * drawn in their place as a low-alpha silhouette with a pulsing green voxel-shape outline. The server is
+ * never told the block changed; the authoritative carve still runs server-side.
+ *
+ * <p>Commit: the hidden block cannot be ray-picked, so the use-key press is intercepted here (mirroring
+ * GhostRecipeClientEvents), the vanilla use is cancelled so nothing behind the hidden block reacts, and
+ * the anchor is sent via {@link CarveCommitPayload}; the server replays and validates the carve, so a
+ * rejected commit simply leaves the world unchanged (no stuck ghost).
+ *
+ * <p>Acquisition uses hysteresis: hiding the looked-at block makes the crosshair ray pass through it, so
+ * re-resolving against that air every tick would drop and re-acquire the preview forever (flicker). Once
+ * anchored, the preview is KEPT while the player still looks through the anchor cell (within KEEP_REACH)
+ * with the same tool, and dropped when the aim leaves the cell, the tool changes, or a blanked cell stops
+ * being air (carve committed / world changed). DEBOUNCE_TICKS of steady aim are required before blanking
+ * so a crosshair sweep across many carveable blocks does not churn section re-meshes. Locked
+ * (unknown-item) carves are never previewed to avoid spoilers, and cells under the player's feet are
+ * never blanked.
+ *
+ * <p>Rendering routes renderSingleBlock through a buffer source that forces the translucent block sheet
+ * and scales vertex alpha to GHOST_ALPHA (~39%, matching the workstation ghost silhouettes) -- the same
+ * trick as Core's WallGhostRenderer. Block-entity-rendered blocks (e.g. the bloomery) show their base
+ * model only, since renderSingleBlock never invokes their BlockEntityRenderer.
+ */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID, value = Dist.CLIENT)
 public final class CarveClientEvents {
 
-    /*
-     * Routes the use-key to the carve commit while a ghost preview is showing. The previewed block is
-     * hidden (air) on the client, so vanilla's pick can't hit it; this intercepts the press and forwards
-     * the anchor to the server (which replays the carve there), cancelling the vanilla use so nothing
-     * behind the hidden block reacts. Mirrors {@link GhostRecipeClientEvents}.
-     */
     private CarveClientEvents() {}
 
     @SubscribeEvent
@@ -62,7 +81,7 @@ public final class CarveClientEvents {
         }
         BlockPos anchor = CarveClientEvents.activeAnchor();
         if (anchor == null) {
-            return; // no preview → leave the normal interaction (and the normal carve handlers) alone
+            return;
         }
         event.setCanceled(true);
         event.setSwingHand(true);
@@ -70,16 +89,6 @@ public final class CarveClientEvents {
         CarveClientEvents.clearForCommit();
     }
 
-    /*
-     * Draws the carve preview: the result blockstate(s) chosen by {@link CarveClientEvents}, as
-     * low-alpha silhouettes at the (client-hidden) source positions. Same alpha-wrapping vertex-consumer
-     * trick as Core's {@code WallGhostRenderer} — {@code renderSingleBlock} through a buffer source that
-     * reroutes every render type to the translucent block sheet and scales vertex alpha.
-     *
-     * <p>Block-entity-rendered blocks (e.g. the bloomery) show their base model only here, because
-     * {@code renderSingleBlock} doesn't invoke their {@code BlockEntityRenderer}.
-     */
-    /** Ghost opacity (~39%, matching the workstation ghost recipe silhouettes). */
     private static final int GHOST_ALPHA = 100;
 
     @SubscribeEvent
@@ -102,8 +111,6 @@ public final class CarveClientEvents {
         GhostBufferSource ghostBuffer = new GhostBufferSource(buffer);
         VertexConsumer lines = buffer.getBuffer(RenderType.lines());
 
-        // Gentle pulse on the outline reads as "this gesture is ready to commit" — the same
-        // green-affordance language the workstation ghost clicks already use.
         float t = (float) mc.level.getGameTime() + event.getPartialTick().getGameTimeDeltaPartialTick(false);
         float outlineAlpha = 0.55F + 0.30F * Mth.sin(t * 0.2F);
 
@@ -116,9 +123,7 @@ public final class CarveClientEvents {
                 LightTexture.FULL_BRIGHT, OverlayTexture.NO_OVERLAY);
             pose.popPose();
 
-            // Trace the RESULT's true voxel shape as a green wireframe: sharpens the silhouette and
-            // signals the carve is valid. Cam-relative coords against the base (un-translated) pose,
-            // matching SelectionRenderer / renderLineBox usage elsewhere.
+            // Outline boxes take cam-relative coords against the base (un-translated) pose.
             double dx = p.getX() - cam.x;
             double dy = p.getY() - cam.y;
             double dz = p.getZ() - cam.z;
@@ -131,8 +136,6 @@ public final class CarveClientEvents {
         buffer.endBatch(RenderType.lines());
     }
 
-    /** The result's outline shape, falling back to a full cube if it's empty or its shape would need
-     *  a block-entity we don't have (the previewed cell is air). */
     private static VoxelShape outlineShape(Level level, BlockPos pos, BlockState state) {
         try {
             VoxelShape shape = state.getShape(level, pos);
@@ -142,7 +145,6 @@ public final class CarveClientEvents {
         }
     }
 
-    /** Reroutes every requested render type to the translucent block sheet with scaled alpha. */
     private record GhostBufferSource(MultiBufferSource delegate) implements MultiBufferSource {
         @Override
         public VertexConsumer getBuffer(RenderType type) {
@@ -150,7 +152,6 @@ public final class CarveClientEvents {
         }
     }
 
-    /** Scales every vertex's alpha to {@link #GHOST_ALPHA}/255 — the ghost-silhouette look. */
     private record GhostVertexConsumer(VertexConsumer delegate) implements VertexConsumer {
         @Override
         public VertexConsumer addVertex(float x, float y, float z) {
@@ -189,50 +190,21 @@ public final class CarveClientEvents {
         }
     }
 
-    /*
-     * Drives the in-world "what will this carve into?" ghost preview (see {@link Carves}). While the
-     * local player aims at a carveable block with the right tool, the looked-at block(s) are hidden on
-     * the CLIENT — set to air, the supported relight/remesh path, the same idiom as {@code RopeTies}'
-     * coil preview — and {@link CarveClientEvents} draws the result blockstate(s) as a translucent
-     * silhouette in their place. Looking away restores the real block(s); the carve is committed through
-     * {@link CarveClientEvents} (the hidden block can't be ray-clicked, so the use-key is intercepted and
-     * replayed server-side via {@code Carves.commit}).
-     *
-     * <p>Everything here is client-only and cosmetic: the server is never told the block is "air", and
-     * the authoritative carve still runs server-side through the normal handlers.
-     *
-     * <h4>Why the hysteresis</h4>
-     * Hiding the looked-at block means the crosshair ray now passes straight through it, so re-resolving
-     * against that air every tick would drop and re-acquire the preview forever (flicker). Once a
-     * preview is anchored we instead KEEP it while the player is still looking through the anchor cell
-     * with the same tool, and only drop it when the aim leaves the cell, the tool changes, or the cell
-     * stops being air (the carve committed / the world changed).
-     */
-    /** Ticks the same target must be aimed at before the swap commits — stops a crosshair sweep
-     *  across many carveable blocks from churning section re-meshes. */
     private static final int DEBOUNCE_TICKS = 2;
-    /** A generous reach for "still looking through the anchor cell" (blocks). */
     private static final double KEEP_REACH = 6.0;
 
-    /** Result states to draw as ghosts, at positions we've blanked to air. Read by the renderer. */
     private static Map<BlockPos, BlockState> ghosts = Map.of();
-    /** The real states we replaced with air, to restore on look-away / change. */
     private static final Map<BlockPos, BlockState> originals = new LinkedHashMap<>();
-    /** The primary block the active preview is anchored to (null = no active preview). */
     private static @Nullable BlockPos anchor;
-    /** The tool that produced the active preview — the preview drops if the player swaps away. */
     private static @Nullable Item anchorTool;
 
-    /** Debounce bookkeeping for the candidate target during acquisition. */
     private static @Nullable String pendingKey;
     private static int pendingAge;
 
-    /** Result blockstates to draw, keyed by the (client-hidden) world position. Empty when inactive. */
     public static Map<BlockPos, BlockState> ghosts() {
         return ghosts;
     }
 
-    /** The anchor of the active preview, or null — {@link CarveClientEvents} forwards this on commit. */
     public static @Nullable BlockPos activeAnchor() {
         return anchor;
     }
@@ -243,16 +215,16 @@ public final class CarveClientEvents {
         Level level = mc.level;
         LocalPlayer player = mc.player;
         if (level == null || player == null || mc.screen != null || player.isSecondaryUseActive()) {
-            clear(level); // sneaking = "place the held block", so never preview then
+            clear(level); // sneak means "place the held block" -> never preview then
             return;
         }
 
         if (anchor != null) {
             if (stillValid(player, level)) {
-                return; // keep the active preview
+                return;
             }
             clear(level);
-            return; // re-acquire next tick, once the restored block is back under the crosshair
+            return;
         }
 
         acquire(mc, level, player);
@@ -266,12 +238,11 @@ public final class CarveClientEvents {
         ItemStack held = player.getMainHandItem();
         Carves.Result candidate = Carves.resolve(level, hit.getBlockPos(), player, held);
         if (candidate == null
-                || !UnknownItemHelper.isKnown(candidate.gateItem())   // don't ghost-spoil locked carves
-                || standingOn(player, candidate)) {                   // never blank the block under our feet
+                || !UnknownItemHelper.isKnown(candidate.gateItem())
+                || standingOn(player, candidate)) {
             resetPending();
             return;
         }
-        // Debounce: only commit after the same target has been aimed at for a couple of ticks.
         String key = signature(candidate);
         if (!key.equals(pendingKey)) {
             pendingKey = key;
@@ -305,29 +276,25 @@ public final class CarveClientEvents {
         resetPending();
     }
 
-    /** Whether the active preview should persist this tick. */
     private static boolean stillValid(LocalPlayer player, Level level) {
         if (anchor == null || anchorTool == null || player.getMainHandItem().getItem() != anchorTool) {
             return false;
         }
-        // If the carve committed (server placed the result) or the world otherwise changed a blanked
-        // cell, it's no longer air — drop the preview. restore()'s isAir guard then leaves it alone.
         for (BlockPos p : originals.keySet()) {
             if (!level.isLoaded(p) || !level.getBlockState(p).isAir()) {
                 return false;
             }
         }
-        // Still looking through the anchor cell, within reach.
         Vec3 eye = player.getEyePosition(1.0F);
         Vec3 end = eye.add(player.getViewVector(1.0F).scale(KEEP_REACH));
         return new AABB(anchor).inflate(0.05).clip(eye, end).isPresent();
     }
 
-    /** Restore the blanked cells we still own (those the server hasn't overwritten), then forget them. */
     private static void restore(@Nullable Level level) {
         if (level != null) {
             for (Map.Entry<BlockPos, BlockState> e : originals.entrySet()) {
                 BlockPos p = e.getKey();
+                // isAir guard: never overwrite a cell the server already replaced (committed carve).
                 if (level.isLoaded(p) && level.getBlockState(p).isAir()) {
                     level.setBlock(p, e.getValue(), Block.UPDATE_CLIENTS);
                 }
@@ -346,11 +313,6 @@ public final class CarveClientEvents {
         resetPending();
     }
 
-    /**
-     * Called when the player commits the carve: restore the world and drop the preview. The server
-     * places the real result a moment later (or, if it rejects the carve, the block simply stays as
-     * it was — so there's no stuck ghost on a server-side gate failure).
-     */
     public static void clearForCommit() {
         clear(Minecraft.getInstance().level);
     }

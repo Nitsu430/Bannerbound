@@ -18,8 +18,8 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 
 /**
- * Server → client: a snapshot of every workshop's display summary (all settlements), powering the
- * Workshop Orders rod's floating overview labels — name, type (icon resolves client-side via
+ * Server -> client: a snapshot of every workshop's display summary (all settlements), powering the
+ * Workshop Orders rod's floating overview labels - name, type (icon resolves client-side via
  * {@code WorkBlockRegistry.iconForType}), validity and worker occupancy. Broadcast alongside the
  * selection snapshot ({@code SelectionBroadcaster}) so the labels track the wireframes.
  */
@@ -47,7 +47,6 @@ public record WorkshopSummarySyncPayload(List<String> workshopIds, List<String> 
             readStrings(buf), readStrings(buf), readStrings(buf),
             readInts(buf), readInts(buf), readInts(buf), readInts(buf)));
 
-    /** Builds the snapshot from every settlement's workshops. */
     public static WorkshopSummarySyncPayload build(MinecraftServer server) {
         List<String> ids = new ArrayList<>();
         List<String> names = new ArrayList<>();

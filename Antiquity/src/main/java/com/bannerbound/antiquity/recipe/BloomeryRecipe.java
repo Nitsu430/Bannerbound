@@ -11,11 +11,10 @@ import net.minecraft.world.item.crafting.Ingredient;
 /**
  * A data-driven Bloomery smelting recipe. While the bloomery is lit with its door shut, an
  * {@code ingredient} stack inside is processed; each item takes {@code ticks} of base time
- * (bulk batches are discounted — see {@code BloomeryBlockEntity}). On completion each item in
- * the stack rolls {@code chance} to yield {@code result}. Loaded from
- * {@code data/<namespace>/bloomery_recipes/*.json}.
- * <p>
- * Example — {@code data/bannerboundantiquity/bloomery_recipes/raw_iron.json}:
+ * (bulk batches are discounted - see {@code BloomeryBlockEntity}). On completion each item in
+ * the stack rolls {@code chance} to yield {@code result}. Optional {@code band_low}/{@code band_high}
+ * set the recipe's target heat band (defaults from {@code BloomeryHeat}). Loaded from
+ * {@code data/<namespace>/bloomery_recipes/*.json}, e.g.:
  * <pre>
  * { "ingredient": { "item": "minecraft:raw_iron" }, "ticks": 200,
  *   "result": { "id": "minecraft:iron_ingot", "count": 1 }, "chance": 1.0 }
@@ -35,7 +34,6 @@ public record BloomeryRecipe(Ingredient ingredient, int ticks, ItemStack result,
             com.bannerbound.antiquity.block.entity.BloomeryHeat.DEFAULT_BAND_HIGH).forGetter(BloomeryRecipe::bandHigh)
     ).apply(instance, BloomeryRecipe::new));
 
-    /** True if {@code stack} is this recipe's ingredient. */
     public boolean matches(ItemStack stack) {
         return ingredient.test(stack);
     }

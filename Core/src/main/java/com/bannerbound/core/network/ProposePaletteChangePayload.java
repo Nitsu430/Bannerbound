@@ -11,10 +11,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: propose a palette change — drop {@code addPaletteId} into slot
- * {@code slotIndex} and/or remove {@code removePaletteId}. Empty strings mean "no add" / "no
- * remove". Twin of {@link ProposePolicyChangePayload}: Council opens a confirm vote, a Chiefdom
- * chief enacts immediately, a Chiefdom non-chief should send {@link SuggestPalettePayload}.
+ * Client -> server: propose a palette change - drop addPaletteId into slot slotIndex and/or remove
+ * removePaletteId. Empty strings mean "no add" / "no remove". Twin of ProposePolicyChangePayload: a
+ * Council opens a confirm vote, a Chiefdom chief enacts immediately, and a Chiefdom non-chief should
+ * send SuggestPalettePayload instead.
  */
 @ApiStatus.Internal
 public record ProposePaletteChangePayload(int slotIndex, String addPaletteId, String removePaletteId)

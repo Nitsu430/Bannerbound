@@ -1,11 +1,10 @@
 package com.bannerbound.core.language;
 
 /**
- * A normalized concept extracted from a registry id, job id, or curated gloss.
- *
- * <p>{@code base} is the readable English-ish gloss used for debugging/fallback. {@code family}
- * is the semantic root that should visibly bind related generated words together. {@code modifier}
- * and {@code kind} are derivational parts: oak/log, copper/ingot, iron/axe, fish/worker, etc.
+ * A normalized concept extracted from a registry id, job id, or curated gloss. base is the readable
+ * English-ish gloss used for debugging/fallback; family is the semantic root that visibly binds
+ * related generated words together; modifier and kind are derivational parts (oak/log, copper/ingot,
+ * iron/axe, fish/worker).
  */
 public record LanguageConcept(
     String id,

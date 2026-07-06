@@ -14,13 +14,11 @@ import net.minecraft.client.gui.screens.inventory.CreativeModeInventoryScreen;
 import net.minecraft.world.item.CreativeModeTab;
 
 /**
- * Draws the section banners over the blank rows of the creative item grid (see
- * {@link CreativeSectionRenderer}). Runs at the tail of the screen render so banners sit on top of the
- * empty cells of their row.
- *
- * <p>The panel origin comes from NeoForge's public {@code getGuiLeft()}/{@code getGuiTop()} accessors
- * rather than {@code @Shadow}ing {@code leftPos}/{@code topPos}: those fields are declared on the
- * superclass {@code AbstractContainerScreen}, and shadowing an inherited field fails to resolve here.
+ * Draws the creative-grid section banners (see CreativeSectionRenderer) at the tail of the screen
+ * render so they sit on top of the empty cells of their row. The panel origin comes from NeoForge's
+ * public getGuiLeft()/getGuiTop() accessors rather than @Shadow of leftPos/topPos: those fields are
+ * declared on the superclass AbstractContainerScreen, and shadowing an inherited field fails to
+ * resolve here.
  */
 @Mixin(CreativeModeInventoryScreen.class)
 public abstract class CreativeModeInventoryScreenMixin {

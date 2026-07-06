@@ -9,7 +9,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: the player clicked the Town Hall Labor tab's "Preferred storage" button. The server puts
+/** C->S: the player clicked the Town Hall Labor tab's "Preferred storage" button. The server puts
  *  them into the same click-a-block edit mode the per-citizen drop-off uses (a settlement-level
  *  sentinel), then their next block right-click sets the settlement's preferred-storage depot. */
 @ApiStatus.Internal

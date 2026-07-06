@@ -10,6 +10,12 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/**
+ * C->S: a diplomacy button on the Diplomacy tab. {@code action} is one of the int constants below
+ * (war/peace/rally toggle, plus RAZE/VASSAL/ANNEX city-state capture resolutions - RAZE is reused
+ * for city-state razing); {@code targetSettlementId} names the affected faction. Resolved
+ * server-side in CityStateWarManager.
+ */
 @ApiStatus.Internal
 public record DiplomacyActionPayload(int action, String targetSettlementId)
         implements CustomPacketPayload {
@@ -17,7 +23,6 @@ public record DiplomacyActionPayload(int action, String targetSettlementId)
     public static final int OFFER_PEACE = 1;
     public static final int TOGGLE_RALLY = 2;
     public static final int RAZE = 3;
-    // City-state capture resolutions (raze reuses RAZE above). See CityStateWarManager.
     public static final int VASSAL = 4;
     public static final int ANNEX = 5;
 

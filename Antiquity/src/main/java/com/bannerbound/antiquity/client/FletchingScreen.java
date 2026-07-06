@@ -30,50 +30,50 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The fletching stretch minigame — a transparent in-world overlay (a plain {@link Screen}, not a
- * container menu; same family as {@code TribeVoteScreen}). Hold SPACE to drive a rising cursor up the
- * bar, release in the green zone. The green zone is randomized per stretch (anti-muscle-memory) and
- * narrows each rep. Per-stretch scores are sent to the server at completion, which rolls the quality.
+ * The fletching stretch minigame: a transparent in-world overlay (a plain {@link Screen}, not a
+ * container menu; same family as TribeVoteScreen). Hold SPACE to drive a rising cursor up the bar
+ * (rise curve is progress^RISE_EXP so the "stretch fights back"; holding past the top auto-releases
+ * as a miss) and let go inside the green zone. The zone is randomized per stretch to defeat muscle
+ * memory (center clamped to MIN_CENTER..MAX_CENTER so a high zone never becomes unfair) and narrows
+ * each rep via zoneDecay; all tuning comes from the server in {@link OpenFletchingPayload}.
+ * Per-stretch scores (100 green / 60 yellow / 0 miss) go to the server at completion, which rolls
+ * the final quality tier.
  *
- * <p>Opening this screen naturally locks the player (no movement, SPACE won't jump, mouselook off);
- * the world still renders behind it ({@link #isPauseScreen()} is false) so the FOV widen and the
- * station particles read. ESC cancels (forfeiting the pile only if a stretch was already committed —
- * see {@link #onClose()}).
+ * <p>Opening the screen naturally locks the player (no movement, SPACE won't jump, mouselook off)
+ * while the world keeps rendering behind it: isPauseScreen() is false and render() deliberately
+ * never calls renderBackground(). MINIGAME_ACTIVE and STRETCH_FRACTION are volatile statics polled
+ * by the FOV event handler to drive the bow-style FOV widen while pulling. The first SPACE release
+ * is the commitment point (COMMIT tells the server to consume the material pile); ESC or any other
+ * close before completion sends CANCEL and the server decides forfeit from whether a commit
+ * happened. Particles spawned here are client-only for the crafter; the completion burst everyone
+ * sees is server-side in Fletching.complete. Visuals intentionally stay in the vanilla UI idiom:
+ * tooltip-style frame, inventory-slot bevel bar, flat zone colors.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class FletchingScreen extends Screen {
-    /** Milliseconds of holding for the cursor to traverse the whole bar. */
     private static final long FULL_RISE_MS = 1400L;
-    /** Rise exponent (>1 → accelerating "stretch fights back" feel). */
     private static final float RISE_EXP = 1.6F;
-    /** Random green-zone center is clamped to this band so a high zone never becomes unfair. */
     private static final float MIN_CENTER = 0.30F;
     private static final float MAX_CENTER = 0.82F;
     private static final int GREEN_SCORE = 100;
     private static final int YELLOW_SCORE = 60;
-    /** How long the post-release flash/result text linger (ms). */
     private static final long FLASH_MS = 250L;
     private static final long RESULT_TEXT_MS = 900L;
 
-    // Vanilla-tooltip palette for the frame (instantly reads as native MC UI).
     private static final int COL_BG = 0xF0100010;
     private static final int COL_BORDER_TOP = 0x505000FF;
     private static final int COL_BORDER_BOTTOM = 0x5028007F;
-    // Bar palette — flat colors in the vanilla-slot idiom.
     private static final int COL_TRACK = 0xFF5C5C5C;
     private static final int COL_GREEN = 0xFF3FB911;
     private static final int COL_YELLOW = 0xFFC88A2D;
     private static final int COL_CURSOR = 0xFFFFFFFF;
     private static final int COL_CURSOR_GLOW = 0x50FFFFFF;
-    // Result colors (also used for pips + flash).
     private static final int COL_RESULT_GREEN = 0xFF44D62C;
     private static final int COL_RESULT_YELLOW = 0xFFE0A020;
     private static final int COL_RESULT_MISS = 0xFFFF5555;
 
-    /** Read by the FOV event handler: true while the minigame is open. */
     public static volatile boolean MINIGAME_ACTIVE = false;
-    /** Read by the FOV event handler: the current cursor fraction (0–1) for the widen amount. */
     public static volatile float STRETCH_FRACTION = 0.0F;
 
     private final BlockPos pos;
@@ -92,12 +92,10 @@ public class FletchingScreen extends Screen {
     private boolean committed = false;
     private boolean completed = false;
 
-    // Current stretch's zone (bar fractions 0–1).
     private float greenStart;
     private float greenEnd;
     private float padPct;
 
-    // Post-release feedback (bar flash + floating result text).
     private long lastReleaseMs = 0L;
     private int lastReleaseColor = 0;
     private Component lastResultText = null;
@@ -118,7 +116,6 @@ public class FletchingScreen extends Screen {
         newStretch();
     }
 
-    /** Rolls the next stretch's randomized green zone (narrower each rep). */
     private void newStretch() {
         float width = Math.max(minZonePct, (float) (baseZonePct * Math.pow(zoneDecay, stretchIndex)));
         padPct = yellowPadPct;
@@ -130,7 +127,6 @@ public class FletchingScreen extends Screen {
         greenEnd = center + width / 2.0F;
     }
 
-    /** Cursor fraction (0–1) for the current hold; 0 when not holding. */
     private float cursorFraction() {
         if (!holding) return 0.0F;
         float progress = Mth.clamp((System.currentTimeMillis() - holdStartMs) / (float) FULL_RISE_MS,
@@ -146,7 +142,6 @@ public class FletchingScreen extends Screen {
             playUi(BannerboundAntiquity.FLETCHING_STRETCH_SOUND.get(), 1.0F, 1.0F);
             return true;
         }
-        // Everything else (incl. ESC → onClose) falls through to vanilla handling.
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
@@ -159,7 +154,6 @@ public class FletchingScreen extends Screen {
         return super.keyReleased(keyCode, scanCode, modifiers);
     }
 
-    /** Scores the just-released stretch, plays feedback, and advances (or completes). */
     private void releaseStretch(float cursor) {
         holding = false;
         int score;
@@ -188,7 +182,6 @@ public class FletchingScreen extends Screen {
         lastReleaseMs = System.currentTimeMillis();
         playUi(sound, pitch, 1.0F);
 
-        // First release is the commitment point — tell the server to consume the pile.
         if (!committed) {
             sendAction(FletchingActionPayload.COMMIT, List.of());
             committed = true;
@@ -218,8 +211,6 @@ public class FletchingScreen extends Screen {
         }
     }
 
-    /** Client-side particle puff on/above the station's tabletop (only the crafter sees these;
-     *  the completion burst everyone sees is server-side in {@code Fletching.complete}). */
     private void spawnStationParticles(ParticleOptions type, int count) {
         Minecraft mc = this.minecraft;
         if (mc == null || mc.level == null) return;
@@ -234,15 +225,13 @@ public class FletchingScreen extends Screen {
 
     @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        // No renderBackground() → the world stays visible behind the overlay.
         long now = System.currentTimeMillis();
         if (holding && now - holdStartMs >= FULL_RISE_MS) {
-            releaseStretch(1.0F); // overstretched: held past the top → miss
+            releaseStretch(1.0F);
         }
         float cursor = cursorFraction();
         STRETCH_FRACTION = cursor;
 
-        // Faint string-tension particles at the station while pulling.
         if (holding && rng.nextFloat() < 0.12F) {
             spawnStationParticles(ParticleTypes.CRIT, 1);
         }
@@ -255,7 +244,6 @@ public class FletchingScreen extends Screen {
         int boxTop = this.height - 110;
         int boxBottom = boxTop + 72;
 
-        // Title — gently pulses while waiting, solid while pulling.
         float pulse = holding ? 1.0F : 0.70F + 0.30F * (float) Math.sin(now / 280.0);
         int titleColor = ((int) (pulse * 255.0F) << 24) | 0xCCCCCC;
         Component title = Component.translatable("bannerbound.fletching.hold_space")
@@ -265,7 +253,6 @@ public class FletchingScreen extends Screen {
         g.drawCenteredString(this.font, title, cx / 2, (boxTop - 32) / 2, titleColor);
         g.pose().popPose();
 
-        // Floating result text ("Perfect!" / "Good" / "Miss") — rises and fades after each release.
         if (lastResultText != null && now - lastReleaseMs < RESULT_TEXT_MS) {
             float t = (now - lastReleaseMs) / (float) RESULT_TEXT_MS;
             int alpha = (int) ((1.0F - t) * 255.0F);
@@ -276,14 +263,12 @@ public class FletchingScreen extends Screen {
             }
         }
 
-        // Frame — vanilla-tooltip style: dark plum fill + purple gradient border.
         g.fill(boxLeft, boxTop, boxRight, boxBottom, COL_BG);
         g.fillGradient(boxLeft, boxTop, boxLeft + 1, boxBottom, COL_BORDER_TOP, COL_BORDER_BOTTOM);
         g.fillGradient(boxRight - 1, boxTop, boxRight, boxBottom, COL_BORDER_TOP, COL_BORDER_BOTTOM);
         g.fill(boxLeft, boxTop, boxRight, boxTop + 1, COL_BORDER_TOP);
         g.fill(boxLeft, boxBottom - 1, boxRight, boxBottom, COL_BORDER_BOTTOM);
 
-        // Header row: "n/total" (left) + running quality estimate (centered, tier-colored).
         int n = Math.min(stretchIndex + 1, stretches);
         g.drawString(this.font, n + "/" + stretches, boxLeft + 9, boxTop + 8, 0xFFFFFFFF, false);
         QualityTier tier = QualityTier.fromScore(QualityMath.aggregate(toArray(scores)));
@@ -291,34 +276,28 @@ public class FletchingScreen extends Screen {
             .append(Component.literal(" ")).append(tier.displayName());
         g.drawCenteredString(this.font, quality, cx, boxTop + 8, 0xFFFFFFFF);
 
-        // Bar: classic inventory-slot inset — dark top/left bevel, light bottom/right bevel, flat
-        // gray track and flat zone colors. Vanilla UI language; no gradients, ticks, or end caps.
         int barLeft = cx - barW / 2;
         int barTop = boxTop + 24;
         int barBottom = barTop + barH;
-        g.fill(barLeft - 1, barTop - 1, barLeft + barW + 1, barTop, 0xFF373737);        // top bevel
-        g.fill(barLeft - 1, barTop - 1, barLeft, barBottom + 1, 0xFF373737);            // left bevel
-        g.fill(barLeft, barBottom, barLeft + barW + 1, barBottom + 1, 0xFFFFFFFF);      // bottom bevel
-        g.fill(barLeft + barW, barTop, barLeft + barW + 1, barBottom + 1, 0xFFFFFFFF);  // right bevel
+        g.fill(barLeft - 1, barTop - 1, barLeft + barW + 1, barTop, 0xFF373737);
+        g.fill(barLeft - 1, barTop - 1, barLeft, barBottom + 1, 0xFF373737);
+        g.fill(barLeft, barBottom, barLeft + barW + 1, barBottom + 1, 0xFFFFFFFF);
+        g.fill(barLeft + barW, barTop, barLeft + barW + 1, barBottom + 1, 0xFFFFFFFF);
         g.fill(barLeft, barTop, barLeft + barW, barBottom, COL_TRACK);
-        // Zones: flat colors, amber pads under the green.
         int yLo = barLeft + (int) ((greenStart - padPct) * barW);
         int yHi = barLeft + (int) ((greenEnd + padPct) * barW);
         int gLo = barLeft + (int) (greenStart * barW);
         int gHi = barLeft + (int) (greenEnd * barW);
         g.fill(Math.max(barLeft, yLo), barTop, Math.min(barLeft + barW, yHi), barBottom, COL_YELLOW);
         g.fill(gLo, barTop, gHi, barBottom, COL_GREEN);
-        // Aim line at the green zone's center — the point players are actually trying to hit.
         int aimX = (gLo + gHi) / 2;
         g.fill(aimX, barTop + 1, aimX + 1, barBottom - 1, 0x90FFFFFF);
-        // Post-release flash washes over the bar for a beat.
         if (now - lastReleaseMs < FLASH_MS && lastReleaseColor != 0) {
             float t = (now - lastReleaseMs) / (float) FLASH_MS;
             int alpha = (int) ((1.0F - t) * 120.0F);
             g.fill(barLeft, barTop, barLeft + barW, barBottom,
                 (alpha << 24) | (lastReleaseColor & 0xFFFFFF));
         }
-        // Cursor: comet trail while pulling, soft glow, crisp 2px line.
         int cxPix = barLeft + (int) (cursor * barW);
         if (holding) {
             for (int i = 1; i <= 6; i++) {
@@ -332,8 +311,6 @@ public class FletchingScreen extends Screen {
         g.fill(cxPix - 3, barTop, cxPix + 3, barBottom, COL_CURSOR_GLOW);
         g.fill(cxPix - 1, barTop - 2, cxPix + 1, barBottom + 2, COL_CURSOR);
 
-        // Stretch pips: one per rep — filled with that rep's result color once played, white outline
-        // for the current rep, dim outline for upcoming ones.
         int pipSize = 6;
         int pipPitch = 12;
         int pipsLeft = cx - (stretches * pipPitch - (pipPitch - pipSize)) / 2;
@@ -361,8 +338,6 @@ public class FletchingScreen extends Screen {
 
     @Override
     public void onClose() {
-        // ESC (or any external close) before completion = cancel. Forfeit semantics are server-side:
-        // if a stretch already committed, the pile is gone; otherwise it's untouched.
         if (!completed) {
             sendAction(FletchingActionPayload.CANCEL, List.of());
         }

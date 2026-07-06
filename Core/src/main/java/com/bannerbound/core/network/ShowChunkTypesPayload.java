@@ -11,10 +11,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: a (2·radius+1)² grid of {@code ChunkResource} ordinals (row-major, north→south,
- * west→east) centred on a chunk, for the {@code /bannerbound chunktype <radius>} debug overlay. The
+ * Server -> client: a (2*radius+1)^2 grid of ChunkResource ordinals (row-major, north->south,
+ * west->east) centred on a chunk, for the "/bannerbound chunktype <radius>" debug overlay. The
  * client can't compute the typing itself (it lacks the world seed), so the server sends the rolled
- * grid and the client floats an icon + label over each non-empty chunk for {@code durationTicks}.
+ * grid and the client floats an icon + label over each non-empty chunk for durationTicks.
  */
 @ApiStatus.Internal
 public record ShowChunkTypesPayload(int centerX, int centerZ, int radius, byte[] ordinals, int durationTicks)

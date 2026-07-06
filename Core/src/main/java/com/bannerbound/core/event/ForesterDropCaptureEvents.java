@@ -20,25 +20,27 @@ import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
 
 /**
  * Routes drops spawned during a forester's capture window straight into their assigned Forester's
- * Log block entity — no ground items, no pickup walking. The capture window is opened by
- * {@code ForesterWorkGoal.chopLog} when it hands the tree off to Pandas Falling Trees; PFT then
- * spawns ItemEntities along the falling-tree path over a couple of seconds, and we intercept
- * each one before it actually enters the world.
- * <p>
+ * Log block entity -- no ground items, no pickup walking. The window is opened by
+ * ForesterWorkGoal.chopLog when it hands the tree to Pandas Falling Trees; PFT then spawns
+ * ItemEntities along the falling-tree path over a couple of seconds, and this listener intercepts
+ * each one (EntityJoinLevelEvent) before it enters the world.
+ *
  * Anything the forester can't store (unknown item, workstation full, BE chunk unloaded,
- * workstation reassigned) is left to spawn as a normal ground ItemEntity — the capture window
- * can't prove an item came from the fell (PFT spawns drops with no originating block), so
- * deleting here also deleted player Q-drops and mob loot that happened to land in the window.
+ * workstation reassigned) is left to spawn as a normal ground ItemEntity. The window can't prove
+ * an item came from the fell (PFT spawns drops with no originating block), so this must NEVER
+ * delete outright: doing so also deleted player Q-drops and mob loot that happened to land in the
+ * window. Captured stacks are shrunk to what was banked; the rest hits the ground.
+ *
+ * Constants: LOOKUP_INFLATE (24) is the broad-phase box half-extent, larger than the capture
+ * radius so a citizen whose center sits at the capture-circle edge is still found.
+ * CAPTURE_RADIUS_SQ (10^2) is tighter than the old 16-block sphere (which siphoned unrelated
+ * player/mob drops) but still spans a normal tree's fall path; a giant's far-end drops just land
+ * on the ground.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
 public final class ForesterDropCaptureEvents {
-    /** Box half-extent for the broad-phase citizen lookup. Larger than the capture radius to cover
-     *  citizens whose center is at the edge of the capture circle. */
     private static final double LOOKUP_INFLATE = 24.0;
-    /** Squared capture radius around the felled trunk. Tighter than the old 16-block sphere (which
-     *  siphoned unrelated player/mob drops); 10 still spans the falling-tree drop path of a normal
-     *  tree — a giant's far-end drops just land on the ground instead of being captured. */
     private static final double CAPTURE_RADIUS_SQ = 10.0 * 10.0;
 
     private ForesterDropCaptureEvents() {
@@ -64,30 +66,22 @@ public final class ForesterDropCaptureEvents {
             if (center == null) continue;
             if (center.distSqr(itemPos) > CAPTURE_RADIUS_SQ) continue;
 
-            // Drops this civ doesn't recognize yet (e.g. saplings before they're researched) aren't
-            // storable — skip capture and let them spawn. NEVER cancel here: the window can't tell a
-            // fell drop from a player's dropped stack, and cancelling deleted the latter.
+            // NEVER cancel here: the window can't tell a fell drop from a player's dropped stack.
             if (!com.bannerbound.core.api.research.SettlementDropFilter.shouldDrop(
                     citizen.getSettlement(), null, remaining)) {
                 continue;
             }
 
-            // Resolve the citizen's marked drop-off container (chest / Antiquity basket). Removed
-            // or replaced between the PFT call and the drop spawn is possible; resolveDropOff
-            // returns null then and we skip — the next candidate (or the ground spawn) handles it.
             Container depot = DropOffContainers.resolveDropOff(level, citizen.getDropOff());
             if (depot == null) continue;
 
             remaining = DropOffContainers.insert(depot, remaining);
             if (remaining.isEmpty()) {
-                // Whole stack soaked up by this drop-off → kill the entity before it spawns.
                 event.setCanceled(true);
                 return;
             }
         }
 
-        // Anything still in `remaining` couldn't fit any nearby forester's BE. Leave it to spawn
-        // as a ground item (shrunk to what wasn't banked) — never delete what we can't attribute.
         itemEntity.setItem(remaining);
     }
 }

@@ -20,15 +20,18 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 
 /**
- * Highlights the worker(s) a held Foreman's Rod is targeting, so the player can see which digger
- * they've got selected. Uses the entity's CLIENT-ONLY glowing flag ({@code setGlowingTag}), so the
- * outline shows only to the player holding the rod — not as a real, server-synced glow visible to
- * everyone. A rod bound to one digger lights up that digger; in "all" mode every digger lights up.
+ * Highlights the worker(s) a held Foreman's Rod is targeting so the player can see which digger is
+ * selected. Uses the entity's CLIENT-ONLY glowing flag (setClientGlow -> setGlowingTag), so the
+ * outline shows only to the player holding the rod, not as a real server-synced glow visible to
+ * everyone. A rod bound to one digger lights that digger; in "all" mode every digger lights up.
+ *
+ * <p>Runs on the client tick and re-applies the flag every tick: the glow then clears the instant
+ * the rod is put away or retargeted, and survives any entity-data resync that would clear the
+ * shared flag. Scans within RANGE (64) blocks of the player.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
 public final class ForemanGlowHandler {
-    /** How far around the player to (un)light workers. */
     private static final double RANGE = 64.0;
 
     private ForemanGlowHandler() {
@@ -53,8 +56,6 @@ public final class ForemanGlowHandler {
             boolean glow = diggerRod
                 && c.isClientJob(DiggerWorkGoal.JOB_TYPE_ID)
                 && (allMode || targetUuid.equals(c.getUUID().toString()));
-            // Set every tick so the glow clears the instant the rod is put away or retargeted, and
-            // is re-applied after any entity-data resync that would clear the shared flag.
             c.setClientGlow(glow);
         }
     }

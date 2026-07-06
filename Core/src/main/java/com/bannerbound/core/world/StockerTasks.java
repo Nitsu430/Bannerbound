@@ -37,47 +37,57 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 /**
- * The Stocker's settlement task board: an ENQUEUED, shared FIFO of haul orders that stockers
- * claim one at a time. Tasks are <b>derived state</b> — regenerated periodically from the live
- * inventory picture, never persisted — so the board self-heals around anything the player moves
- * by hand, and the queue order (not a stocker's whim) decides what gets hauled first. Claiming
- * one task at a time from the shared queue is what balances the load: a free stocker always
- * takes the oldest open order, so work splits across however many stockers are employed.
+ * The Stocker's settlement task board: an enqueued, shared FIFO of haul orders that stockers
+ * claim one at a time. Tasks are DERIVED STATE -- regenerated every REGEN_INTERVAL ticks from the
+ * live inventory picture, never persisted -- so the board self-heals around anything the player
+ * moves by hand, and queue order (not a stocker's whim) decides what hauls first. Claiming the
+ * oldest open task from the shared queue balances load across however many stockers are employed;
+ * a claimed task orphaned past CLAIM_TIMEOUT_TICKS (stocker died / changed job) is dropped and
+ * regenerated, and MAX_OPEN_TASKS caps the open board so it never floods. Each Task sets exactly
+ * one of source workshop/pos and exactly one of dest workshop/pos; the "lane" string is its dedup
+ * key so a claimed task is recognised across regens regardless of shape. Board access
+ * (claim/complete/release/snapshot/regen) is synchronized: goal threads and the server-tick regen
+ * share one queue.
  *
- * <p>Two task flows (CRAFTER_PLAN.md's logistics tier):
+ * <p>Task flows, generated per regen in this ORDER (earlier flows win the MAX_OPEN budget first):
  * <ul>
- *   <li><b>SUPPLY</b> — a staffed workshop's executors report {@code missingInputs}; the board
- *       finds those items in stockpiles / loose drop-off containers (chests, baskets — never
- *       another workshop's storage) and queues container → workshop hauls.</li>
- *   <li><b>CLEAR</b> — items in a staffed workshop's storage that no currently-wanted craft
- *       needs ({@code retainedItems}) are surplus (finished outputs, dead raws) and get queued
- *       workshop → stockpile. An ingredient of a wanted craft is NEVER hauled out, so a crafter
- *       making plant string for the fletchery's own bows keeps its string; once min-stock is
- *       satisfied and no orders remain, the same string becomes surplus and ships out.</li>
+ *   <li>SUPPLY -- a staffed workshop's executors report missingInputs; the board finds those items
+ *       in stockpiles / loose drop-off containers (never another workshop's storage) and queues
+ *       container -> workshop hauls. An input NOBODY stocks asks the chain instead: a workshop that
+ *       can PRODUCE it gets a derived autoOrder. Hauls use the BUFFERED count (missing, pre-stock
+ *       raws in fewer trips); chain PRODUCTION orders use the TRUE un-buffered demand, so one wanted
+ *       final doesn't pull a buffer's worth of intermediates (a bow doesn't order a buffer of
+ *       string).</li>
+ *   <li>CLEAR -- storage items no wanted craft retains (retainedItems) are surplus and queued
+ *       workshop -> stockpile (or the item's role tool depot). An ingredient of a wanted craft is
+ *       NEVER hauled out; once min-stock is met and no orders remain it becomes surplus and ships.</li>
+ *   <li>TOOL NEEDS (government-only) -- a toolless worker self-equips from any pooled allowed tool
+ *       already in stock, so only when NONE exists anywhere does the chain order one crafted.</li>
+ *   <li>HOME SUPPLY (government-only) -- deliver demanded luxuries into home pantries. Home
+ *       containers are excluded from sources/drain so a delivered luxury stays put and keeps the
+ *       demand satisfied; only a small HOME_PANTRY_AMOUNT is delivered since mere presence satisfies
+ *       and nothing consumes it yet.</li>
+ *   <li>DRAIN -- empty every loose drop-off container (baskets, chests, outpost chests) into the
+ *       stockpile completely, one task per container per regen; baskets are buffers, the stockpile
+ *       IS settlement inventory (no fill threshold, user decision). Runs last so feeding workshops
+ *       wins; never drains a stockpile into itself.</li>
  * </ul>
+ *
+ * <p>Chain autoOrders are reconciled onto each producer every regen: counts follow the live
+ * deficit and an order whose need vanished is revoked (completed crafts stay made). Anarchy has no
+ * stockers, hence the tool/home passes are government-only.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
 public final class StockerTasks {
-    /** Board regen cadence (ticks). Census/scans are cheap and cached; 10 s keeps it responsive. */
     private static final int REGEN_INTERVAL = 200;
-    /** A claimed task older than this is presumed orphaned (stocker died / job changed) and dropped. */
     private static final long CLAIM_TIMEOUT_TICKS = 1_200;
-    /** Max OPEN (unclaimed) tasks per settlement — the board never floods. */
     private static final int MAX_OPEN_TASKS = 32;
-    /** Per-task haul cap: one stack. */
     private static final int MAX_HAUL = 64;
-    /** How much of a luxury a stocker delivers to a home pantry — a small stock, since the demand is
-     *  satisfied by mere presence and nothing consumes it yet (a market replaces this in the medieval era). */
     private static final int HOME_PANTRY_AMOUNT = 8;
 
-    /** One haul order. Exactly one of {@code sourceWorkshopId}/{@code sourcePos} is set, and
-     *  exactly one of {@code destWorkshopId}/{@code destPos} — supply = container→workshop,
-     *  clear = workshop→stockpile rack. */
     public static final class Task {
         public final UUID id = UUID.randomUUID();
-        /** Dedup key for this haul "lane" (e.g. {@code supply:<ws>:<item>}, {@code home:<home>:<suffix>}).
-         *  Stored so the regen's in-flight set recognises a claimed task regardless of its shape. */
         public final String lane;
         @Nullable public final UUID sourceWorkshopId;
         @Nullable public final BlockPos sourcePos;
@@ -106,17 +116,11 @@ public final class StockerTasks {
     private StockerTasks() {
     }
 
-    // ─── Goal API ────────────────────────────────────────────────────────────────────────────
-
-    /** Claims the oldest open task for {@code citizenId}, or null when the board is empty. */
     @Nullable
     public static Task claim(ServerLevel sl, Settlement settlement, UUID citizenId) {
         return claim(sl, settlement, citizenId, t -> true);
     }
 
-    /** Claims the oldest open task that {@code acceptable} passes. Lets a stocker skip hauls whose
-     *  endpoints it recently found unreachable WITHOUT hiding them from other stockers (a released
-     *  task is regenerated and another stocker — standing somewhere else — may well reach it). */
     @Nullable
     public static synchronized Task claim(ServerLevel sl, Settlement settlement, UUID citizenId,
                                           java.util.function.Predicate<Task> acceptable) {
@@ -132,31 +136,24 @@ public final class StockerTasks {
         return null;
     }
 
-    /** Removes a finished task from the board. */
     public static synchronized void complete(Settlement settlement, Task task) {
         Deque<Task> queue = BOARDS.get(settlement.id());
         if (queue != null) queue.remove(task);
     }
 
-    /** Drops a failed/abandoned task — the next regen recreates it if the need still exists. */
     public static synchronized void release(Settlement settlement, Task task) {
         complete(settlement, task);
     }
 
-    /** Who currently claimed this task (a stocker's UUID), or null while it's open. */
     @Nullable
     public static UUID claimedBy(Task task) {
         return task.claimedBy;
     }
 
-    /** A snapshot of the settlement's current board, queue order preserved — drives the
-     *  stocker Job tab's task list. Safe to iterate; mutations don't write back. */
     public static synchronized List<Task> snapshot(UUID settlementId) {
         Deque<Task> queue = BOARDS.get(settlementId);
         return queue == null ? List.of() : new ArrayList<>(queue);
     }
-
-    // ─── Board regeneration ──────────────────────────────────────────────────────────────────
 
     @SubscribeEvent
     static void onServerTick(ServerTickEvent.Post event) {
@@ -170,25 +167,17 @@ public final class StockerTasks {
     private static synchronized void regen(ServerLevel sl, Settlement s) {
         Deque<Task> queue = BOARDS.computeIfAbsent(s.id(), k -> new ArrayDeque<>());
         long now = sl.getGameTime();
-        // Keep only live claimed tasks; everything open is regenerated from the current state.
         queue.removeIf(t -> t.claimedBy == null || now - t.claimTick > CLAIM_TIMEOUT_TICKS);
 
-        // What's already in flight — don't queue a duplicate haul for the same lane.
         Set<String> inFlight = new HashSet<>();
         for (Task t : queue) inFlight.add(laneKey(t));
 
         BlockPos stockpileRack = firstUsableStockpile(s);
-        // Home pantry chests are destinations, not sources: excluded so the drain pass never empties
-        // a home (and a delivered luxury stays put). Map = home → its deliverable container(s).
         Map<com.bannerbound.core.api.settlement.Home, List<BlockPos>> homePantries = collectHomePantries(sl, s);
         Set<BlockPos> homeContainers = new HashSet<>();
         for (List<BlockPos> v : homePantries.values()) homeContainers.addAll(v);
         List<SourceContainer> sources = collectSources(sl, s, stockpileRack, homeContainers);
 
-        // The production chain's CURRENT needs: producer workshop → (item id → wanted count),
-        // plus which workshop asked (the "why"). Rebuilt from scratch every regen, then
-        // reconciled onto each producer's autoOrders below — an order whose need vanished is
-        // revoked (already-completed crafts were decremented away by fulfillOrder and stay made).
         Map<UUID, Map<String, Integer>> chainNeeds = new HashMap<>();
         Map<UUID, Map<String, String>> chainSources = new HashMap<>();
 
@@ -197,10 +186,6 @@ public final class StockerTasks {
             if (open >= MAX_OPEN_TASKS) break;
             if (w.status() != Workshop.Status.VALID || w.workers().isEmpty()) continue;
 
-            // Per-workshop wanted/keep view, unioned across its work blocks. `missing` is the
-            // BUFFERED haul demand (pre-stock raws); `trueDemand` is the un-buffered production
-            // demand used when an input has to be CHAIN-CRAFTED rather than hauled (so a producer
-            // makes only what's truly needed — a bow doesn't pull a buffer's worth of string).
             Map<Item, Integer> missing = new LinkedHashMap<>();
             Map<Item, Integer> trueDemand = new LinkedHashMap<>();
             Set<Item> retained = new HashSet<>();
@@ -216,12 +201,6 @@ public final class StockerTasks {
                 }
             }
 
-            // SUPPLY: container → workshop for every needed input we can actually find. A needed
-            // input NOBODY stocks instead asks the chain: a workshop that can PRODUCE it gets a
-            // derived order (the fletcher needs plant string → the general-crafts stone queues
-            // plant string). Hauls use the BUFFERED count (pre-stock raws in fewer trips); chain
-            // PRODUCTION orders use the TRUE count, so the producer makes only what's needed and a
-            // single wanted final doesn't pull a buffer's worth of intermediates.
             Set<Item> needs = new java.util.LinkedHashSet<>(missing.keySet());
             needs.addAll(trueDemand.keySet());
             for (Item item : needs) {
@@ -250,9 +229,6 @@ public final class StockerTasks {
                 open++;
             }
 
-            // CLEAR: workshop → stockpile (or the item's role tool depot) for storage items no
-            // wanted craft retains — a crafted-to-order bone spear ships straight to the
-            // weapons depot the hunter equips from.
             for (Map.Entry<Item, Integer> e : storageCounts(sl, w).entrySet()) {
                 if (open >= MAX_OPEN_TASKS) break;
                 if (retained.contains(e.getKey())) continue;
@@ -267,12 +243,6 @@ public final class StockerTasks {
             }
         }
 
-        // TOOL NEEDS: a worker with a tool-using job and no tool registers a need for its role.
-        // Tools are pooled now — a toolless worker equips itself from the nearest take-open
-        // container (JobTools.supplyPool), so if any allowed tool already sits in settlement stock
-        // there's nothing to haul. Only when NONE exists anywhere does the chain order one crafted
-        // (it lands in the stockpile via CLEAR, where the worker picks it up). Revoked like any auto
-        // order once the worker is equipped. Government-only — anarchy has no stockers.
         if (s.governmentType() != Settlement.Government.NONE) {
             Map<String, Integer> roleNeeds = new LinkedHashMap<>();
             Map<String, UUID> roleNeedSource = new LinkedHashMap<>();
@@ -290,13 +260,11 @@ public final class StockerTasks {
                 if (open >= MAX_OPEN_TASKS) break;
                 String role = need.getKey();
                 List<Item> allowed = com.bannerbound.core.entity.JobTools.allowedToolsFor(s, role);
-                // A valid tool already sits in pooled stock → the worker self-equips, nothing to do.
                 boolean exists = false;
                 for (Item t : allowed) {
                     if (findSourceWith(sl, sources, t) != null) { exists = true; break; }
                 }
                 if (exists) continue;
-                // Nowhere at all → ask the chain to CRAFT one (first producible allowed tool).
                 for (Item t : allowed) {
                     Workshop producer = findProducer(sl, s, null, t);
                     if (producer == null) continue;
@@ -310,9 +278,6 @@ public final class StockerTasks {
             }
         }
 
-        // HOME SUPPLY: stock each home's pantry with the LUXURIES it demands (cooked food, charcoal…).
-        // Home chests are excluded from sources/drain above, so a delivered luxury stays put and keeps
-        // the demand satisfied. Government-only — anarchy has no stockers, so don't clutter the board.
         if (s.governmentType() != Settlement.Government.NONE) {
             for (Map.Entry<com.bannerbound.core.api.settlement.Home, List<BlockPos>> e : homePantries.entrySet()) {
                 if (open >= MAX_OPEN_TASKS) break;
@@ -325,7 +290,7 @@ public final class StockerTasks {
                     String lane = "home:" + home.id() + ":" + d.demand().suffix();
                     if (inFlight.contains(lane)) continue;
                     TaggedSource ts = findSourceWithTag(sl, sources, d.demand().luxuryTag());
-                    if (ts == null) continue; // nothing in settlement stock to deliver yet
+                    if (ts == null) continue;
                     queue.add(new Task(lane, null, ts.src().pos(), null, dest, ts.item(), HOME_PANTRY_AMOUNT));
                     inFlight.add(lane);
                     open++;
@@ -333,12 +298,6 @@ public final class StockerTasks {
             }
         }
 
-        // DRAIN: empty EVERY loose drop-off container (gatherer baskets, chests, outpost chests)
-        // into the stockpile — completely. One task per container per regen (its biggest stack),
-        // repeating until the container is bare. No fill threshold: the stockpile IS the
-        // settlement's inventory and baskets are buffers, not storage (user decision — earlier
-        // "drain only when ⅔/half full" rules read as "stockers ignore baskets").
-        // Queued after supply/clear, so feeding workshops wins.
         if (stockpileRack != null) {
             for (SourceContainer src : sources) {
                 if (open >= MAX_OPEN_TASKS) break;
@@ -357,7 +316,7 @@ public final class StockerTasks {
                 }
                 if (biggest == null) continue;
                 BlockPos dest = stockpileRack;
-                if (dest.equals(src.pos())) continue; // already where it belongs
+                if (dest.equals(src.pos())) continue;
                 String lane = "drain:" + src.pos().asLong() + ":" + key(biggest);
                 if (inFlight.contains(lane)) continue;
                 queue.add(new Task(lane, null, src.pos(), null, dest,
@@ -367,8 +326,6 @@ public final class StockerTasks {
             }
         }
 
-        // Reconcile the chain's derived orders onto every producer: counts follow the live
-        // deficit (shrinking as deliveries land), orders whose need disappeared are revoked.
         boolean dirty = false;
         for (Workshop p : s.workshops().values()) {
             Map<String, Integer> needs = chainNeeds.getOrDefault(p.id(), Map.of());
@@ -388,10 +345,6 @@ public final class StockerTasks {
         if (dirty) SettlementData.get(sl).setDirty();
     }
 
-    /** A staffed, valid workshop able to PRODUCE {@code item} (gating applied via
-     *  possibleOutputs) — the requesting workshop itself first when given (a mixed workshop
-     *  supplies its own fletching station from its own stone), then any other. Null when
-     *  nobody can. */
     @Nullable
     private static Workshop findProducer(ServerLevel sl, Settlement s, @Nullable Workshop requester,
                                          Item item) {
@@ -423,7 +376,6 @@ public final class StockerTasks {
         return net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(item).toString();
     }
 
-    /** Per-item counts across a workshop's storage blocks. */
     private static Map<Item, Integer> storageCounts(ServerLevel sl, Workshop w) {
         Map<Item, Integer> out = new LinkedHashMap<>();
         for (ItemStack s : WorkshopStorage.contents(sl, w)) {
@@ -432,7 +384,6 @@ public final class StockerTasks {
         return out;
     }
 
-    /** The rack pos of the first stockpile that is valid and has containers, or null. */
     @Nullable
     private static BlockPos firstUsableStockpile(Settlement s) {
         for (Stockpile sp : s.stockpiles().values()) {
@@ -441,24 +392,15 @@ public final class StockerTasks {
         return null;
     }
 
-    /** A haul source: a walkable container position the stocker can take items from.
-     *  {@code stockpile} marks rack entries — supply may take from them, the drain pass skips
-     *  them (a stockpile never drains into itself). */
     private record SourceContainer(BlockPos pos, boolean stockpile) {
     }
 
-    /**
-     * Every place a supply haul may TAKE from: stockpile racks (their aggregate spans the whole
-     * enclosure) plus loose drop-off containers (chests/baskets) in claimed loaded chunks.
-     * Workshop storages and the containers already inside a stockpile enclosure are excluded —
-     * the former so workshops never raid each other, the latter so the rack isn't double-listed.
-     */
     private static List<SourceContainer> collectSources(ServerLevel sl, Settlement s,
                                                         @Nullable BlockPos stockpileRack,
                                                         Set<BlockPos> homeContainers) {
         Set<BlockPos> excluded = new HashSet<>();
         for (Workshop w : s.workshops().values()) excluded.addAll(w.storageBlocks());
-        excluded.addAll(homeContainers); // home pantries are deliver-only, never drained as a source
+        excluded.addAll(homeContainers);
         List<SourceContainer> out = new ArrayList<>();
         for (Stockpile sp : s.stockpiles().values()) {
             if (sp.valid() && !sp.containers().isEmpty()) {
@@ -466,8 +408,6 @@ public final class StockerTasks {
                 excluded.addAll(sp.containers());
             }
         }
-        // Working-claimed outpost chunks haul like home territory — the stocker walking the road
-        // out there IS the outpost's exposed supply line.
         List<Long> sourceChunks = new ArrayList<>(s.claimedChunks());
         sourceChunks.addAll(s.workingClaims());
         for (long packed : sourceChunks) {
@@ -478,17 +418,14 @@ public final class StockerTasks {
                 BlockPos pos = e.getKey();
                 if (excluded.contains(pos)) continue;
                 if (!(e.getValue() instanceof Container)) continue;
-                if (!DropOffContainers.isDropOffBlock(sl, pos)) continue; // chests + baskets only
-                // Never loot generated structures: unopened loot chests and containers buried
-                // deep below the surface (mineshafts under the claim) are not ours to empty.
-                if (DropOffContainers.isWildStorage(sl, pos)) continue;
+                if (!DropOffContainers.isDropOffBlock(sl, pos)) continue;
+                if (DropOffContainers.isWildStorage(sl, pos)) continue; // never loot structure/loot chests under the claim
                 out.add(new SourceContainer(pos, false));
             }
         }
         return out;
     }
 
-    /** The first source actually holding {@code item} right now, or null. */
     @Nullable
     private static SourceContainer findSourceWith(ServerLevel sl, List<SourceContainer> sources,
                                                   Item item) {
@@ -502,12 +439,9 @@ public final class StockerTasks {
         return null;
     }
 
-    /** A source container plus the concrete tag-matching item found in it (the home-supply pass
-     *  needs a specific {@link Item} to haul, the demand is specified as a tag). */
     private record TaggedSource(SourceContainer src, Item item) {
     }
 
-    /** The first source holding ANY item in {@code tag} (a luxury group), with that item, or null. */
     @Nullable
     private static TaggedSource findSourceWithTag(ServerLevel sl, List<SourceContainer> sources,
                                                   net.minecraft.tags.TagKey<Item> tag) {
@@ -522,9 +456,6 @@ public final class StockerTasks {
         return null;
     }
 
-    /** Every home with a deliverable pantry container (chest / basket inside its marked region),
-     *  mapped to that home's container positions. Drives both the source exclusion (a home is never
-     *  drained) and the home-supply deliveries. */
     private static Map<com.bannerbound.core.api.settlement.Home, List<BlockPos>> collectHomePantries(
             ServerLevel sl, Settlement s) {
         Map<com.bannerbound.core.api.settlement.Home, List<BlockPos>> out = new HashMap<>();

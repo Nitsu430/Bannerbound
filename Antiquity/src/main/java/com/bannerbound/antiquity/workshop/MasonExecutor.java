@@ -33,19 +33,20 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Blocks;
 
 /**
- * The Mason NPC's craft driver at a Mason's Bench — the stone analogue of {@link CarpenterExecutor}.
- * The player path is the headline (the budget + build list + chisel minigame); this is the
- * delegation layer: the mason withdraws a stone family's base block from workshop storage and
- * produces a dressed building block at the data-driven {@code base_cost → yield}. Masonry has
- * <b>no quality</b>, so {@code finish} returns the plain result.
- *
- * <p>It participates in the settlement's production chain via the Stocker surfaces
- * ({@link #missingInputs} = "haul me base stone for what I want to craft", {@link #retainedItems} =
- * "don't haul those back out").
+ * The Mason NPC's craft driver at a Mason's Bench - the stone analogue of
+ * {@link CarpenterExecutor}. The player path (stone budget + build list + chisel minigame) is the
+ * headline; this is the delegation layer: the mason withdraws a stone family's base block from
+ * workshop storage and produces the dressed building block at the data-driven base_cost -> yield.
+ * chooseCraft serves player orders first (FIFO), then min-stock deficits. Masonry has NO quality,
+ * so finish returns the plain result. Stocker surfaces: {@link #missingInputs} is the haul view
+ * (base stone pre-stocked to {@link #INPUT_BUFFER_CRAFTS} crafts of any wanted output);
+ * {@link #trueInputDemand} sizes at the TRUE need (orders + min-stock deficit) so a chain producer
+ * of the base stone never makes a buffer's worth; {@link #retainedItems} keeps the base stone of
+ * every wanted output from being hauled back out. XP_KEY names the per-profession Core jobXp
+ * bucket (XP is granted by CrafterWorkGoal, not here).
  */
 @ApiStatus.Internal
 public class MasonExecutor implements WorkExecutor {
-    /** XP key — per-profession bucket (Core jobXp map). */
     public static final String XP_KEY = "masonry";
     private static final int TICKS_PER_BEAT = 30;
     private static final int BEATS = 3;
@@ -65,7 +66,6 @@ public class MasonExecutor implements WorkExecutor {
         return null;
     }
 
-    /** Finds a family + output row that yields {@code wanted} and whose base stone storage holds. */
     @Nullable
     private static Craft tryCraftFor(ServerLevel sl, Workshop workshop, BlockPos workBlock, Item wanted) {
         for (StoneFamily fam : StoneFamily.values()) {
@@ -97,9 +97,6 @@ public class MasonExecutor implements WorkExecutor {
         return out;
     }
 
-    // ── Stocker surfaces (production chain) ──────────────────────────────────────────────────────
-
-    /** Per-wanted-recipe input buffer the stocker tops the workshop up to (≈ this many crafts). */
     private static final int INPUT_BUFFER_CRAFTS = 4;
 
     private static boolean wants(ServerLevel sl, Settlement settlement, Workshop workshop,
@@ -117,14 +114,9 @@ public class MasonExecutor implements WorkExecutor {
     @Override
     public List<ItemStack> trueInputDemand(ServerLevel sl, Settlement settlement, Workshop workshop,
                                            BlockPos workBlock) {
-        // Production sizing: no rolling buffer — if the base stone has to be chain-crafted, the
-        // producer makes only what the orders/min-stock truly need.
         return demandStacks(sl, settlement, workshop, workBlock, false);
     }
 
-    /** Per-input deficit for every wanted output. {@code bufferRaws} = the haul surface (base stone
-     *  pre-stocked to {@link #INPUT_BUFFER_CRAFTS} crafts of any min-stock output); without it the
-     *  base is sized at the TRUE need (orders + min-stock deficit) for chain production. */
     private List<ItemStack> demandStacks(ServerLevel sl, Settlement settlement, Workshop workshop,
                                          BlockPos workBlock, boolean bufferRaws) {
         Map<Item, Integer> desired = new LinkedHashMap<>();
@@ -194,6 +186,6 @@ public class MasonExecutor implements WorkExecutor {
     @Override
     public ItemStack finish(ServerLevel sl, CitizenEntity citizen, BlockPos workBlock, Craft craft) {
         sl.playSound(null, workBlock, SoundEvents.STONE_PLACE, SoundSource.BLOCKS, 0.9F, 1.0F);
-        return craft.result(); // masonry has no quality — plain result
+        return craft.result();
     }
 }

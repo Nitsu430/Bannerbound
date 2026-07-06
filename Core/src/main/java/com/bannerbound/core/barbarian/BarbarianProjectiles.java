@@ -23,8 +23,6 @@ import net.minecraft.world.entity.projectile.AbstractArrow;
 public final class BarbarianProjectiles {
     @FunctionalInterface
     public interface Factory {
-        /** Build the projectile positioned at the shooter's eye, with owner + base damage set
-         *  (the caller aims via {@code shoot} and adds it to the world). */
         AbstractArrow create(ServerLevel level, LivingEntity shooter, double damage);
     }
 
@@ -45,7 +43,6 @@ public final class BarbarianProjectiles {
             AbstractArrow a = f.create(level, shooter, damage);
             if (a != null) return a;
         }
-        // Generic fallback: any AbstractArrow entity id, built from the registry.
         EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.get(id);
         if (type == null) return null;
         Entity e = type.create(level);

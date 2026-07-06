@@ -24,16 +24,17 @@ import com.bannerbound.core.api.world.BlockSelectionRegistry;
 import com.bannerbound.core.BannerboundCore;
 
 /**
- * Public entry point for the Bannerbound: Core API.
- * <p>
- * Everything reachable from {@code com.bannerbound.core.api.*} is the stable surface that
- * expansion mods may depend on. Anything outside that subtree is implementation detail and
- * marked with {@link org.jetbrains.annotations.ApiStatus.Internal} — those signatures can
- * change without notice.
+ * Public entry point for the Bannerbound: Core API. Everything reachable from
+ * {@code com.bannerbound.core.api.*} is the stable surface that expansion mods may depend on;
+ * anything outside that subtree is implementation detail marked
+ * {@link org.jetbrains.annotations.ApiStatus.Internal} and its signatures can change without
+ * notice. Holds two convenience constants: {@link #MODID} re-exports {@link BannerboundCore#MODID},
+ * and {@link #API_VERSION} is the API surface's semantic version (distinct from the mod version) -
+ * bump its major on any breaking change to a class under {@code api.*}.
  *
  * <h2>What you get</h2>
  * <ul>
- *   <li>{@code api.settlement} — {@link com.bannerbound.core.api.settlement.Settlement},
+ *   <li>{@code api.settlement} - {@link com.bannerbound.core.api.settlement.Settlement},
  *       {@link com.bannerbound.core.api.settlement.Citizen},
  *       {@link com.bannerbound.core.api.settlement.Era},
  *       {@link com.bannerbound.core.api.settlement.Workstation},
@@ -41,29 +42,29 @@ import com.bannerbound.core.BannerboundCore;
  *       {@link com.bannerbound.core.api.settlement.SettlementData},
  *       {@link com.bannerbound.core.api.settlement.ImmigrationManager},
  *       {@link com.bannerbound.core.api.settlement.ChunkProtection}.</li>
- *   <li>{@code api.research} — {@link com.bannerbound.core.api.research.ResearchDefinition},
+ *   <li>{@code api.research} - {@link com.bannerbound.core.api.research.ResearchDefinition},
  *       {@link com.bannerbound.core.api.research.ToolAge},
  *       {@link com.bannerbound.core.api.research.OreDisguise},
  *       {@link com.bannerbound.core.api.research.ResearchManager}, plus
  *       JSON loaders under {@code api.research.data}.</li>
- *   <li>{@code api.territory} — {@link com.bannerbound.core.api.territory.ChunkClaimCost},
+ *   <li>{@code api.territory} - {@link com.bannerbound.core.api.territory.ChunkClaimCost},
  *       {@link com.bannerbound.core.api.territory.TerritoryService}, plus the loader under
  *       {@code api.territory.data}.</li>
- *   <li>{@code api.world} — {@link com.bannerbound.core.api.world.BlockSelection},
+ *   <li>{@code api.world} - {@link com.bannerbound.core.api.world.BlockSelection},
  *       {@link com.bannerbound.core.api.world.BlockSelectionRegistry}.</li>
- *   <li>{@code api.entity}, {@code api.farmer}, {@code api.fisher} — workstation-side
+ *   <li>{@code api.entity}, {@code api.farmer}, {@code api.fisher} - workstation-side
  *       service facades ({@link com.bannerbound.core.api.entity.ForesterTreeRegistry},
  *       {@link com.bannerbound.core.api.farmer.FarmerFoodBonus},
  *       {@link com.bannerbound.core.api.farmer.AwaitingSeedRegistry},
  *       {@link com.bannerbound.core.api.fisher.FisherCatchTable}).</li>
  *   <li>Registered game objects (blocks, items, entity types, etc.) are reachable as
  *       {@code public static final} fields on {@link com.bannerbound.core.BannerboundCore}.
- *       The fields are stable; the class itself is marked internal — do not extend it.</li>
+ *       The fields are stable; the class itself is marked internal - do not extend it.</li>
  * </ul>
  *
  * <h2>Adding data without writing code</h2>
  * Every JSON loader under {@code api.*.data} scans <em>all</em> namespaces under
- * {@code data/<namespace>/} — so an expansion can ship its own research nodes, tool ages,
+ * {@code data/<namespace>/} - so an expansion can ship its own research nodes, tool ages,
  * ore disguises, starting items, or chunk-claim costs by dropping JSON into
  * {@code data/<your_mod_id>/research/}, {@code .../tool_ages/}, etc. No code required.
  *
@@ -76,12 +77,7 @@ import com.bannerbound.core.BannerboundCore;
 public final class BannerboundAPI {
     private BannerboundAPI() {}
 
-    /** Mod ID of Bannerbound: Core — convenience re-export of {@link BannerboundCore#MODID}. */
     public static final String MODID = BannerboundCore.MODID;
 
-    /**
-     * Semantic version of the API surface (distinct from mod version). Bump the major when
-     * making breaking changes to any class in {@code com.bannerbound.core.api.*}.
-     */
     public static final String API_VERSION = "1.0.0";
 }

@@ -15,20 +15,21 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Client-side registry of liquids the Mortar and Pestle can hold. Each liquid resolves to a
- * block-atlas sprite (animated for free if its texture has a {@code .mcmeta}) plus an ARGB tint.
- * The block entity only stores a liquid id string — this is where that id becomes pixels.
- * <p>
- * Mod support: call {@link #register} with a new id and your own sprite + tint. Water is the
- * only liquid wired today; dyes/inks slot in here without touching the block or renderer.
+ * Client-side registry of liquids the Mortar and Pestle can hold: each id resolves to an Entry of
+ * block-atlas sprite plus ARGB tint. The block entity only stores a liquid id string; this is
+ * where that id becomes pixels (drawn by {@code MortarAndPestleRenderer}). Every builtin entry
+ * reuses vanilla's animated still-water sprite and differs only in tint -- the atlas ticker
+ * animates any sprite whose texture carries an animation {@code .mcmeta}, so animation comes for
+ * free. Builtin ids: "water" (vanilla water blue, ~80% alpha), "ink" (from grinding an ink sac,
+ * near-opaque black), and one per DyeColor named exactly by {@code DyeColor.getName()} (e.g.
+ * "pink", "light_gray") at ~80% alpha -- grind recipes reference liquids by these ids, so that
+ * naming is a data contract. Mods add liquids via {@link #register} without touching the block
+ * or renderer; {@link #get} returns null for empty/unknown ids (renderer draws no liquid).
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class MortarLiquids {
-    /** A liquid's visual: which block-atlas sprite to draw, and the ARGB colour to tint it. */
     public record Entry(ResourceLocation spriteId, int tint) {
-        /** Resolves the sprite from the block atlas. Animated automatically by the atlas ticker
-         *  when the underlying texture carries an animation {@code .mcmeta} (vanilla water does). */
         public TextureAtlasSprite sprite() {
             return Minecraft.getInstance()
                 .getTextureAtlas(InventoryMenu.BLOCK_ATLAS)
@@ -36,19 +37,14 @@ public final class MortarLiquids {
         }
     }
 
-    /** Every liquid reuses vanilla's animated still-water sprite, just tinted differently. */
     private static final ResourceLocation WATER_SPRITE =
         ResourceLocation.withDefaultNamespace("block/water_still");
 
     private static final Map<String, Entry> REGISTRY = new HashMap<>();
 
     static {
-        // Water — vanilla water blue at ~80% alpha.
         register("water", new Entry(WATER_SPRITE, 0xCC3F76E4));
-        // Ink — the dye produced by grinding an ink sac; near-opaque pure black.
         register("ink", new Entry(WATER_SPRITE, 0xF0050505));
-        // One liquid per dye colour, tinted with that dye's colour at ~80% alpha. Recipes
-        // produce these by id (the DyeColor name, e.g. "pink", "light_gray").
         for (DyeColor color : DyeColor.values()) {
             register(color.getName(),
                 new Entry(WATER_SPRITE, 0xCC000000 | (color.getTextureDiffuseColor() & 0xFFFFFF)));
@@ -62,7 +58,6 @@ public final class MortarLiquids {
         REGISTRY.put(id, entry);
     }
 
-    /** The liquid for {@code id}, or {@code null} for an empty/unknown id. */
     @Nullable
     public static Entry get(String id) {
         return id == null || id.isEmpty() ? null : REGISTRY.get(id);

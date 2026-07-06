@@ -14,49 +14,56 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * One AI city-state — a discovered vanilla village repurposed as a diplomatic actor (see the
+ * One AI city-state -- a discovered vanilla village repurposed as a diplomatic actor (see the
  * CITY_STATES plan). Mutable record-style class persisted inside {@link CityStateData}, mirroring the
  * {@code BarbarianCamp} save/load pattern.
  *
  * <p>We DO NOT touch the village's villagers or buildings (mod compatibility). The only block we add
- * is a faction banner beside the village centre — the future capture objective. The city-state's
- * economy is an abstract, grounded <b>trade-stock ledger</b> ({@link #ledger}); it never fills
- * physical chests off-screen (CITY_STATES §1D anti-cheat).
+ * is a faction banner beside the village centre -- the future capture objective. The city-state's
+ * economy is an abstract, grounded trade-stock ledger ({@link #ledger}); it never fills physical
+ * chests off-screen (CITY_STATES anti-cheat). Grounding scans (job POIs, resource chunks, counted
+ * homes) are persisted so {@link CityStateEconomy} can run the whole economy off-screen without ever
+ * loading a chunk; prosperity breathes population/tech/garrison around the bed-counted baseline.
  *
- * <p>{@link #realized} is transient and forced false on load (no entities are saved).
+ * <p>War state lives in {@link #wars}, keyed by the attacking settlement -- more than one settlement
+ * can war one city-state at once, and capture goes to whoever scores the carryable banner standard
+ * first (mirrors {@code SettlementData.StolenStandard}). {@link #atWar} is a dead legacy flag kept
+ * only so old saves still deserialize.
+ *
+ * <p>Save-format invariants: {@link #realized} and the transient economy caches are never saved
+ * (realized is forced false on load, since no entities persist). {@link #ECON_VERSION} gates a
+ * one-time migration -- saves below 2 (the pre-living-economy placeholder) get {@link #ledger}
+ * cleared on load and reseeded from the current catalog on the next economy tick, so old worlds
+ * converge in one tick with no stale sand/stick stock.
  */
 public final class CityState {
     public final UUID id;
-    public BlockPos center;            // village meeting-point (bell) — the identity anchor
-    public BlockPos bannerPos;         // our added faction banner (the raze/capture target)
-    public ResourceLocation biome;     // resolved once at detection
-    public long languageSeed;          // deterministic per-village tongue seed
-    public String name = "";           // the city-state's name in its own tongue
+    public BlockPos center;
+    public BlockPos bannerPos;
+    public ResourceLocation biome;
+    public long languageSeed;
+    public String name = "";
     public CityStateDifficulty difficulty = CityStateDifficulty.MEDIUM;
 
-    // Economy / evolution (abstract — see CITY_STATES plan Phase 3, the "living economy").
-    public final Map<String, Integer> ledger = new LinkedHashMap<>(); // item id → tradeable surplus
-    public final Set<String> knownTech = new HashSet<>();             // research the city-state has adopted
-    public double techProgress;        // 0..1 toward adopting the next missing tech
-    public int believedPop = BASE_POP; // countedHomes + popDrift, clamped — drives production + caps
-    public long lastEconomyTick;       // off-screen clock anchor
+    public final Map<String, Integer> ledger = new LinkedHashMap<>();
+    public final Set<String> knownTech = new HashSet<>();
+    public double techProgress;
+    public int believedPop = BASE_POP;
+    public long lastEconomyTick;
 
-    // Living-economy state (Phase 3). Grounding scans persist so the economy runs entirely
-    // off-screen; prosperity breathes population/tech/garrison around the bed-counted baseline.
-    public int countedHomes = BASE_POP;   // beds counted near the bell (the grounded pop baseline)
-    public int popDrift;                  // prosperity-driven daily drift around countedHomes
-    public double prosperity = 0.5;       // P ∈ [0,2] — fed + trading thrives, isolated/starving stagnates
-    public double fedRatio = 1.0;         // smoothed eaten/needed food ratio
-    public double tradeVolume;            // decaying sum of completed-deal value with players (P4 feeds it)
-    public long dayIndex;                 // last in-game day the daily pass ran
-    public final Map<String, Integer> jobPois = new LinkedHashMap<>();       // job-site POI id → count
-    public final Map<String, Integer> resourceChunks = new LinkedHashMap<>(); // ChunkResource name → count
-    public final Set<Long> scannedChunks = new HashSet<>();                  // claimed chunks already classified
-    public final Map<String, Integer> imports = new LinkedHashMap<>();       // delivered non-food, drained daily
-    public final java.util.List<Demand> demands = new java.util.ArrayList<>(); // active demand slots (≤3)
-    public final Map<String, Long> demandCooldowns = new LinkedHashMap<>();  // item id → day it may reroll
+    public int countedHomes = BASE_POP;
+    public int popDrift;
+    public double prosperity = 0.5;
+    public double fedRatio = 1.0;
+    public double tradeVolume;
+    public long dayIndex;
+    public final Map<String, Integer> jobPois = new LinkedHashMap<>();
+    public final Map<String, Integer> resourceChunks = new LinkedHashMap<>();
+    public final Set<Long> scannedChunks = new HashSet<>();
+    public final Map<String, Integer> imports = new LinkedHashMap<>();
+    public final java.util.List<Demand> demands = new java.util.ArrayList<>();
+    public final Map<String, Long> demandCooldowns = new LinkedHashMap<>();
 
-    /** One active demand slot: the city-state pays a premium for {@code item} until filled/expired. */
     public static final class Demand {
         public String item;
         public int qtyRemaining;
@@ -69,47 +76,38 @@ public final class CityState {
         }
     }
 
-    // Transient economy caches (never saved; rebuilt on demand).
     public transient CityStateEconomy.ActiveGoods activeGoodsCache;
-    public transient Map<String, Double> prodRemainder = new HashMap<>(); // fractional item carry-over
-    public transient double eatenValueToday;       // food value consumed since the last daily pass
-    public transient double neededValueToday;      // food value wanted since the last daily pass
-    public transient double foodDebt;              // sub-item food-value owed (items are integers)
-    public transient double wantDebt;              // sub-item wants-drain owed
+    public transient Map<String, Double> prodRemainder = new HashMap<>();
+    public transient double eatenValueToday;
+    public transient double neededValueToday;
+    public transient double foodDebt;
+    public transient double wantDebt;
 
-    public boolean bannerStamped;      // banner placed at least once
-    public boolean bannerRazed;        // banner broken (capture/defeat groundwork — P2)
-    public boolean atWar;              // legacy flag (war state now lives in #wars; kept for save compat)
-    public UUID vassalOf;              // settlement this city-state is a vassal of (captured → vassal), or null
+    public boolean bannerStamped;
+    public boolean bannerRazed;
+    public boolean atWar;
+    public UUID vassalOf;
 
-    // The city-state's claimed territory (packed chunk longs), computed at detection. Players can't
-    // found a settlement on/beside it, nor establish an outpost INSIDE it.
     public final Set<Long> claimedChunks = new HashSet<>();
 
-    public transient boolean realized; // banner stamped + (later) worker NPCs present for a nearby player
+    public transient boolean realized;
 
-    // Per player-settlement relationship (war/trade gating arrives in P2/P4).
     public final Map<UUID, Integer> relScore = new HashMap<>();
     public final Set<UUID> discoveredBy = new HashSet<>();
 
-    // War state, keyed by the attacking settlement (only players declare — §2). A city-state can be
-    // warred by more than one settlement at once; capture is by whoever scores the banner first.
     public final Map<UUID, CityStateWar> wars = new HashMap<>();
 
-    /** One settlement's war against this city-state. Mirrors the SettlementData war lifecycle. */
     public static final class CityStateWar {
-        public int pendingTicks;     // >0 = warning countdown; war goes active at 0
-        public boolean active;       // declared war is live (mercenaries defend)
+        public int pendingTicks;
+        public boolean active;
         public long startedAt;
-        public boolean peaceOffered; // the settlement has offered peace
-        public long redeclareAfter;  // tick before this pair may re-declare
-        public long capturedAt;      // >0 = this settlement has captured the standard, awaiting resolution
+        public boolean peaceOffered;
+        public long redeclareAfter;
+        public long capturedAt;
     }
 
-    // Carryable standard (break the banner during war → carry it to YOUR town hall to capture). One
-    // per city-state; capture credits whoever scores it. Mirrors SettlementData.StolenStandard.
-    public boolean standardInPlay;   // the banner item exists in the world / a carrier's pack
-    public UUID standardCarrier;     // current carrier, or null if dropped
+    public boolean standardInPlay;
+    public UUID standardCarrier;
     public BlockPos standardDroppedPos;
     public long standardDroppedAt;
     public long standardAutoReturnAt;
@@ -122,13 +120,11 @@ public final class CityState {
         return wars.computeIfAbsent(settlementId, k -> new CityStateWar());
     }
 
-    /** Mercenaries attack members of a settlement whose war is ACTIVE and not yet resolved by capture. */
     public boolean isActiveEnemy(UUID settlementId) {
         CityStateWar w = warWith(settlementId);
         return w != null && w.active && w.capturedAt == 0;
     }
 
-    /** True while any war is pending, active, or captured — freezes evolution + accrual (§1E). */
     public boolean isFrozen() {
         for (CityStateWar w : wars.values()) {
             if (w.pendingTicks > 0 || w.active || w.capturedAt > 0) return true;
@@ -136,8 +132,6 @@ public final class CityState {
         return false;
     }
 
-    /** True while the banner is broken/carried or already captured — the banner must NOT auto-rebuild
-     *  (the broken standard is the objective); a returned standard clears this and the banner re-raises. */
     public boolean standardInPlayOrCaptured() {
         if (standardInPlay) return true;
         for (CityStateWar w : wars.values()) {
@@ -146,7 +140,6 @@ public final class CityState {
         return false;
     }
 
-    /** The settlement that has captured this city-state's banner (awaiting resolution), or null. */
     public UUID capturedBySettlement() {
         for (Map.Entry<UUID, CityStateWar> e : wars.entrySet()) {
             if (e.getValue().capturedAt > 0) return e.getKey();
@@ -154,12 +147,8 @@ public final class CityState {
         return null;
     }
 
-    /** Believed population assumed for a freshly detected village until its size is counted. */
     public static final int BASE_POP = 6;
 
-    /** Economy save-format version. Saves below 2 (the pre-living-economy placeholder) get their
-     *  ledger cleared on load — the seed-at-half-cap rule repopulates it from the new catalog on the
-     *  next economy tick, so old worlds converge in one tick with no stale sand/stick stock. */
     public static final int ECON_VERSION = 2;
 
     public CityState(UUID id, BlockPos center, ResourceLocation biome) {
@@ -245,7 +234,6 @@ public final class CityState {
         tag.putLong("StdDroppedAt", standardDroppedAt);
         tag.putLong("StdAutoReturn", standardAutoReturnAt);
 
-        // Living-economy state (Phase 3). EconVersion gates the one-time ledger migration on load.
         tag.putInt("EconVersion", ECON_VERSION);
         tag.putInt("CountedHomes", countedHomes);
         tag.putInt("PopDrift", popDrift);
@@ -340,9 +328,8 @@ public final class CityState {
         cs.standardDroppedAt = tag.getLong("StdDroppedAt");
         cs.standardAutoReturnAt = tag.getLong("StdAutoReturn");
 
-        // Living-economy state (Phase 3) — all optional-with-defaults for old saves.
         if (tag.getInt("EconVersion") < ECON_VERSION) {
-            cs.ledger.clear(); // pre-catalog placeholder stock (sand/stick/cobble) — reseeds next tick
+            cs.ledger.clear(); // pre-catalog placeholder stock (sand/stick/cobble) reseeds next tick
         }
         cs.countedHomes = tag.contains("CountedHomes") ? tag.getInt("CountedHomes") : cs.believedPop;
         cs.popDrift = tag.getInt("PopDrift");

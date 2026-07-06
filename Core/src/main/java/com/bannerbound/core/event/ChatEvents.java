@@ -31,16 +31,17 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * Proximity chat. When the {@code globalChat} game rule is off (the default), both public chat and
  * private messages ({@code /msg}, {@code /tell}, {@code /w}) are range-limited to
  * {@link ProximityChat#MAX_RADIUS} blocks and fade toward transparency past
- * {@link ProximityChat#CLEAR_RADIUS} — so players can't communicate magically across the world.
- * Setting {@code /gamerule globalChat true} disables all of this and restores vanilla behaviour.
+ * {@link ProximityChat#CLEAR_RADIUS} - so players can't communicate magically across the world.
+ * {@code /gamerule globalChat true} disables all of this and restores vanilla behaviour.
  *
  * <p>Both paths cancel the vanilla delivery and re-send the message to each in-range listener as a
  * {@link ProximityChatPayload} carrying a distance-derived alpha, which the client renders as
- * per-message text transparency (see {@code ChatComponentMixin}).
+ * per-message text transparency (see {@code ChatComponentMixin}). Contact between two players'
+ * settlements is registered with {@code DiplomacyManager.discoverFromContact} on each delivery.
  *
- * <p>DIPLOMACY-TODO: the multiplayer player-list (TAB) overlay is intentionally left vanilla for now.
- * It is reserved for the upcoming diplomacy system (faction grouping / relations colouring); do not
- * repurpose or restyle it before that lands.
+ * <p>The multiplayer player-list (TAB) overlay is intentionally left vanilla and reserved for the
+ * upcoming diplomacy system (faction grouping / relations colouring); do not repurpose or restyle it
+ * before that lands.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -52,18 +53,14 @@ public final class ChatEvents {
         return level.getGameRules().getBoolean(BannerboundGameRules.GLOBAL_CHAT);
     }
 
-    // ---------------------------------------------------------------- public chat
-
     @SubscribeEvent
     public static void onServerChat(ServerChatEvent event) {
         ServerPlayer sender = event.getPlayer();
         ServerLevel level = sender.serverLevel();
         if (globalChat(level)) {
-            return; // vanilla server-wide chat
+            return;
         }
 
-        // Cancel the normal broadcast and deliver proximity copies ourselves. event.getMessage()
-        // is the decorated message *content*; wrap it the way vanilla's CHAT type would.
         event.setCanceled(true);
         Component line = Component.translatable("chat.type.text", sender.getDisplayName(), event.getMessage());
         MinecraftServer server = level.getServer();
@@ -75,9 +72,9 @@ public final class ChatEvents {
             for (ServerPlayer listener : server.getPlayerList().getPlayers()) {
                 float alpha;
                 if (listener == sender) {
-                    alpha = 1.0f; // you always hear yourself
+                    alpha = 1.0f;
                 } else if (listener.level() != level) {
-                    continue; // different dimension — out of earshot
+                    continue;
                 } else {
                     double dist = Math.sqrt(listener.position().distanceToSqr(origin));
                     if (!ProximityChat.inRange(dist)) {
@@ -95,15 +92,13 @@ public final class ChatEvents {
         });
     }
 
-    // ---------------------------------------------------------------- private messages
-
     @SubscribeEvent
     public static void onCommand(CommandEvent event) {
         ParseResults<CommandSourceStack> parse = event.getParseResults();
         CommandSourceStack source = parse.getContext().getSource();
         ServerPlayer sender = source.getPlayer();
         if (sender == null) {
-            return; // console / command block — not a positional speaker
+            return;
         }
 
         String input = parse.getReader().getString();
@@ -114,14 +109,13 @@ public final class ChatEvents {
 
         ServerLevel level = sender.serverLevel();
         if (globalChat(level)) {
-            return; // vanilla whisper, unrestricted
+            return;
         }
 
         Collection<ServerPlayer> targets;
         Component messageText;
         try {
-            // Resolve the parsed arguments. For the /tell and /w aliases (Brigadier redirects to the
-            // /msg node) the "targets" / "message" arguments live in the deepest child context.
+            // /tell and /w redirect to the /msg node, so targets/message live in the deepest child context.
             CommandContext<CommandSourceStack> ctx = parse.getContext().build(input);
             while (ctx.getChild() != null) {
                 ctx = ctx.getChild();
@@ -129,10 +123,9 @@ public final class ChatEvents {
             targets = EntityArgument.getPlayers(ctx, "targets");
             messageText = MessageArgument.getMessage(ctx, "message");
         } catch (Exception e) {
-            return; // couldn't parse it as a whisper — let vanilla run/report normally
+            return;
         }
 
-        // We're handling delivery ourselves.
         event.setCanceled(true);
         Vec3 origin = sender.position();
 
@@ -155,7 +148,6 @@ public final class ChatEvents {
                 .withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC);
 
             PacketDistributor.sendToPlayer(target, new ProximityChatPayload(incoming, alpha));
-            // Sender hears their own outgoing line clearly.
             PacketDistributor.sendToPlayer(sender, new ProximityChatPayload(outgoing, 1.0f));
             if (target != sender) {
                 com.bannerbound.core.api.settlement.SettlementData data =
@@ -166,7 +158,6 @@ public final class ChatEvents {
             }
         }
 
-        // Keep the server log parity with vanilla whispers.
         BannerboundCore.LOGGER.info("[{}] whispered: {}", sender.getGameProfile().getName(), messageText.getString());
     }
 

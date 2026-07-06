@@ -20,14 +20,16 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The Choose-Faith vote (FAITH_PLAN.md Part 1) — opened from the town hall Faith button
- * while the founding window is open. Same two-stage model as
- * {@link ChooseGovernmentScreen}: toggle a selection freely, Cast Vote locks it.
+ * The Choose-Faith vote (FAITH_PLAN.md Part 1), opened from the town hall Faith button while
+ * the founding window is open. Same two-stage model as {@link ChooseGovernmentScreen}: toggle
+ * a selection freely ({@code selected}, "" = none, initialised from the server snapshot) until
+ * Cast Vote locks it ({@code hasCast}).
  * <p>
- * Options: found ASTROLOGY, found TOTEMIC, or adopt any faith already founded on the
- * server (the cross-faction list — empty on the world's first founding, which is fine:
- * first movers define the world's religions). Founding options carry a proposed NAME
- * typed here; the winning option's earliest proposal names the faith.
+ * Options: found ASTROLOGY, found TOTEMIC, or adopt any faith already founded on the server
+ * (the cross-faction list, empty on the world's first founding, which is fine: first movers
+ * define the world's religions). Founding options carry a proposed NAME typed here and REQUIRE
+ * it -- Cast is re-gated on every keystroke; adoption needs no name. The winning option's
+ * earliest proposal names the faith. The adopt list is truncated to MAX_ADOPT_ROWS for M1.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -36,7 +38,6 @@ public class ChooseFaithScreen extends PolishedScreen {
     private static final int BTN_W = 220;
     private static final int BTN_H = 24;
     private static final int BTN_PITCH = 28;
-    /** Adoptable faiths shown at once — server list beyond this is truncated for M1. */
     private static final int MAX_ADOPT_ROWS = 4;
 
     private final OpenChooseFaithScreenPayload snapshot;
@@ -44,7 +45,6 @@ public class ChooseFaithScreen extends PolishedScreen {
     private int totemicVotes;
     private final List<Integer> adoptVotes;
 
-    /** Option key currently selected ("" = none) — free to change until {@link #hasCast}. */
     private String selected;
     private boolean hasCast;
 
@@ -70,7 +70,6 @@ public class ChooseFaithScreen extends PolishedScreen {
         optionButtons.clear();
         optionKeys.clear();
         int adoptRows = Math.min(snapshot.faithIds().size(), MAX_ADOPT_ROWS);
-        // title + subtitle + 2 found rows + name box + adopt header + adopt rows + cast + cancel
         panelH = 44 + 2 * BTN_PITCH + 30
                 + (adoptRows > 0 ? 16 + adoptRows * BTN_PITCH : 0) + BTN_PITCH + 36;
         int panelX = (this.width - PANEL_W) / 2;
@@ -88,13 +87,12 @@ public class ChooseFaithScreen extends PolishedScreen {
         nameBox.setMaxLength(CastFaithVotePayload.MAX_NAME_LENGTH);
         nameBox.setHint(Component.translatable("bannerbound.faith.name.hint")
             .withStyle(ChatFormatting.DARK_GRAY));
-        // Founding REQUIRES a name — re-gate the Cast button on every keystroke.
         nameBox.setResponder(text -> refreshButtons());
         addRenderableWidget(nameBox);
         y += 30;
 
         if (adoptRows > 0) {
-            y += 16; // "or adopt:" header drawn in renderPolishedExtras
+            y += 16;
             for (int i = 0; i < adoptRows; i++) {
                 addOption(FaithManager.OPTION_ADOPT_PREFIX + snapshot.faithIds().get(i), btnX, y);
                 y += BTN_PITCH;
@@ -162,7 +160,6 @@ public class ChooseFaithScreen extends PolishedScreen {
             nameBox.setEditable(!hasCast && selected.startsWith("found:"));
         }
         if (castBtn != null) {
-            // Founding options demand a name; adoption doesn't.
             boolean nameOk = !selected.startsWith("found:")
                 || (nameBox != null && !nameBox.getValue().trim().isEmpty());
             castBtn.active = !hasCast && !selected.isEmpty() && nameOk;

@@ -49,44 +49,32 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
 /**
- * All Bannerbound admin + player commands, rooted at {@code /bannerbound}. Subsumes the old
- * {@code /settlement} command — its subcommands now live as direct children here.
+ * All Bannerbound admin + player commands, rooted at /bannerbound; registered from
+ * onRegisterCommands off the RegisterCommandsEvent bus. Subsumes the old /settlement command (its
+ * subcommands are direct children here). Every subcommand is a static execute* returning a
+ * Brigadier result count; most are op-only (level 2) debug/test harnesses for the big systems
+ * (barbarians, city-states, faith sky, crisis, codex/Chronicle, population + brain_report, chunk
+ * typing, walls, diplomacy, simulate / trader_simulate).
  *
- * <p>Player subcommands (no permission gate):
- * <ul>
- *   <li>{@code /bannerbound leave} — leave the player's current settlement.</li>
- *   <li>{@code /bannerbound world get_age} — print the current world era.</li>
- * </ul>
+ * <p>Permission model: only a few subcommands are player-facing with no gate (leave, world
+ * get_age, codex open, vote, the walls preview/status views). chunkclaim and join are op-gated on
+ * purpose - they bypass the claim economy and the membership-consent flow respectively, so they
+ * must never be reachable by ordinary players on a server (pre-playtest audit A2/A3). When adding
+ * a subcommand, default to .requires(hasPermission(2)) unless it is deliberately player-facing.
  *
- * <p>{@code chunkclaim} and {@code join <name>} are op-gated (level 2) debug tools: they bypass
- * the claim economy and the membership-consent flow respectively, so they must never be
- * player-facing on a server (pre-playtest audit A2/A3).
+ * <p>Target-arg gotcha: settlement-name args come in two flavours and the wrong suggester breaks
+ * name lookup. targetSuggestionsQuotable() (escapeIfRequired) pairs with StringArgumentType.string()
+ * args - Brigadier reads the quoted form back as the bare name. targetSuggestionsBare() pairs with
+ * greedyString args - quoting would survive verbatim into the parsed value. The literal "all"
+ * broadcasts a change to every settlement. Generation rates (set_/add_*) clamp at 0, so a negative
+ * add_* that would go below zero just zeroes out.
  *
- * <p>Admin subcommands (op level 2):
- * <ul>
- *   <li>{@code /bannerbound reset_world_age} — drop world era to ANCIENT, clear the
- *       discovered-research set.</li>
- *   <li>{@code /bannerbound set_age <era>} — set the calling player's settlement era.</li>
- *   <li>{@code /bannerbound world set_age <era>} — set the world era directly.</li>
- *   <li>{@code /bannerbound force_max_age <era|none>} — friendly setter for the
- *       {@code forceMaxAge} gamerule; caps how far any settlement/world era may progress
- *       ({@code none} clears the cap). No-arg form prints the current cap.</li>
- *   <li>{@code /bannerbound unlock <research>} — force-complete a research (walking prereqs).</li>
- *   <li>{@code /bannerbound unresearch <research>} — undo a completed research on the caller's settlement.</li>
- *   <li>{@code /bannerbound clear_rod_selection <target>} — wipe Foreman's Rod selections for a
- *       settlement name or {@code all}.</li>
- *   <li>{@code /bannerbound <settlement|all> set_food_generation <value>}</li>
- *   <li>{@code /bannerbound <settlement|all> set_culture_generation <value>}</li>
- *   <li>{@code /bannerbound <settlement|all> set_science_generation <value>}</li>
- *   <li>{@code /bannerbound <settlement|all> add_food_generation <value>} (value may be negative)</li>
- *   <li>{@code /bannerbound <settlement|all> add_culture_generation <value>} (value may be negative)</li>
- *   <li>{@code /bannerbound <settlement|all> add_science_generation <value>} (value may be negative)</li>
- * </ul>
- *
- * <p>Generation rates are clamped at 0 — a negative {@code add_*} that would drive the rate
- * below zero just zeroes it out. Settlement names containing spaces must be quoted in the
- * {@code <settlement|all>} argument (Brigadier's standard string-quoting). The literal
- * {@code "all"} broadcasts the change to every settlement on the server.
+ * <p>Behaviours folded in from method docs: force_max_age's "none" clears the cap (stored as the
+ * last era); unresearch serves both the science and culture trees from one command; unlock walks
+ * the prereq chain and completes anything missing; set_relationship targets citizens by any vanilla
+ * selector (each carries a scoreboard tag equal to its bare name), bypasses the FAMILY guard and
+ * writes symmetrically so both sides agree; walls layout freezes the plan (exercising the WallData
+ * NBT round-trip) while cancel forgets the plan but never the placed blocks.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -108,7 +96,6 @@ public final class BannerboundCommand {
         };
     }
 
-    /** Era names plus {@code "none"} (clear the cap). For {@code /bannerbound force_max_age}. */
     private static SuggestionProvider<CommandSourceStack> forceMaxAgeSuggestions() {
         return (ctx, builder) -> {
             builder.suggest("none");
@@ -147,8 +134,6 @@ public final class BannerboundCommand {
         };
     }
 
-    /** Suggests only research ids the caller's settlement has actually completed — better UX
-     *  for the unresearch subcommand than dumping the whole tree, most of which isn't applicable. */
     private static SuggestionProvider<CommandSourceStack> completedResearchSuggestions() {
         return (ctx, builder) -> {
             ServerPlayer player = ctx.getSource().getPlayer();
@@ -166,10 +151,6 @@ public final class BannerboundCommand {
         };
     }
 
-    /** Suggests every settlement name plus the literal {@code "all"}, with names that contain
-     *  whitespace pre-quoted via {@link StringArgumentType#escapeIfRequired}. Use for the
-     *  generation commands' {@link StringArgumentType#string()} arg — Brigadier reads the
-     *  quoted form back as the bare name. */
     private static SuggestionProvider<CommandSourceStack> targetSuggestionsQuotable() {
         return (ctx, builder) -> {
             builder.suggest("all");
@@ -184,8 +165,6 @@ public final class BannerboundCommand {
         };
     }
 
-    /** Suggests every settlement name plus {@code "all"} as bare strings. Use for greedy-string
-     *  args — quoting would end up in the parsed value verbatim and break name lookup. */
     private static SuggestionProvider<CommandSourceStack> targetSuggestionsBare() {
         return (ctx, builder) -> {
             builder.suggest("all");
@@ -296,8 +275,7 @@ public final class BannerboundCommand {
                 .executes(BannerboundCommand::executeChunkClaim))
             .then(Commands.literal("leave")
                 .executes(BannerboundCommand::executeLeave))
-            // Clickable chat-vote target: the [Yes]/[No] in a council vote broadcast runs this.
-            // No permission gate — ChatVoteManager validates settlement membership itself.
+            // No permission gate: clickable [Yes]/[No] must reach players; ChatVoteManager checks membership.
             .then(Commands.literal("vote")
                 .then(Commands.argument("id", IntegerArgumentType.integer(1))
                     .then(Commands.literal("yes")
@@ -439,8 +417,6 @@ public final class BannerboundCommand {
         );
     }
 
-    // ─── Existing /settlement subcommands, now /bannerbound subcommands ──────────────────────
-
     private static int executeResetWorldAge(CommandContext<CommandSourceStack> ctx) {
         MinecraftServer server = ctx.getSource().getServer();
         SettlementData data = SettlementData.get(server.overworld());
@@ -452,7 +428,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Opens the preview-only WorldBox-style Ancient Town Hall skin on the caller's client. */
     private static int executeGuiAncient(CommandContext<CommandSourceStack> ctx)
             throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
@@ -463,9 +438,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Op debug: prints the barbarian known-tech set (all globally-completed research except the
-     *  single most-recent), the derived tech era, and the resolved capability — proves the
-     *  one-behind-the-frontier derivation updates live as the world researches. */
     private static int executeBarbarianKnownTech(CommandContext<CommandSourceStack> ctx) {
         MinecraftServer server = ctx.getSource().getServer();
         SettlementData data = SettlementData.get(server.overworld());
@@ -489,8 +461,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Op debug: lists seeded barbarian camps (records only in Phase 2) with type, position, biome,
-     *  and chunk distance from the caller. */
     private static int executeListBarbarians(CommandContext<CommandSourceStack> ctx) {
         MinecraftServer server = ctx.getSource().getServer();
         com.bannerbound.core.barbarian.BarbarianData data =
@@ -520,8 +490,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Op test: force-spawns a camp ~12 blocks ahead of the player, bypassing the chance/distance
-     *  gates. Optional type arg (nomad/tribe/raider/marauder); otherwise resolved from the biome. */
     private static int executeSpawnBarbarian(CommandContext<CommandSourceStack> ctx, String typeName)
             throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
@@ -547,7 +515,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Op test: makes the nearest camp hostile to the caller's settlement and raids it immediately. */
     private static int executeNearestBarbarianRaid(CommandContext<CommandSourceStack> ctx)
             throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
@@ -560,10 +527,6 @@ public final class BannerboundCommand {
         return ok ? 1 : 0;
     }
 
-    /** Op test: makes the nearest non-razed camp dispatch a diplomat to the caller's settlement right
-     *  now (bypassing the discovery + scout-timer gates) so the full messenger flow can be watched:
-     *  it ghost-travels from the camp, realizes as a real entity within 64 blocks of a player, walks to
-     *  the hall, announces, and waits there to be right-clicked for parley. Stand at/near your hall. */
     private static int executeNearbyBarbarianMessenger(CommandContext<CommandSourceStack> ctx)
             throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
@@ -611,7 +574,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Op test: removes all camps (discarding realized NPCs) and clears razed memory. */
     private static int executeClearBarbarians(CommandContext<CommandSourceStack> ctx) {
         var level = ctx.getSource().getServer().overworld();
         int n = com.bannerbound.core.barbarian.BarbarianCampManager.clearAllCamps(level);
@@ -620,7 +582,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Op test: lists every known city-state with its economy/tech snapshot. */
     private static int executeListCityStates(CommandContext<CommandSourceStack> ctx) {
         var level = ctx.getSource().getServer().overworld();
         var data = com.bannerbound.core.citystate.CityStateData.get(level);
@@ -653,7 +614,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Op test: detects the nearest village to the caller as a city-state, bypassing the scan timer. */
     private static int executeDetectCityState(CommandContext<CommandSourceStack> ctx)
             throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
@@ -667,8 +627,6 @@ public final class BannerboundCommand {
         return cs == null ? 0 : 1;
     }
 
-    /** Op test: forces an immediate active war between the caller's settlement and the nearest
-     *  discovered city-state (no countdown) — walk to it to fight its mercenaries. */
     private static int executeCityStateWar(CommandContext<CommandSourceStack> ctx)
             throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
@@ -681,7 +639,6 @@ public final class BannerboundCommand {
         return ok ? 1 : 0;
     }
 
-    /** Op test: removes all city-state records (placed banner blocks remain). */
     private static int executeClearCityStates(CommandContext<CommandSourceStack> ctx) {
         var level = ctx.getSource().getServer().overworld();
         int n = com.bannerbound.core.citystate.CityStateManager.clearAll(level);
@@ -690,8 +647,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Op/debug: strips a settlement's faith (or every settlement's, target "all") so the
-     *  founding flow can be re-tested without a fresh world. */
     private static int executeResetReligion(CommandContext<CommandSourceStack> ctx) {
         MinecraftServer server = ctx.getSource().getServer();
         String target = StringArgumentType.getString(ctx, "settlement").trim();
@@ -709,7 +664,6 @@ public final class BannerboundCommand {
         return n;
     }
 
-    /** Debug readout of the faith sky: seed, star census, and each planet's current view. */
     private static int executeSkyInfo(CommandContext<CommandSourceStack> ctx) {
         MinecraftServer server = ctx.getSource().getServer();
         com.bannerbound.core.api.faith.FaithData faith =
@@ -740,7 +694,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Debug: rolls a fresh sky and pushes it to every online client immediately. */
     private static int executeSkyReroll(CommandContext<CommandSourceStack> ctx) {
         MinecraftServer server = ctx.getSource().getServer();
         com.bannerbound.core.api.faith.FaithData faithData =
@@ -905,14 +858,12 @@ public final class BannerboundCommand {
                 .withStyle(ChatFormatting.RED));
             return 0;
         }
-        // COOLDOWN already sent its own message from tryLeave — just report the failed exit code.
         if (result == SettlementManager.LeaveResult.COOLDOWN) {
             return 0;
         }
         return 1;
     }
 
-    /** Cast a Yes/No on a council chat vote (run by the clickable [Yes]/[No] in the broadcast). */
     private static int executeChatVote(CommandContext<CommandSourceStack> ctx, boolean yes)
             throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
@@ -979,8 +930,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Friendly name-based setter for the {@code forceMaxAge} gamerule. {@code none} = no cap
-     *  (stored as the last era). */
     private static int executeForceMaxAge(CommandContext<CommandSourceStack> ctx) {
         MinecraftServer server = ctx.getSource().getServer();
         String arg = StringArgumentType.getString(ctx, "era");
@@ -1034,8 +983,6 @@ public final class BannerboundCommand {
                 .withStyle(ChatFormatting.RED));
             return 0;
         }
-        // Walks the prereq chain and unlocks anything missing along the way. So unlock
-        // iron_working from a fresh settlement also fires smelting/knapping/wood_refining/etc.
         ResearchManager.forceCompleteWithPrereqs(player.getServer(), s, def);
         data.setDirty();
         ctx.getSource().sendSuccess(
@@ -1055,7 +1002,6 @@ public final class BannerboundCommand {
                 .withStyle(ChatFormatting.RED));
             return 0;
         }
-        // Try the science tree first, then the culture tree — one command serves both.
         ResearchDefinition def = ResearchTreeLoader.get(researchId);
         ResearchDefinition cultureDef =
             com.bannerbound.core.api.research.data.CultureTreeLoader.get(researchId);
@@ -1089,11 +1035,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /**
-     * Op-only debug command: clears every Foreman's Rod selection owned by a named settlement, or
-     * by all settlements if {@code target} is {@code "all"}. Doesn't touch any other settlement
-     * state — purely a way to wipe stuck/orphaned overlays without restarting the server.
-     */
     private static int executeClearRodSelection(CommandContext<CommandSourceStack> ctx) {
         String target = StringArgumentType.getString(ctx, "target").trim();
         CommandSourceStack source = ctx.getSource();
@@ -1103,7 +1044,7 @@ public final class BannerboundCommand {
 
         int removed = 0;
         if ("all".equalsIgnoreCase(target)) {
-            // Snapshot the rod ids first — unregister() mutates the underlying map.
+            // Snapshot rod ids first: unregister() mutates the underlying map.
             List<UUID> ids = new ArrayList<>();
             for (BlockSelection s : registry.getAll()) {
                 ids.add(s.rodId());
@@ -1201,17 +1142,6 @@ public final class BannerboundCommand {
         return ok ? 1 : 0;
     }
 
-    /**
-     * Debug-only: hard-set the relationship score between two citizen entities. Both arguments
-     * are resolved via {@link EntityArgument} so any vanilla selector works
-     * ({@code @e[type=bannerbound:citizen,sort=nearest,limit=1]}, UUID, etc.). Each citizen also
-     * carries a scoreboard tag equal to its bare name (see {@code CitizenEntity#refreshDisplayName}),
-     * so the easiest form is to target by the name shown above the head:
-     * {@code /bannerbound set_relationship @e[tag=Bjorn,limit=1] @e[tag=Astrid,limit=1] 50}. Bypasses the
-     * normal FAMILY guard — setting a value here always wipes any family flag, mirroring the
-     * "this is for testing" intent. Score is clamped client-side (Brigadier 0..100 + sign) and
-     * applied symmetrically so the invariant that both sides agree stays intact.
-     */
     private static int executeSetRelationship(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         net.minecraft.world.entity.Entity rawA = EntityArgument.getEntity(ctx, "citizenA");
         net.minecraft.world.entity.Entity rawB = EntityArgument.getEntity(ctx, "citizenB");
@@ -1235,19 +1165,8 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    // ─── Crowd-LOD stress test (throwaway) ───────────────────────────────────────────────────
-
-    /** Default real near-band citizens spawned by {@code simulate}. The bulk of the believed
-     *  population is the client-side decorative crowd; these are the genuine full-detail "workers"
-     *  used to judge near-band fidelity against the cheaper LOD tiers. */
     private static final int SIMULATE_REAL_BUDGET = 16;
 
-    /**
-     * {@code /bannerbound simulate <population> <settlement> <duration>} — op debug. Materializes a
-     * tiered crowd ({@link com.bannerbound.core.sim.SimulationManager}) for the given believed
-     * population in the named settlement for {@code duration} seconds, then auto-cleans up. The
-     * client renders a deterministic decorative crowd + a believed-vs-rendered / FPS / TPS overlay.
-     */
     private static int executeSimulate(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         MinecraftServer server = source.getServer();
@@ -1273,7 +1192,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** {@code /bannerbound simulate_stop} — op debug. Ends any running simulation early. */
     private static int executeSimulateStop(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         if (!com.bannerbound.core.sim.SimulationManager.isActive()) {
@@ -1285,13 +1203,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /**
-     * {@code /bannerbound trader_simulate <start> <end>} — op debug. Dispatches one real trader that
-     * walks from {@code start} to {@code end}, carrying its own moving chunk-load bubble (so it keeps
-     * travelling with no player nearby) and laying a road as it goes. A proof of the long-distance
-     * traversal model for stockers / outpost couriers / diplomacy traders. See
-     * {@link com.bannerbound.core.sim.TraderSimManager}.
-     */
     private static int executeTraderSimulate(CommandContext<CommandSourceStack> ctx, boolean sailing) {
         CommandSourceStack source = ctx.getSource();
         BlockPos start = BlockPos.containing(ctx.getArgument("start", Coordinates.class).getPosition(source));
@@ -1311,7 +1222,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** {@code /bannerbound trader_simulate_stop} — op debug. Ends any running trader simulation early. */
     private static int executeTraderSimulateStop(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         if (!com.bannerbound.core.sim.TraderSimManager.isActive()) {
@@ -1323,8 +1233,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    // ─── Generation commands: set/add for food/culture/science ───────────────────────────────
-
     private enum GenerationStat { FOOD, CULTURE, SCIENCE }
 
     private static int executeSetGeneration(CommandContext<CommandSourceStack> ctx, GenerationStat stat) {
@@ -1335,11 +1243,6 @@ public final class BannerboundCommand {
         return applyGeneration(ctx, stat, /*additive=*/ true);
     }
 
-    /**
-     * Shared implementation for set/add generation commands. Resolves the target ({@code all} →
-     * every settlement, otherwise lookup by name), applies the rate change (clamped at zero), and
-     * broadcasts the resulting state so the Town Hall UI updates immediately.
-     */
     private static int applyGeneration(CommandContext<CommandSourceStack> ctx, GenerationStat stat, boolean additive) {
         CommandSourceStack source = ctx.getSource();
         MinecraftServer server = source.getServer();
@@ -1399,11 +1302,6 @@ public final class BannerboundCommand {
         }
     }
 
-    // ─── Population debug (test harness for the settlement-stage system) ──────────────────────
-
-    /** {@code /bannerbound <settlement|all> set_population|add_population <n>} — op debug. Spawns
-     *  real roster citizens via the immigration path or discards them to hit the target, which
-     *  naturally drives the settlement-stage transition (Village + fireworks) in ImmigrationManager. */
     private static int executePopulation(CommandContext<CommandSourceStack> ctx, boolean additive) {
         CommandSourceStack source = ctx.getSource();
         MinecraftServer server = source.getServer();
@@ -1437,7 +1335,6 @@ public final class BannerboundCommand {
         return targets.size();
     }
 
-    /** Spawns/removes citizens to reach the desired population. Returns the signed change applied. */
     private static int applyPopulation(MinecraftServer server, Settlement s, int value, boolean additive) {
         net.minecraft.server.level.ServerLevel level = server.overworld();
         int current = s.population();
@@ -1458,11 +1355,6 @@ public final class BannerboundCommand {
         return 0;
     }
 
-    /** {@code /bannerbound <settlement|all> brain_report} — op debug. Prints, per settlement, the
-     *  stage and how many loaded citizens are on the cheap ambient brain vs still running A*
-     *  navigation. At Village the ambient count should equal the loaded count and active A* paths
-     *  should fall to ~0 — that's the proof the cost-cut gate is firing. */
-    /** {@code /bannerbound ai_profiler} — op debug. Toggles the on-screen citizen-AI cost overlay. */
     private static int executeToggleProfiler(CommandContext<CommandSourceStack> ctx) {
         com.bannerbound.core.sim.CitizenAiProfiler.toggle();
         boolean on = com.bannerbound.core.sim.CitizenAiProfiler.enabled();
@@ -1510,7 +1402,6 @@ public final class BannerboundCommand {
         return targets.size();
     }
 
-    /** Discards the most-recently-added roster citizens (entity + record). Returns the count removed. */
     private static int removeCitizens(net.minecraft.server.level.ServerLevel level, Settlement s, int count) {
         List<com.bannerbound.core.api.settlement.Citizen> roster = new ArrayList<>(s.citizens());
         int removed = 0;
@@ -1524,9 +1415,6 @@ public final class BannerboundCommand {
         return removed;
     }
 
-    // ─── Specialized-chunk debug: deterministic resource typing ──────────────────────────────────
-
-    /** {@code /bannerbound chunktype} — op debug. Prints the resource type of the chunk you're in. */
     private static int executeChunkType(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
         net.minecraft.server.level.ServerLevel level = player.serverLevel();
@@ -1541,8 +1429,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** {@code /bannerbound chunktype <radius>} — op debug. Prints an ASCII map of chunk types around
-     *  you ({@code @} = your chunk) plus a legend/count, so distribution + rarity can be tuned by eye. */
     private static int executeChunkTypeRadius(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
         ServerPlayer player = ctx.getSource().getPlayerOrException();
         net.minecraft.server.level.ServerLevel level = player.serverLevel();
@@ -1571,13 +1457,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    // ─── Walls (WALLS_PLAN.md Phase 1 debug) ─────────────────────────────────────────────────
-
-    /**
-     * Computes the wall layout for the caller's settlement against the default design set,
-     * freezes it as the settlement's plan (exercises the {@code WallData} NBT round-trip),
-     * dumps stats to chat and sketches the blueprint with one-shot dust particles.
-     */
     private static int executeWallsLayout(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         ServerPlayer player = source.getPlayer();
@@ -1636,12 +1515,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /**
-     * Recomputes the layout, freezes it as the settlement's wall plan and pushes the blueprint
-     * to every online member — ghosts appear in-world and hand-building can start. Phase 3
-     * moves this behind the preview screen's Construct button (with the ≥1-gate rule once
-     * gates are placeable).
-     */
     private static int executeWallsConstruct(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         ServerPlayer player = source.getPlayer();
@@ -1682,7 +1555,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Clears the settlement's wall plan and wipes members' ghosts. */
     private static int executeWallsCancel(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         ServerPlayer player = source.getPlayer();
@@ -1697,7 +1569,6 @@ public final class BannerboundCommand {
             return 0;
         }
         net.minecraft.server.level.ServerLevel level = player.serverLevel();
-        // Cancel forgets the PLAN, never the BLOCKS — see WallService.cancel.
         final int leftoverCount = com.bannerbound.core.api.walls.WallService.cancel(level, settlement);
         if (leftoverCount < 0) {
             source.sendFailure(Component.literal("No wall plan to cancel."));
@@ -1711,7 +1582,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Completeness % + what's still needed, scanned against the committed plan. */
     private static int executeWallsStatus(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         ServerPlayer player = source.getPlayer();
@@ -1772,7 +1642,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Opens the wall preview screen (Phase 3) — same path as the future Town Hall walls tab. */
     private static int executeWallsPreview(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         ServerPlayer player = source.getPlayer();
@@ -1790,7 +1659,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** Opens the 3D refinement view directly — quick height-testing without the menu chain. */
     private static int executeWallsRefine(CommandContext<CommandSourceStack> ctx) {
         CommandSourceStack source = ctx.getSource();
         ServerPlayer player = source.getPlayer();
@@ -1808,7 +1676,6 @@ public final class BannerboundCommand {
         return 1;
     }
 
-    /** One dust particle per blueprint position, capped so a megabase can't flood the client. */
     private static int emitWallParticles(net.minecraft.server.level.ServerLevel level, WallPlan plan,
                                          Settlement settlement) {
         final int cap = 12000;
@@ -1817,7 +1684,6 @@ public final class BannerboundCommand {
         final org.joml.Vector3f gapColor = new org.joml.Vector3f(1.0f, 0.1f, 0.1f);
         plan.forEachInPrecedenceOrder(com.bannerbound.core.api.walls.WallService.resolver(level, settlement), (piece, design) -> {
             if (piece.waterGap()) {
-                // No blocks here — water is the wall. Mark the slot with a red column.
                 for (int dy = 0; dy < 4; dy++) {
                     level.sendParticles(
                         new net.minecraft.core.particles.DustParticleOptions(gapColor, 1.5f),
@@ -1841,8 +1707,6 @@ public final class BannerboundCommand {
         });
         return Math.min(count[0], cap);
     }
-
-    // ─── Helpers ─────────────────────────────────────────────────────────────────────────────
 
     private static Settlement findSettlementByName(SettlementData data, String name) {
         for (Settlement s : data.all()) {
