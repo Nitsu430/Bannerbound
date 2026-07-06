@@ -23,6 +23,8 @@ import com.bannerbound.antiquity.client.StuckSpearLayer;
 
 import java.util.Map;
 
+import com.bannerbound.antiquity.client.model.WormBaitModel;
+import com.bannerbound.antiquity.client.model.WormBaitRenderer;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.ItemRenderer;
 import net.minecraft.client.renderer.entity.LivingEntityRenderer;
@@ -246,6 +248,9 @@ public class BannerboundAntiquityClient {
             SpearedFishEntityRenderer::new);
         event.registerEntityRenderer(BannerboundAntiquity.RAFT.get(),
             RaftRenderer::new);
+
+        event.registerEntityRenderer(BannerboundAntiquity.WORM_BAIT.get(),
+            WormBaitRenderer::new);
         event.registerEntityRenderer(net.minecraft.world.entity.EntityType.LEASH_KNOT,
             RopedPostKnotRenderer::new);
     }
@@ -310,6 +315,10 @@ public class BannerboundAntiquityClient {
         event.registerLayerDefinition(
             com.bannerbound.antiquity.client.HelmetModel.LAYER,
             com.bannerbound.antiquity.client.HelmetModel::createBodyLayer);
+
+        event.registerLayerDefinition(
+            WormBaitModel.LAYER_LOCATION, WormBaitModel::createBodyLayer
+        );
     }
 
     @SubscribeEvent

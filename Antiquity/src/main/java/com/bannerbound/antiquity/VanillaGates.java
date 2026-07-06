@@ -2,7 +2,7 @@ package com.bannerbound.antiquity;
 
 import org.jetbrains.annotations.ApiStatus;
 
-import com.bannerbound.core.api.research.ResearchManager;
+import com.bannerbound.core.api.research.ItemKnowledge;
 import com.bannerbound.core.api.settlement.Settlement;
 import com.bannerbound.core.api.settlement.SettlementData;
 import com.bannerbound.core.api.vanilla.VanillaContentState;
@@ -33,13 +33,13 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
  * unless vanilla content is stripped (VanillaContentState.isEnabled() is false -- always so under
  * Antiquity); read that state, never the raw config.
  *
- * <p>Storage gate (onRightClickBlock): opening vanilla chests and barrels is locked behind research so
- * an early settlement leans on baskets / the stockpile (unlocked by storage_logistics) and can't crack
- * open structure loot chests for free. Barrel -> bannerbound.unlock.barrel (barrel_making, Antiquity
- * era); chest / trapped chest -> bannerbound.unlock.chest (joinery, Medieval, iron-gated). The check is
- * per-settlement and unsettled players are gated too; with no server context we fail open. Only the
- * GUI-open gesture is blocked -- the block stays breakable/placeable, and sneaking is left alone so a
- * held block can be placed against a chest.
+ * <p>Storage gate (onRightClickBlock): opening vanilla chests and barrels is locked behind item
+ * knowledge so an early settlement leans on baskets / the stockpile and can't crack open structure
+ * loot chests for free. Barrel and chest/trapped-chest open only once the settlement KNOWS that item
+ * (ItemKnowledge.isKnown -- research unlocks the barrel/chest items on their nodes), replacing the old
+ * unlock-flag pair. Creative players bypass the gate; unsettled players are gated; with no server
+ * context we fail open. Only the GUI-open gesture is blocked -- the block stays breakable/placeable,
+ * and sneaking is left alone so a held block can be placed against a chest.
  *
  * <p>Villager trading (onEntityInteract): permanently disabled -- villages are AI city-states traded
  * with via the Town Hall diplomacy tab (after the Bartering research), not by clicking individual
@@ -56,9 +56,6 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 @ApiStatus.Internal
 public final class VanillaGates {
 
-    private static final String FLAG_BARREL = "bannerbound.unlock.barrel";
-    private static final String FLAG_CHEST = "bannerbound.unlock.chest";
-
     private VanillaGates() {
     }
 
@@ -67,31 +64,27 @@ public final class VanillaGates {
         if (VanillaContentState.isEnabled()) return;
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
         if (player.isShiftKeyDown()) return;
+        if (player.isCreative()) return;
+
+        MinecraftServer server = player.getServer();
+        if (server == null) return;
+        SettlementData data = SettlementData.get(server.overworld());
+        Settlement s = data.getByPlayer(player.getUUID());
 
         Block block = event.getLevel().getBlockState(event.getPos()).getBlock();
-        final String flag;
         if (block == Blocks.BARREL) {
-            flag = FLAG_BARREL;
+            if (ItemKnowledge.isKnown(s, Blocks.BARREL.asItem())) return;
         } else if (block == Blocks.CHEST || block == Blocks.TRAPPED_CHEST) {
-            flag = FLAG_CHEST;
+            if (ItemKnowledge.isKnown(s, Blocks.CHEST.asItem())) return;
         } else {
             return;
         }
 
-        if (settlementHasFlag(player, flag)) return;
         event.setCanceled(true);
         event.setCancellationResult(InteractionResult.FAIL);
         player.displayClientMessage(
             Component.translatable("bannerbound.vanilla.storage_locked").withStyle(ChatFormatting.RED),
             true);
-    }
-
-    private static boolean settlementHasFlag(ServerPlayer player, String flag) {
-        MinecraftServer server = player.getServer();
-        if (server == null) return true; // fail-open if no server context
-        SettlementData data = SettlementData.get(server.overworld());
-        Settlement s = data.getByPlayer(player.getUUID());
-        return s != null && ResearchManager.hasFlag(s, flag);
     }
 
     @SubscribeEvent

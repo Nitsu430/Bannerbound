@@ -14,22 +14,7 @@ import com.bannerbound.antiquity.carpentry.CarpentryOutputManager;
 import com.bannerbound.antiquity.carpentry.WoodFamily;
 import com.bannerbound.antiquity.metalworking.MetalworkingData;
 import com.bannerbound.antiquity.metalworking.MetalworkingItems;
-import com.bannerbound.antiquity.recipe.AnvilRecipe;
-import com.bannerbound.antiquity.recipe.AnvilRecipeManager;
-import com.bannerbound.antiquity.recipe.BloomeryRecipe;
-import com.bannerbound.antiquity.recipe.BloomeryRecipeManager;
-import com.bannerbound.antiquity.recipe.CraftingStoneRecipe;
-import com.bannerbound.antiquity.recipe.CraftingStoneRecipeManager;
-import com.bannerbound.antiquity.recipe.FletchingRecipe;
-import com.bannerbound.antiquity.recipe.FletchingRecipeManager;
-import com.bannerbound.antiquity.recipe.DryingRackRecipe;
-import com.bannerbound.antiquity.recipe.DryingRackRecipeManager;
-import com.bannerbound.antiquity.recipe.KilnRecipe;
-import com.bannerbound.antiquity.recipe.KilnRecipeManager;
-import com.bannerbound.antiquity.recipe.MortarRecipe;
-import com.bannerbound.antiquity.recipe.MortarRecipeManager;
-import com.bannerbound.antiquity.recipe.PotteryRecipe;
-import com.bannerbound.antiquity.recipe.PotteryRecipeManager;
+import com.bannerbound.antiquity.recipe.*;
 import com.bannerbound.core.Config;
 import com.bannerbound.core.compat.jei.BannerboundCoreJeiPlugin;
 import com.bannerbound.core.client.ClientResearchState;
@@ -39,6 +24,8 @@ import com.bannerbound.core.client.UnknownItemHelper;
 import mezz.jei.api.IModPlugin;
 import mezz.jei.api.JeiPlugin;
 import mezz.jei.api.gui.builder.IRecipeLayoutBuilder;
+import mezz.jei.api.gui.drawable.IDrawable;
+import mezz.jei.api.gui.ingredient.IRecipeSlotsView;
 import mezz.jei.api.gui.placement.HorizontalAlignment;
 import mezz.jei.api.gui.placement.VerticalAlignment;
 import mezz.jei.api.gui.widgets.IRecipeExtrasBuilder;
@@ -52,6 +39,7 @@ import mezz.jei.api.registration.IRecipeCatalystRegistration;
 import mezz.jei.api.registration.IRecipeCategoryRegistration;
 import mezz.jei.api.registration.IRecipeRegistration;
 import mezz.jei.api.runtime.IJeiRuntime;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
@@ -62,6 +50,7 @@ import net.minecraft.world.item.alchemy.Potions;
 import net.minecraft.world.level.block.Blocks;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * JEI integration for Antiquity: registers every custom recipe category (crafting stone, fletching,
@@ -111,6 +100,8 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
         RecipeType.create(BannerboundAntiquity.MODID, "casting", CastingRecipe.class);
     public static final RecipeType<AnvilRecipe> COLD_HAMMER =
         RecipeType.create(BannerboundAntiquity.MODID, "cold_hammer", AnvilRecipe.class);
+    public static final RecipeType<KnappingRecipe> KNAPPING =
+            RecipeType.create(BannerboundAntiquity.MODID, "knapping", KnappingRecipe.class);
 
     private static List<ConstructionRecipe> constructionRecipes;
     private static List<CastingRecipe> castingRecipes;
@@ -419,6 +410,16 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
         return hammer == null ? List.of() : List.of(new ItemStack(hammer.get()));
     }
 
+    private static List<KnappingRecipe> knappingRecipes() {
+        List<KnappingShape> shapes = KnappingShapeManager.all();
+        List<KnappingRecipe> recipes = new ArrayList<>();
+
+        for (KnappingShape shape : shapes) {
+            recipes.add(new KnappingRecipe(shape.keep(), shape.head().getDefaultInstance(), Component.empty()));
+        }
+
+        return recipes;
+    }
     private static List<CastingRecipe> castingRecipes() {
         if (castingRecipes == null) {
             List<CastingRecipe> list = new ArrayList<>();
@@ -693,7 +694,8 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
             new CarpentryCategory(gui),
             new ConstructionCategory(gui),
             new CastingCategory(gui),
-            new ColdHammerCategory(gui)
+            new ColdHammerCategory(gui),
+            new KnappingCategory(gui)
         );
     }
 
@@ -710,6 +712,7 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
         registration.addRecipes(CONSTRUCTION, constructionRecipes());
         registration.addRecipes(CASTING, castingRecipes());
         registration.addRecipes(COLD_HAMMER, AnvilRecipeManager.all());
+        registration.addRecipes(KNAPPING, knappingRecipes());
 
         registration.addIngredientInfo(BannerboundAntiquity.CRAFTING_STONE_ITEM.get(),
             Component.translatable("bannerboundantiquity.jei.info.crafting_stone"));
@@ -772,6 +775,7 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
         registration.addRecipeCatalyst(BannerboundAntiquity.FIRE_STICKS.get(), KILN);
         registration.addRecipeCatalyst(Items.CHARCOAL, KILN);
         registration.addRecipeCatalyst(Items.COAL, KILN);
+        registration.addRecipeCatalyst(BannerboundAntiquity.STONE_ROCK.get(), KNAPPING);
         // Never register CONSTRUCTION tools/items as catalysts: a catalyst dumps the whole category on click; input/output slots already drive lookup.
         registration.addRecipeCatalyst(BannerboundAntiquity.BONE_SAW.get(), CARPENTRY);
         registration.addRecipeCatalyst(BannerboundAntiquity.CRUCIBLE.get(), CASTING);
@@ -836,6 +840,7 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
             BannerboundAntiquityJeiPlugin::shouldHideCasting);
         syncCustomType(jeiRecipes, COLD_HAMMER, AnvilRecipeManager.all(),
             BannerboundAntiquityJeiPlugin::shouldHideColdHammer);
+        syncCustomType(jeiRecipes, KNAPPING, knappingRecipes(), BannerboundAntiquityJeiPlugin::shouldHideKnapping);
     }
 
     private <T> void syncCustomType(IRecipeManager recipeManager, RecipeType<T> recipeType,
@@ -983,6 +988,16 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
             if (shouldHideOutput(new ItemStack(ing.item()))) {
                 return true;
             }
+        }
+        return false;
+    }
+
+    private static boolean shouldHideKnapping(KnappingRecipe recipe) {
+        if (outputKnown(recipe.output())) {
+            return false;
+        }
+        if (shouldHideOutput(recipe.output())) {
+            return true;
         }
         return false;
     }
@@ -1459,6 +1474,49 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
         }
     }
 
+    private static final class KnappingCategory extends AbstractRecipeCategory<KnappingRecipe> {
+        private static final ResourceLocation STONE_TEX =
+                ResourceLocation.withDefaultNamespace("textures/block/stone.png");
+
+        public KnappingCategory(IGuiHelper gui) {
+            super(KNAPPING, Component.translatable("bannerboundantiquity.jei.knapping"),
+                    gui.createDrawableItemLike(BannerboundAntiquity.STONE_ROCK.get()), 176, 80);
+        }
+
+        @Override
+        public void setRecipe(IRecipeLayoutBuilder builder, KnappingRecipe recipe, IFocusGroup focuses) {
+            builder.addOutputSlot(145, 32)
+                    .setOutputSlotBackground()
+                    .addItemStack(copy(recipe.output()));
+        }
+
+        @Override
+        public void draw(KnappingRecipe recipe, IRecipeSlotsView recipeSlotsView, GuiGraphics guiGraphics, double mouseX, double mouseY) {
+            int gridStartX = 8;
+            int gridStartY = 8;
+            int gridOffset = 5;
+            int slotSize = 18;
+
+            for (int row = 0; row < 3; row++) {
+                for (int col = 0; col < 3; col++) {
+                    int x = gridStartX + (col * slotSize) + (col * gridOffset);
+                    int y = gridStartY + (row * slotSize) + (row * gridOffset);
+
+                    if (recipe.keep.contains(row * 3 + col)) {
+                        guiGraphics.blit(STONE_TEX, x, y, 0, 0, 18, 18, 16, 16);
+                    } else {
+                        guiGraphics.fill(x, y, x + 18, y + 18, 0xC0101010);
+                    }
+                }
+            }
+        }
+
+        @Override
+        public @Nullable ResourceLocation getRegistryName(KnappingRecipe recipe) {
+            return null;
+        }
+    }
+
     public record CarpentryRecipe(ResourceLocation id, List<List<ItemStack>> inputs,
                                   ItemStack output, Component note) {
     }
@@ -1469,5 +1527,8 @@ public final class BannerboundAntiquityJeiPlugin implements IModPlugin {
 
     public record CastingRecipe(ResourceLocation id, List<List<ItemStack>> inputs,
                                 ItemStack mold, ItemStack output, Component note) {
+    }
+
+    public record KnappingRecipe(List<Integer> keep, ItemStack output, Component note) {
     }
 }

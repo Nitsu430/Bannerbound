@@ -92,14 +92,7 @@ public final class ResearchManager {
     }
 
     public static Set<String> computeUnlockedItems(Settlement settlement) {
-        Set<String> out = new HashSet<>();
-        for (String id : settlement.completedResearches()) {
-            ResearchDefinition def = ResearchTreeLoader.get(id);
-            if (def != null) {
-                out.addAll(def.unlocksItems());
-            }
-        }
-        return out;
+        return settlement.computeKnownItems();
     }
 
     public static boolean hasFlag(Settlement settlement, String flag) {
@@ -228,9 +221,11 @@ public final class ResearchManager {
             settlement.setActiveResearch(null);
         }
         if (removed || clearedProgress) {
+            settlement.recomputeKnownItems();
             broadcastStateToSettlement(server, settlement);
             return true;
         }
+
         return false;
     }
 
@@ -461,6 +456,7 @@ public final class ResearchManager {
             }
         }
         if (changed) {
+            s.recomputeKnownItems();
             broadcastStateToSettlement(server, s);
             SettlementManager.broadcastEraState(server);
             for (UUID memberId : s.members()) {

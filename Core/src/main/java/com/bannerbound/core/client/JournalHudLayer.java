@@ -35,15 +35,18 @@ import net.neoforged.api.distmarker.OnlyIn;
  *
  * <p>The panel is a fixed count of GUI-scaled pixels, so at a fixed GUI scale it balloons on a
  * small monitor and shrinks to nothing on a 4K one. To hold it at a roughly constant screen
- * fraction we scale the whole layer by the scaled resolution against REFERENCE_WIDTH/HEIGHT, never
- * below {@link #MIN_UI_SCALE} (past which the text is unreadable), laying entries out against the
- * inflated logical space so the same margins/clamps apply, then letting the pose shrink it.
+ * fraction the whole layer is scaled by {@link HudScale#factor} - shared with the era/year banner
+ * and "Currently in" line above it, so the top-left cluster shrinks as one - laying entries out
+ * against the inflated logical space so the same margins/clamps apply, then letting the pose
+ * shrink it.
  *
  * <p>ENTRY_FIRST_SEEN / ROW_FIRST_SEEN / ROW_COMPLETED_SEEN hold per-entry and per-row first-seen
  * millis that drive the enter/exit slide and completion flourish; each is pruned to what is still
  * visible every frame. The panel is intentionally light and transparent with only a slim left
  * accent bar (gold = crisis, red = quest, green = tutorial; resolved recolors green/red) so the
- * tracker never blocks the world behind it.
+ * tracker never blocks the world behind it. A "reach the target" (locator) objective row shows an
+ * 8-point compass bearing computed from the player's LIVE position, not a server-baked one, so it
+ * updates as you walk.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -59,9 +62,6 @@ public final class JournalHudLayer implements LayeredDraw.Layer {
     private static final int PADDING = 8;
     private static final int MAX_ENTRIES = 4;
     private static final int ENTRY_GAP = 8;
-    private static final float REFERENCE_WIDTH = 900f;
-    private static final float REFERENCE_HEIGHT = 506f;
-    private static final float MIN_UI_SCALE = 0.5f;
     private static final long EXIT_SLIDE_TICKS = 14L;
     private static final int CRISIS_BORDER = 0xFFD4AF37;
     private static final ResourceLocation CHECKBOX =
@@ -89,12 +89,9 @@ public final class JournalHudLayer implements LayeredDraw.Layer {
         long nowMs = Util.getMillis();
         float minimized = ClientJournalState.minimizeProgress(nowMs);
 
-        int rawW = mc.getWindow().getGuiScaledWidth();
-        int rawH = mc.getWindow().getGuiScaledHeight();
-        float uiScale = Math.max(MIN_UI_SCALE,
-            Math.min(1f, Math.min(rawW / REFERENCE_WIDTH, rawH / REFERENCE_HEIGHT)));
-        int screenW = Math.round(rawW / uiScale);
-        int screenH = Math.round(rawH / uiScale);
+        float uiScale = HudScale.factor(mc);
+        int screenW = Math.round(mc.getWindow().getGuiScaledWidth() / uiScale);
+        int screenH = Math.round(mc.getWindow().getGuiScaledHeight() / uiScale);
 
         graphics.pose().pushPose();
         graphics.pose().scale(uiScale, uiScale, 1f);

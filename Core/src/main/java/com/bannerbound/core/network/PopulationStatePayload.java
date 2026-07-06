@@ -20,7 +20,9 @@ import net.minecraft.resources.ResourceLocation;
  * whether a given player (e.g. one who laced a food item) shares the viewer's settlement.
  * foodConsumptionPerSecond is what the citizens eat (0 under anarchy) - the drain the food line must
  * beat. foodSourceRates is per-source production (food-stuff/sec) keyed by "farming" / "fishing" /
- * "livestock" for the Town Hall food tooltip.
+ * "livestock" for the Town Hall food tooltip. appealCulturePerSecond is the culture/sec from
+ * claimed-territory block appeal, already included in culturePerSecond and signed (attractive chunks
+ * add, ugly chunks subtract), broken out so the culture tooltip can show the territory-appeal share.
  */
 @ApiStatus.Internal
 public record PopulationStatePayload(
@@ -40,7 +42,8 @@ public record PopulationStatePayload(
     int governmentOrdinal,
     java.util.List<java.util.UUID> members,
     double foodConsumptionPerSecond,
-    java.util.Map<String, Double> foodSourceRates
+    java.util.Map<String, Double> foodSourceRates,
+    double appealCulturePerSecond
 ) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<PopulationStatePayload> TYPE =
         new CustomPacketPayload.Type<>(ResourceLocation.fromNamespaceAndPath(BannerboundCore.MODID, "population_state"));
@@ -71,6 +74,7 @@ public record PopulationStatePayload(
                 ByteBufCodecs.STRING_UTF8.encode(buf, e.getKey());
                 ByteBufCodecs.DOUBLE.encode(buf, e.getValue());
             }
+            ByteBufCodecs.DOUBLE.encode(buf, p.appealCulturePerSecond());
         },
         buf -> {
             String settlementId = ByteBufCodecs.STRING_UTF8.decode(buf);
@@ -99,10 +103,11 @@ public record PopulationStatePayload(
                 String key = ByteBufCodecs.STRING_UTF8.decode(buf);
                 foodSourceRates.put(key, ByteBufCodecs.DOUBLE.decode(buf));
             }
+            double appealCulturePerSecond = ByteBufCodecs.DOUBLE.decode(buf);
             return new PopulationStatePayload(settlementId, population, populationMax, foodPerSecond,
                 culturePerSecond, foodStored, cultureStored, storedFoodValue, storedFoodPerSecond,
                 nextFoodCost, nextCultureCost, foodCap, cultureCap, governmentOrdinal, members,
-                foodConsumptionPerSecond, foodSourceRates);
+                foodConsumptionPerSecond, foodSourceRates, appealCulturePerSecond);
         }
     );
 

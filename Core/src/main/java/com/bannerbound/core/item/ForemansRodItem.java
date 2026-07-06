@@ -28,6 +28,12 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.FarmBlock;
+import net.minecraft.world.level.block.GrassBlock;
+import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
@@ -49,9 +55,11 @@ import net.neoforged.neoforge.network.PacketDistributor;
  *    non-destructive cycle. Locating a boulder/deposit may DRESS one into a pre-feature chunk -- the
  *    one terrain edit, made once, on the player's own claim at the player's request.
  * Ordered types (isOrderedType = all six) bind a selection to one citizen or "all of that type" via
- * the rod's target; shift-right-click in AIR clears the bound citizen back to "all".
+ * the rod's target; the shift-in-air "clear bound citizen back to all" path is currently disabled
+ * (TODO block in use()) - shift-in-air always opens the picker. FARMER boxes must contain at least
+ * one farmland or grass block or the commit is rejected ("no_farmland").
  *
- * Interaction: use() handles shift-in-air (picker, or clear-to-all); useOn() handles clicking a
+ * Interaction: use() handles shift-in-air (picker); useOn() handles clicking a
  * block (A/B cycle, point marks, mid-draw sneak = expand nearest same-type field, sneak inside a
  * field = adopt its target onto the rod or open the farmer-field GUI). Shift-LEFT-click removal
  * lives in ForemansRodLeftClick. Shift-right-click on a digger CITIZEN (bind rod to that one) lives
@@ -97,7 +105,8 @@ public class ForemansRodItem extends Item {
             return InteractionResultHolder.success(stack);
         }
         if (player.isShiftKeyDown()) {
-            String wsTypeNow = stack.get(BannerboundCore.FOREMAN_WORKSTATION_TYPE.get());
+            // TODO:
+            /*String wsTypeNow = stack.get(BannerboundCore.FOREMAN_WORKSTATION_TYPE.get());
             if (isOrderedType(wsTypeNow)) {
                 stack.remove(BannerboundCore.FOREMAN_TARGET_CITIZEN.get());
                 stack.remove(BannerboundCore.FOREMAN_TARGET_NAME.get());
@@ -108,10 +117,11 @@ public class ForemansRodItem extends Item {
                     Component.translatable("bannerbound.foremans_rod.all", wname)
                         .withStyle(ChatFormatting.AQUA), true);
                 return InteractionResultHolder.consume(stack);
-            }
+            }*/
             PacketDistributor.sendToPlayer(serverPlayer, new OpenForemansRodPickerPayload());
             return InteractionResultHolder.consume(stack);
         }
+
         String wsType = stack.get(BannerboundCore.FOREMAN_WORKSTATION_TYPE.get());
         if (wsType == null || wsType.isEmpty()) {
             serverPlayer.displayClientMessage(
@@ -286,6 +296,27 @@ public class ForemansRodItem extends Item {
                 } catch (IllegalArgumentException ignored) { }
             }
         }
+
+        if (FARMER_TYPE.equals(wsType)) {
+            int amountOfFarmland = 0;
+
+            for (BlockPos pos : BlockPos.betweenClosed(a, b)) {
+                BlockState state = overworld.getBlockState(pos);
+                Block block = state.getBlock();
+
+                if (block instanceof FarmBlock || block instanceof GrassBlock) {
+                    amountOfFarmland++;
+                }
+            }
+
+            if (amountOfFarmland == 0) {
+                player.displayClientMessage(
+                    Component.translatable("bannerbound.foremans_rod.no_farmland")
+                        .withStyle(ChatFormatting.RED), true);
+                return;
+            }
+        }
+
         BlockSelectionRegistry registry = BlockSelectionRegistry.get(overworld);
 
         java.util.List<BlockSelection> mergeable = new java.util.ArrayList<>();

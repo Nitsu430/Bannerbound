@@ -1,37 +1,11 @@
 package com.bannerbound.antiquity;
 
+import com.bannerbound.antiquity.block.*;
+import com.bannerbound.antiquity.block.entity.*;
+import com.bannerbound.antiquity.entity.*;
+import net.minecraft.world.food.FoodProperties;
 import org.slf4j.Logger;
 
-import com.bannerbound.antiquity.block.BasketBlock;
-import com.bannerbound.antiquity.block.BloomeryBlock;
-import com.bannerbound.antiquity.block.ChoppingStumpBlock;
-import com.bannerbound.antiquity.block.WoodworkingTableBlock;
-import com.bannerbound.antiquity.block.ClayedCobblestoneBlock;
-import com.bannerbound.antiquity.block.CraftingStoneBlock;
-import com.bannerbound.antiquity.block.KilnBlock;
-import com.bannerbound.antiquity.block.FletchingStationBlock;
-import com.bannerbound.antiquity.block.FirewoodPileBlock;
-import com.bannerbound.antiquity.block.MasonsBenchBlock;
-import com.bannerbound.antiquity.block.MortarAndPestleBlock;
-import com.bannerbound.antiquity.block.PotterySlabBlock;
-import com.bannerbound.antiquity.block.RockBlock;
-import com.bannerbound.antiquity.block.RopeCollisionBlock;
-import com.bannerbound.antiquity.block.RopeFenceGateBlock;
-import com.bannerbound.antiquity.block.RopeFencePostBlock;
-import com.bannerbound.antiquity.block.ThatchBedBlock;
-import com.bannerbound.antiquity.block.ThatchDoorBlock;
-import com.bannerbound.antiquity.block.entity.BasketBlockEntity;
-import com.bannerbound.antiquity.block.entity.BloomeryBlockEntity;
-import com.bannerbound.antiquity.block.entity.WoodworkingTableBlockEntity;
-import com.bannerbound.antiquity.block.entity.ChoppingStumpBlockEntity;
-import com.bannerbound.antiquity.block.entity.CraftingStoneBlockEntity;
-import com.bannerbound.antiquity.block.entity.FletchingStationBlockEntity;
-import com.bannerbound.antiquity.block.entity.KilnBlockEntity;
-import com.bannerbound.antiquity.block.entity.MasonsBenchBlockEntity;
-import com.bannerbound.antiquity.block.entity.MortarAndPestleBlockEntity;
-import com.bannerbound.antiquity.block.entity.PotterySlabBlockEntity;
-import com.bannerbound.antiquity.block.entity.RopeFenceGateBlockEntity;
-import com.bannerbound.antiquity.block.entity.RopeFencePostBlockEntity;
 import com.bannerbound.antiquity.item.ClayBucketItem;
 import com.bannerbound.antiquity.item.ClayFilledBucketItem;
 import com.bannerbound.antiquity.item.FireSticksItem;
@@ -43,11 +17,6 @@ import com.bannerbound.antiquity.item.PaintBrushItem;
 import com.bannerbound.antiquity.item.FiberRopeItem;
 import com.bannerbound.antiquity.item.ModTiers;
 import com.bannerbound.antiquity.item.SpearItem;
-import com.bannerbound.antiquity.entity.GroundDecalEntity;
-import com.bannerbound.antiquity.entity.RaftEntity;
-import com.bannerbound.antiquity.entity.SpearProjectile;
-import com.bannerbound.antiquity.entity.SpearedFishEntity;
-import com.bannerbound.antiquity.entity.StuckSpear;
 import com.bannerbound.antiquity.world.inventory.BasketMenu;
 import com.mojang.logging.LogUtils;
 import com.mojang.serialization.Codec;
@@ -573,6 +542,7 @@ public class BannerboundAntiquity {
             .requiresCorrectToolForDrops()
             .sound(SoundType.STONE)
             .noOcclusion()));
+
     public static final DeferredItem<BlockItem> CRAFTING_STONE_ITEM =
         ITEMS.registerSimpleBlockItem("crafting_stone", CRAFTING_STONE);
     public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<CraftingStoneBlockEntity>> CRAFTING_STONE_BE =
@@ -580,6 +550,21 @@ public class BannerboundAntiquity {
             () -> BlockEntityType.Builder.of(CraftingStoneBlockEntity::new, CRAFTING_STONE.get())
                 .build(null));
 
+    // Worm Crate
+    public static final DeferredBlock<WormCrateBlock> WORM_CRATE = BLOCKS.register("worm_crate",
+        () -> new WormCrateBlock(BlockBehaviour.Properties.of()
+                .mapColor(MapColor.WOOD)
+                .strength(2.0f, 6.0f)
+                .requiresCorrectToolForDrops()
+                .sound(SoundType.WOOD)
+                .noOcclusion()
+        ));
+
+    public static final DeferredItem<BlockItem> WORM_CRATE_ITEM =
+            ITEMS.registerSimpleBlockItem("worm_crate", WORM_CRATE);
+
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<WormCrateBlockEntity>> WORM_CRATE_BE =
+            BLOCK_ENTITY_TYPES.register("worm_crate", () -> BlockEntityType.Builder.of(WormCrateBlockEntity::new, WORM_CRATE.get()).build(null));
     public static final DeferredBlock<FletchingStationBlock> FLETCHING_STATION = BLOCKS.register("fletching_station",
         () -> new FletchingStationBlock(BlockBehaviour.Properties.of()
             .mapColor(MapColor.STONE)
@@ -1078,6 +1063,8 @@ public class BannerboundAntiquity {
                 new Item.Properties().food(new net.minecraft.world.food.FoodProperties.Builder()
                     .nutrition(3).saturationModifier(0.5F).build())));
         }
+
+        DRIED_FOODS.put("dried_worm", ITEMS.registerItem("dried_worm", p -> new Item(p), new Item.Properties().food(new FoodProperties.Builder().nutrition(1).saturationModifier(0.2F).build())));
     }
 
     public static final DeferredBlock<com.bannerbound.antiquity.block.BlueberryBushBlock> BLUEBERRY_BUSH =
@@ -1105,6 +1092,11 @@ public class BannerboundAntiquity {
     public static final DeferredItem<com.bannerbound.antiquity.item.SaltItem> SALT =
         ITEMS.registerItem("salt", com.bannerbound.antiquity.item.SaltItem::new, new Item.Properties());
 
+    public static final DeferredItem<com.bannerbound.antiquity.item.WormBaitItem> WORM =
+            ITEMS.registerItem("worm", com.bannerbound.antiquity.item.WormBaitItem::new, new Item.Properties());
+
+    public static final DeferredItem<Item> COOKED_WORM =
+            ITEMS.registerItem("cooked_worm", Item::new, new Item.Properties().food(new FoodProperties.Builder().nutrition(2).saturationModifier(0.3F).build()));
     public static final DeferredBlock<Block> SALT_BLOCK = BLOCKS.register("salt_block",
         () -> new Block(BlockBehaviour.Properties.of()
             .mapColor(MapColor.SNOW).strength(0.6F).sound(SoundType.SAND)));
@@ -1313,6 +1305,9 @@ public class BannerboundAntiquity {
                 .clientTrackingRange(10)
                 .build("raft"));
 
+    public static final DeferredHolder<EntityType<?>, EntityType<WormBaitEntity>> WORM_BAIT =
+        ENTITY_TYPES.register("worm_bait",
+                () -> EntityType.Builder.<WormBaitEntity>of(WormBaitEntity::new, MobCategory.MISC).build("worm_bait"));
     public static final DeferredItem<Item> OAR =
         ITEMS.registerSimpleItem("oar", new Item.Properties());
 
@@ -1451,6 +1446,8 @@ public class BannerboundAntiquity {
                 output.accept(STONE_CHISEL.get());
 
                 output.accept(SALT.get());
+                output.accept(WORM.get());
+                output.accept(COOKED_WORM.get());
                 output.accept(SALT_BLOCK_ITEM.get());
                 output.accept(SPOILED_FOOD.get());
                 for (DeferredItem<Item> dried : DRIED_FOODS.values()) {
@@ -1515,6 +1512,7 @@ public class BannerboundAntiquity {
 
                 output.accept(STONE_ANVIL_ITEM.get());
                 output.accept(BELLOWS_BLOCK_ITEM.get());
+                //output.accept(WORM_CRATE_ITEM.get());
                 com.bannerbound.antiquity.metalworking.MetalworkingItems.MOLDS.values()
                     .forEach(i -> output.accept(i.get()));
                 com.bannerbound.antiquity.metalworking.MetalworkingItems.HAMMERS.values()
@@ -1583,6 +1581,8 @@ public class BannerboundAntiquity {
                 output.accept(THATCH_STAIRS_ITEM.get());
                 output.accept(THATCH_DOOR_ITEM.get());
                 output.accept(THATCH_BED_ITEM.get());
+                output.accept(WORM.get());
+                output.accept(COOKED_WORM);
             }).build());
 
     public BannerboundAntiquity(IEventBus modEventBus, ModContainer modContainer) {
@@ -1633,7 +1633,7 @@ public class BannerboundAntiquity {
                 .add(MORTAR_AND_PESTLE_ITEM, BASKET_ITEM, FIRE_STICKS, FLINT_BLADE, BONE_BLADE,
                      PLANT_FIBER, PLANT_STRING, FIBER_ROPE, FIREWOOD, FLINT_KNIFE, WOODEN_KNIFE,
                      CRAFTING_STONE_ITEM, FLETCHING_STATION_ITEM, POTTERY_SLAB_ITEM, WOODWORKING_TABLE_ITEM,
-                     BONE_SAW, MASONS_BENCH_ITEM, STONE_CHISEL)
+                     BONE_SAW, MASONS_BENCH_ITEM, STONE_CHISEL, WORM)
             .section(band("primitive_tools", 0xFFB8B0A0))
                 .add(BONE_PICKAXE, BONE_AXE, BONE_SHOVEL, BONE_HOE, BONE_SWORD, BONE_KNIFE, BONE_CLUB,
                      BONE_SHEARS,

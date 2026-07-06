@@ -25,15 +25,16 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * Two-page settlement founding screen (client-only). Page 1 (IDENTITY) picks a name + banner color;
  * page 2 (STYLE) picks the settlement's culture style, which governs which blocks the settlement
  * finds appealing (see the chunk-beauty / culture system). Confirm sends a SettleRequestPayload to
- * the server.
- *
- * Widgets are rebuilt on every init() (page switch), so the name / color / style picks are held in
- * fields to survive the rebuild. Banner colors are unique per server: colors already flown by an
- * existing settlement are derived from the client's mirror of the claim map (each claim carries its
- * settlement color), so no extra packet is needed - taken colors are greyed out and unselectable,
- * and if the player's pick is taken (or on first build) the picker snaps to the first still-available
- * color. The identity page also shows a server-assessed site report: a green all-clear, or one
- * warning line per poor-terrain finding.
+ * the server. Widgets are rebuilt on every init() (page switch), so the name / color / style picks
+ * are held in fields to survive the rebuild. Banner colors are unique per server: taken colors are
+ * derived from the client's mirror of the claim map (each claim carries its settlement color, so no
+ * extra packet is needed), greyed out and unselectable, and if the player's pick is taken (or on
+ * first build) the picker snaps to the first still-available color. The identity page also shows a
+ * server-assessed site report: a green all-clear, or one warning line per poor-terrain finding.
+ * The style page is a scrollable grid of 16:9 image cards, custom-drawn (not widgets) and scissored
+ * to a viewport clamped to the window, so a small window / high GUI scale shrinks the scroll area
+ * instead of overflowing the screen; the selection accent is the page-1 banner color so both steps
+ * read as one identity, and style names come from the style JSON (not lang) so they render literally.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -45,13 +46,29 @@ public class SettleScreen extends PolishedScreen {
     private static final int BANNER_AREA_WIDTH = 100;
     private static final int SWATCH_SIZE = 20;
     private static final int SWATCH_GAP = 4;
-    private static final int STYLE_ROW_H = 24;
+
+    private static final int STYLE_PANEL_WIDTH = 340;
+    private static final int STYLE_HEADER_H = 30;
+    private static final int STYLE_FOOTER_H = 40;
+    private static final int STYLE_PAD = 14;
+    private static final int STYLE_COLS = 2;
+    private static final int STYLE_COL_GAP = 12;
+    private static final int STYLE_ROW_GAP = 10;
+    private static final int STYLE_LABEL_H = 20;
+    // Entries are [exists?1:0, width, height] per preview texture, read once and cached.
+    private static final java.util.Map<net.minecraft.resources.ResourceLocation, int[]> IMG_SIZE =
+        new java.util.HashMap<>();
 
     private Page page = Page.IDENTITY;
 
     private String nameText = "";
     private int selectedColor = 0;
     private String selectedStyleId = "";
+
+    private double styleScroll = 0;
+    private int styleScrollMax = 0;
+    private int styleViewLeft, styleViewTop, styleViewRight, styleViewBottom;
+    private final java.util.List<StyleCard> styleCards = new java.util.ArrayList<>();
 
     private EditBox nameField;
     private Button confirmButton;
@@ -189,48 +206,77 @@ public class SettleScreen extends PolishedScreen {
             selectedStyleId = styles.get(0).id();
         }
 
-        int rows = Math.max(1, (styles.size() + 1) / 2);
-        int gridTop = 32;
-        int panelHeight = gridTop + rows * STYLE_ROW_H + 40;
-        final int panelX = (this.width - PANEL_WIDTH) / 2;
-        final int panelY = Math.max(10, (this.height - panelHeight) / 2);
-        final int ph = panelHeight;
+        final int panelW = STYLE_PANEL_WIDTH;
+        final int cardW = (panelW - 2 * STYLE_PAD - (STYLE_COLS - 1) * STYLE_COL_GAP) / STYLE_COLS;
+        final int imageH = Math.round(cardW * 9f / 16f);
+        final int cardH = imageH + STYLE_LABEL_H;
+        final int rowStride = cardH + STYLE_ROW_GAP;
+        final int rowCount = Math.max(1, (styles.size() + STYLE_COLS - 1) / STYLE_COLS);
+        final int contentH = rowCount * rowStride - STYLE_ROW_GAP;
+
+        int viewH = Math.min(contentH, 3 * rowStride - STYLE_ROW_GAP);
+        int maxPanelH = this.height - 20;
+        if (STYLE_HEADER_H + viewH + STYLE_FOOTER_H > maxPanelH) {
+            viewH = Math.max(cardH, maxPanelH - STYLE_HEADER_H - STYLE_FOOTER_H);
+        }
+        final int panelH = STYLE_HEADER_H + viewH + STYLE_FOOTER_H;
+        final int panelX = (this.width - panelW) / 2;
+        final int panelY = Math.max(10, (this.height - panelH) / 2);
+
+        styleViewLeft = panelX + STYLE_PAD;
+        styleViewRight = panelX + panelW - STYLE_PAD;
+        styleViewTop = panelY + STYLE_HEADER_H;
+        styleViewBottom = styleViewTop + viewH;
+        styleScrollMax = Math.max(0, contentH - viewH);
+        styleScroll = Math.max(0, Math.min(styleScroll, styleScrollMax));
+
+        styleCards.clear();
+        for (int i = 0; i < styles.size(); i++) {
+            ClientCultureStyleState.Entry entry = styles.get(i);
+            int col = i % STYLE_COLS;
+            int row = i / STYLE_COLS;
+            int x = styleViewLeft + col * (cardW + STYLE_COL_GAP);
+            int cy = row * rowStride;
+            net.minecraft.resources.ResourceLocation img =
+                net.minecraft.resources.ResourceLocation.tryParse(entry.image());
+            styleCards.add(new StyleCard(entry.id(), entry.nameKey(), img, x, cy, cardW, cardH, imageH));
+        }
 
         this.addRenderableOnly((graphics, mouseX, mouseY, partialTick) -> {
-            graphics.fill(panelX, panelY, panelX + PANEL_WIDTH, panelY + ph, 0xFF101010);
-            graphics.renderOutline(panelX, panelY, PANEL_WIDTH, ph, 0xFF606060);
+            drawIdentityPanel(graphics, panelX, panelY, panelW, panelH, identityAccents);
             graphics.drawCenteredString(this.font,
                 Component.translatable("bannerbound.settle.style_title"),
-                panelX + PANEL_WIDTH / 2, panelY + 10, 0xFFFFFFFF);
+                panelX + panelW / 2, panelY + 10, 0xFFFFFFFF);
+            drawIdentityDivider(graphics, panelX + STYLE_PAD, panelY + STYLE_HEADER_H - 5,
+                panelW - 2 * STYLE_PAD, identityAccents);
             if (styles.isEmpty()) {
                 graphics.drawCenteredString(this.font,
                     Component.translatable("bannerbound.settle.style_none"),
-                    panelX + PANEL_WIDTH / 2, panelY + gridTop + 8, 0xFFCC6666);
+                    panelX + panelW / 2, styleViewTop + 8, 0xFFCC6666);
             }
         });
 
-        int colWidth = (PANEL_WIDTH - 12 - 12 - 8) / 2;
-        for (int i = 0; i < styles.size(); i++) {
-            ClientCultureStyleState.Entry entry = styles.get(i);
-            int col = i % 2;
-            int row = i / 2;
-            int x = panelX + 12 + col * (colWidth + 8);
-            int y = panelY + gridTop + row * STYLE_ROW_H;
-            Button styleButton = PolishButton.polished(
-                // Display names come from the style JSON, not lang -> render literally, not as a key.
-                Component.literal(entry.nameKey()),
-                btn -> {
-                    selectedStyleId = entry.id();
-                    this.rebuildWidgets();
-                })
-                .bounds(x, y, colWidth, 20)
-                .build();
-            styleButton.active = !entry.id().equals(selectedStyleId);
-            this.addRenderableWidget(styleButton);
-        }
+        this.addRenderableOnly((graphics, mouseX, mouseY, partialTick) -> {
+            graphics.enableScissor(styleViewLeft, styleViewTop, styleViewRight, styleViewBottom);
+            int scroll = (int) Math.round(styleScroll);
+            for (StyleCard card : styleCards) {
+                int cardY = styleViewTop + card.contentY() - scroll;
+                if (cardY + card.h() < styleViewTop || cardY > styleViewBottom) continue;
+                renderStyleCard(graphics, card, cardY, mouseX, mouseY);
+            }
+            graphics.disableScissor();
+            if (styleScrollMax > 0) {
+                int trackX = styleViewRight + 4;
+                graphics.fill(trackX, styleViewTop, trackX + 3, styleViewBottom, 0xFF2A2A2A);
+                int trackH = styleViewBottom - styleViewTop;
+                int thumbH = Math.max(16, trackH * trackH / (trackH + styleScrollMax));
+                int thumbY = styleViewTop + (int) ((trackH - thumbH) * (styleScroll / styleScrollMax));
+                graphics.fill(trackX, thumbY, trackX + 3, thumbY + thumbH, 0xFF8A8A8A);
+            }
+        });
 
-        int buttonY = panelY + ph - 28;
-        int buttonWidth = (PANEL_WIDTH - 36) / 2;
+        int buttonY = panelY + panelH - 28;
+        int buttonWidth = (panelW - 36) / 2;
         this.addRenderableWidget(PolishButton.polished(
             Component.translatable("bannerbound.settle.back"),
             btn -> {
@@ -242,9 +288,66 @@ public class SettleScreen extends PolishedScreen {
         this.addRenderableWidget(PolishButton.polished(
             Component.translatable("bannerbound.settle.confirm"),
             btn -> submit())
-            .bounds(panelX + PANEL_WIDTH - 12 - buttonWidth, buttonY, buttonWidth, 20)
+            .bounds(panelX + panelW - 12 - buttonWidth, buttonY, buttonWidth, 20)
             .build());
     }
+
+    private void renderStyleCard(GuiGraphics graphics, StyleCard card, int cardY,
+                                 int mouseX, int mouseY) {
+        int x = card.x();
+        int w = card.w();
+        int imageH = card.imageH();
+        int h = card.h();
+        boolean selected = card.id().equals(selectedStyleId);
+        boolean hovered = mouseX >= x && mouseX < x + w
+            && mouseY >= Math.max(cardY, styleViewTop) && mouseY < Math.min(cardY + h, styleViewBottom);
+        int accent = 0xFF000000 | (SettlementColor.byIndex(selectedColor).rgb() & 0x00FFFFFF);
+
+        int[] size = card.image() == null ? new int[]{0, 16, 9} : imageSize(card.image());
+        graphics.fill(x, cardY, x + w, cardY + imageH, 0xFF181818);
+        if (size[0] == 1) {
+            graphics.blit(card.image(), x, cardY, w, imageH, 0f, 0f, size[1], size[2], size[1], size[2]);
+        } else {
+            graphics.drawCenteredString(this.font, "?", x + w / 2, cardY + imageH / 2 - 4, 0xFF666666);
+        }
+
+        int barTop = cardY + imageH;
+        int barColor = selected ? blendArgb(0xFF202020, accent, 0.45f)
+            : (hovered ? 0xFF3A3A3A : 0xFF262626);
+        graphics.fill(x, barTop, x + w, barTop + STYLE_LABEL_H, barColor);
+        graphics.drawCenteredString(this.font, Component.literal(card.name()),
+            x + w / 2, barTop + (STYLE_LABEL_H - this.font.lineHeight) / 2 + 1, 0xFFFFFFFF);
+
+        int border = selected ? accent : (hovered ? 0xFFCCCCCC : 0xFF000000);
+        graphics.renderOutline(x, cardY, w, h, border);
+        if (selected) {
+            graphics.renderOutline(x - 1, cardY - 1, w + 2, h + 2, accent);
+        }
+    }
+
+    private static int[] imageSize(net.minecraft.resources.ResourceLocation tex) {
+        return IMG_SIZE.computeIfAbsent(tex, t -> {
+            try {
+                net.minecraft.server.packs.resources.Resource res = net.minecraft.client.Minecraft
+                    .getInstance().getResourceManager().getResource(t).orElse(null);
+                if (res == null) return new int[]{0, 16, 9};
+                try (com.mojang.blaze3d.platform.NativeImage img =
+                         com.mojang.blaze3d.platform.NativeImage.read(res.open())) {
+                    return new int[]{1, Math.max(1, img.getWidth()), Math.max(1, img.getHeight())};
+                }
+            } catch (Exception ex) {
+                return new int[]{0, 16, 9};
+            }
+        });
+    }
+
+    private boolean withinStyleViewport(double mx, double my) {
+        return mx >= styleViewLeft && mx < styleViewRight && my >= styleViewTop && my < styleViewBottom;
+    }
+
+    // x is screen-space; contentY is scroll-content space (scroll offset applied at draw/hit-test).
+    private record StyleCard(String id, String name, net.minecraft.resources.ResourceLocation image,
+                             int x, int contentY, int w, int h, int imageH) {}
 
     private static java.util.Set<Integer> takenColorIndices() {
         java.util.Set<Integer> taken = new java.util.HashSet<>();
@@ -285,6 +388,33 @@ public class SettleScreen extends PolishedScreen {
     }
 
     @Override
+    public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        // Card selection is a pure repaint - do NOT rebuildWidgets here or the scroll position resets.
+        if (page == Page.STYLE && button == 0 && withinStyleViewport(mouseX, mouseY)) {
+            int scroll = (int) Math.round(styleScroll);
+            for (StyleCard card : styleCards) {
+                int cardY = styleViewTop + card.contentY() - scroll;
+                if (mouseX >= card.x() && mouseX < card.x() + card.w()
+                    && mouseY >= cardY && mouseY < cardY + card.h()) {
+                    selectedStyleId = card.id();
+                    return true;
+                }
+            }
+            return true;   // swallow clicks in the viewport gutter
+        }
+        return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    @Override
+    public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (page == Page.STYLE && styleScrollMax > 0 && withinStyleViewport(mouseX, mouseY)) {
+            styleScroll = Math.max(0, Math.min(styleScrollMax, styleScroll - scrollY * 24));
+            return true;
+        }
+        return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
+    }
+
+    @Override
     public boolean isPauseScreen() {
         return false;
     }
@@ -301,6 +431,7 @@ public class SettleScreen extends PolishedScreen {
             this.color = color;
             this.isSelected = isSelected;
             this.taken = taken;
+            // Disabling the button is what blocks the click handler for taken colors.
             this.active = !taken;
         }
 

@@ -218,14 +218,15 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         if (gatePos == null) return;
         // Reserve the gate every tick so the shared OpenFenceGateGoal never also toggles it (flicker).
         GateHolds.hold(gatePos, citizen.getId(), sl.getGameTime());
-        // Hold open from the start, not by proximity: a closed gate blocks the path to itself, so proximity-open deadlocks.
-        boolean wantOpen = !batch.isEmpty()
-            || herderCrossingGate()
-            || herdedAnimalNear(sl, gatePos, 7.5)
-            || (phase == Phase.LEAVE && insideHerder());
+        // Hold open from the start, not only by proximity: a closed gate blocks the path to itself, so proximity-open deadlocks.
+        boolean flockIncoming = (phase == Phase.LEAD) && (!batch.isEmpty() || herdedAnimalNear(sl, gatePos, 7.5));
+
+        boolean wantOpen = flockIncoming
+                || herderCrossingGate()
+                || (phase == Phase.LEAVE && insideHerder());
+
         setOwnGate(sl, wantOpen);
     }
-
     private boolean herderCrossingGate() {
         return !citizen.getNavigation().isDone()
             && citizen.distanceToSqr(gatePos.getX() + 0.5, gatePos.getY() + 0.5, gatePos.getZ() + 0.5) <= 6.25;

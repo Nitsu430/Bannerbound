@@ -25,12 +25,15 @@ import net.minecraft.world.level.block.Block;
  * Loads culture styles from data/<ns>/culture_styles/*.json, keyed by file stem, and serves them
  * via get/all/ids. Each file carries: "id" (defaults to the file stem), "name" (a LITERAL display
  * string rendered with Component.literal on the settle screen, NOT a lang key; defaults to the id
- * so a missing name stays readable rather than a dead translation key), "overrides" (per-block
- * appeal values that replace the base AppealResolver table), and "food_overrides" (per-item food
- * values that replace the base FoodValueLoader table -> effective). Both maps are optional; omit
- * either to leave the base table untouched. Unknown block/item ids are warned and skipped, and
- * food override values are clamped at 0 (no negative food, matching FoodValueLoader). ids() is
- * sorted to feed the founding picker and the default fallback.
+ * so a missing name stays readable rather than a dead translation key), "image" (ResourceLocation
+ * of the preview thumbnail shown in the founding picker; defaults to
+ * bannerbound:textures/gui/culture/<id>.png so a style following the naming convention needs no
+ * explicit entry), "overrides" (per-block appeal values that replace the base AppealResolver
+ * table), and "food_overrides" (per-item food values that replace the base FoodValueLoader
+ * table -> effective). Both maps are optional; omit either to leave the base table untouched.
+ * Unknown block/item ids are warned and skipped, and food override values are clamped at 0 (no
+ * negative food, matching FoodValueLoader). ids() is sorted to feed the founding picker and the
+ * default fallback.
  */
 public class CultureStyleLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "culture_styles";
@@ -51,6 +54,8 @@ public class CultureStyleLoader extends SimpleJsonResourceReloadListener {
                 JsonObject obj = entry.getValue().getAsJsonObject();
                 String id = GsonHelper.getAsString(obj, "id", key.getPath());
                 String nameKey = GsonHelper.getAsString(obj, "name", id);
+                String image = GsonHelper.getAsString(obj, "image",
+                    "bannerbound:textures/gui/culture/" + id + ".png");
 
                 Map<Block, Float> overrides = new HashMap<>();
                 if (obj.has("overrides")) {
@@ -81,7 +86,7 @@ public class CultureStyleLoader extends SimpleJsonResourceReloadListener {
                     }
                 }
 
-                map.put(id, new CultureStyle(id, nameKey, overrides, foodOverrides));
+                map.put(id, new CultureStyle(id, nameKey, image, overrides, foodOverrides));
             } catch (Exception ex) {
                 BannerboundCore.LOGGER.error("Failed to parse culture style {}", key, ex);
             }

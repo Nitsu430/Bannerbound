@@ -16,10 +16,12 @@ import net.minecraft.world.item.ItemStack;
 /**
  * Single source of truth for "does this civ recognize this item?". The effective known set is the
  * global starting items (every settlement knows these regardless of era) unioned with the
- * settlement's own research unlocks - and BOTH trees grant knowledge: science and culture
- * unlocks.items are first-class. A null settlement means no civ context (player without a
- * settlement, wild mob dying with no killer, etc.), in which case only the global starting items
- * are known, mirroring {@link com.bannerbound.core.event.UnknownItemBlocker}'s fallback.
+ * settlement's cached {@code knownItems()} set - a precomputed union of BOTH trees' unlocks.items
+ * (science and culture are first-class), read directly instead of recomputing via
+ * ResearchManager/CultureManager on every query. A null settlement means no civ context (player
+ * without a settlement, wild mob dying with no killer, etc.), in which case only the global
+ * starting items are known, mirroring {@link com.bannerbound.core.event.UnknownItemBlocker}'s
+ * fallback.
  * <p>
  * Server-side counterpart to the client's {@link com.bannerbound.core.client.UnknownItemHelper};
  * both consult the same starting-items + research-unlock sets so the inventory question-mark and
@@ -74,9 +76,6 @@ public final class ItemKnowledge {
         if (id == null) {
             return false;
         }
-        if (ResearchManager.computeUnlockedItems(settlement).contains(id.toString())) {
-            return true;
-        }
-        return CultureManager.computeUnlockedItems(settlement).contains(id.toString());
+        return settlement.knownItems().contains(id.toString());
     }
 }

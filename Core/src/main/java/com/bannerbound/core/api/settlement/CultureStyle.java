@@ -14,10 +14,12 @@ import net.minecraft.world.level.block.Block;
  * rewards sandstone, a Forest town rewards wood) and per-item food-deposit overrides (consumed by
  * FoodValueLoader.effective - a Desert town values cactus, a Forest town berries). The override
  * getters return 0f when absent, so callers must gate on the hasOverride/hasFoodOverride check.
- * Picking a style at settlement founding is how a player declares a biome / culture aesthetic.
+ * imageKey is the ResourceLocation string of the preview image shown in the founding picker
+ * (e.g. "bannerbound:textures/gui/culture/forest.png"). Picking a style at settlement founding is
+ * how a player declares a biome / culture aesthetic.
  */
 @ApiStatus.Internal
-public record CultureStyle(String id, String nameKey,
+public record CultureStyle(String id, String nameKey, String imageKey,
                             Map<Block, Float> overrides,
                             Map<Item, Float> foodOverrides) {
     public boolean hasOverride(Block block) {

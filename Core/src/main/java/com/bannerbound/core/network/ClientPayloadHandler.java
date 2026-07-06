@@ -231,7 +231,7 @@ public final class ClientPayloadHandler {
 
     public static void handleCultureStyleSync(CultureStyleSyncPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> com.bannerbound.core.client.ClientCultureStyleState.replace(
-            payload.ids(), payload.nameKeys()));
+            payload.ids(), payload.nameKeys(), payload.images()));
     }
 
     public static void handleBlockAppealSync(BlockAppealSyncPayload payload, IPayloadContext context) {
@@ -532,7 +532,8 @@ public final class ClientPayloadHandler {
             payload.governmentOrdinal(),
             payload.members(),
             payload.foodConsumptionPerSecond(),
-            payload.foodSourceRates()
+            payload.foodSourceRates(),
+            payload.appealCulturePerSecond()
         ));
     }
 
