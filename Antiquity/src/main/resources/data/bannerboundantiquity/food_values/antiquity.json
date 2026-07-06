@@ -7,6 +7,8 @@
     "bannerboundantiquity:dried_chicken": 2.0,
     "bannerboundantiquity:dried_rabbit": 1.5,
     "bannerboundantiquity:dried_cod": 1.5,
-    "bannerboundantiquity:dried_salmon": 1.5
+    "bannerboundantiquity:dried_salmon": 1.5,
+    "bannerboundantiquity:dried_worm": 1.0,
+    "bannerboundantiquity:cooked_worm": 1.5
   }
 }

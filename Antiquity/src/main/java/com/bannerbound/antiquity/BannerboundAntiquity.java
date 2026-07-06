@@ -3,6 +3,7 @@ package com.bannerbound.antiquity;
 import com.bannerbound.antiquity.block.*;
 import com.bannerbound.antiquity.block.entity.*;
 import com.bannerbound.antiquity.entity.*;
+import net.minecraft.world.food.FoodProperties;
 import org.slf4j.Logger;
 
 import com.bannerbound.antiquity.item.ClayBucketItem;
@@ -1245,6 +1246,8 @@ public class BannerboundAntiquity {
                 new Item.Properties().food(new net.minecraft.world.food.FoodProperties.Builder()
                     .nutrition(3).saturationModifier(0.5F).build())));
         }
+
+        DRIED_FOODS.put("dried_worm", ITEMS.registerItem("dried_worm", p -> new Item(p), new Item.Properties().food(new FoodProperties.Builder().nutrition(1).saturationModifier(0.2F).build())));
     }
     /** Blueberry bush — a sweet-berry-style 4-stage bush that yields {@link #BLUEBERRIES}. Generates
      *  rarely in plains, a bit more in (non-taiga) forests. */
@@ -1279,6 +1282,9 @@ public class BannerboundAntiquity {
 
     public static final DeferredItem<com.bannerbound.antiquity.item.WormBaitItem> WORM =
             ITEMS.registerItem("worm", com.bannerbound.antiquity.item.WormBaitItem::new, new Item.Properties());
+
+    public static final DeferredItem<Item> COOKED_WORM =
+            ITEMS.registerItem("cooked_worm", Item::new, new Item.Properties().food(new FoodProperties.Builder().nutrition(2).saturationModifier(0.3F).build()));
 
     /** A block of stored salt (decorative / bulk storage for now). */
     public static final DeferredBlock<Block> SALT_BLOCK = BLOCKS.register("salt_block",
@@ -1724,6 +1730,7 @@ public class BannerboundAntiquity {
                 // hidden from the creative tab until the bone-era armor kit lands. /give to test.
                 output.accept(SALT.get());
                 output.accept(WORM.get());
+                output.accept(COOKED_WORM.get());
                 output.accept(SALT_BLOCK_ITEM.get());
                 output.accept(SPOILED_FOOD.get());
                 for (DeferredItem<Item> dried : DRIED_FOODS.values()) {
@@ -1789,7 +1796,7 @@ public class BannerboundAntiquity {
                 // Metalworking: the smithing station, molds, cast heads/blades, finished tools + hammers.
                 output.accept(STONE_ANVIL_ITEM.get());
                 output.accept(BELLOWS_BLOCK_ITEM.get());
-                output.accept(WORM_CRATE_ITEM.get());
+                //output.accept(WORM_CRATE_ITEM.get());
                 com.bannerbound.antiquity.metalworking.MetalworkingItems.MOLDS.values()
                     .forEach(i -> output.accept(i.get()));
                 com.bannerbound.antiquity.metalworking.MetalworkingItems.HAMMERS.values()
@@ -1861,6 +1868,7 @@ public class BannerboundAntiquity {
                 output.accept(THATCH_DOOR_ITEM.get());
                 output.accept(THATCH_BED_ITEM.get());
                 output.accept(WORM.get());
+                output.accept(COOKED_WORM);
             }).build());
 
     public BannerboundAntiquity(IEventBus modEventBus, ModContainer modContainer) {
