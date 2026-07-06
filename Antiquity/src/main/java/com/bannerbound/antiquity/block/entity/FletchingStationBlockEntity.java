@@ -25,6 +25,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import com.bannerbound.antiquity.craft.Fletching;
 
 /**
  * Block entity for the Fletching Station: a loose pile of items placed one at a time (mixed types,

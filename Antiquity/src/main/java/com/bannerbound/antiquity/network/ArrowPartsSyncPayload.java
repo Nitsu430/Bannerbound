@@ -10,6 +10,7 @@ import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
+import com.bannerbound.antiquity.event.AntiquityEvents;
 
 /**
  * Server->client sync of the datapack-loaded {@link ArrowPart} registry, so clients can render modular

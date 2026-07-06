@@ -3,6 +3,7 @@ package com.bannerbound.antiquity.block;
 import com.mojang.serialization.MapCodec;
 
 import net.minecraft.world.level.block.CampfireBlock;
+import com.bannerbound.antiquity.BannerboundAntiquity;
 
 /**
  * A campfire that renders WITHOUT its flame (just the glowing logs) -- the {@code stone_cooking_pot}

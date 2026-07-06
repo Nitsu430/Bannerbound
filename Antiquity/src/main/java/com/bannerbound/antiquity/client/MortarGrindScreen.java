@@ -21,6 +21,7 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
+import com.bannerbound.antiquity.craft.MortarGrind;
 
 /**
  * Transparent press-and-grind mortar minigame screen. Each beat: hold left-click to press the

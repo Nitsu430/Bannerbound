@@ -24,6 +24,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import com.bannerbound.antiquity.workshop.MetalworkingItems;
 
 /**
  * Block entity for the Bloomery multiblock (lives on the lower segment). Tracks the door's
@@ -248,9 +249,9 @@ public class BloomeryBlockEntity extends BlockEntity {
     private void tickCrucibleMelt(Level level) {
         com.bannerbound.antiquity.item.CrucibleContents contents =
             heldItem.get(BannerboundAntiquity.CRUCIBLE_CONTENTS.get());
-        com.bannerbound.antiquity.metalworking.MetalworkingItems.MeltValue resolved =
+        com.bannerbound.antiquity.workshop.MetalworkingItems.MeltValue resolved =
             contents != null && contents.hasCharge() && !contents.molten()
-                ? com.bannerbound.antiquity.metalworking.MetalworkingItems.resolveCharge(contents.charge())
+                ? com.bannerbound.antiquity.workshop.MetalworkingItems.resolveCharge(contents.charge())
                 : null;
         boolean canMelt = resolved != null;
         int[] band = canMelt
@@ -268,7 +269,7 @@ public class BloomeryBlockEntity extends BlockEntity {
         if (active) {
             smeltProgress += rate;
             if (smeltProgress >= CRUCIBLE_MELT_TICKS) {
-                int color = com.bannerbound.antiquity.metalworking.MetalworkingItems.colorOf(resolved.metalId());
+                int color = com.bannerbound.antiquity.workshop.MetalworkingItems.colorOf(resolved.metalId());
                 heldItem.set(BannerboundAntiquity.CRUCIBLE_CONTENTS.get(),
                     com.bannerbound.antiquity.item.CrucibleContents.molten(
                         resolved.metalId(), resolved.mb(), color));

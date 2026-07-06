@@ -25,6 +25,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import com.bannerbound.antiquity.craft.Fletching;
 
 /**
  * Block entity for the Crafting Stone: a loose pile of items placed one at a time (mixed types,
@@ -158,7 +159,7 @@ public class CraftingStoneBlockEntity extends BlockEntity implements GhostRecipe
         CraftingStoneRecipe recipe = resolveRecipe();
         if (recipe != null && recipe.transferQuality()) {
             com.bannerbound.core.api.quality.QualityTier best = bestQualityIn(contents);
-            if (best != null) com.bannerbound.antiquity.Fletching.applyQuality(out, best);
+            if (best != null) com.bannerbound.antiquity.craft.Fletching.applyQuality(out, best);
         }
         contents.clear();
         cachedResult = ItemStack.EMPTY;

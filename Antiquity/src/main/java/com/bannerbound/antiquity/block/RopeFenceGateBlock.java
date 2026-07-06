@@ -1,8 +1,8 @@
 package com.bannerbound.antiquity.block;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.RopeAnchor;
-import com.bannerbound.antiquity.RopeTies;
+import com.bannerbound.antiquity.rope.RopeAnchor;
+import com.bannerbound.antiquity.rope.RopeTies;
 import com.bannerbound.antiquity.block.entity.RopeFenceGateBlockEntity;
 import com.mojang.serialization.MapCodec;
 

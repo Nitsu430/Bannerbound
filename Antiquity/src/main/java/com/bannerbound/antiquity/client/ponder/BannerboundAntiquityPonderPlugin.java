@@ -24,6 +24,8 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import com.bannerbound.antiquity.craft.Fletching;
+import com.bannerbound.antiquity.craft.Tannery;
 
 /**
  * Ponder plugin for Bannerbound: Antiquity - registers every workstation's construction/operation

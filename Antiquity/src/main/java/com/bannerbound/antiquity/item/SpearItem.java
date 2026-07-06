@@ -1,7 +1,7 @@
 package com.bannerbound.antiquity.item;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.SpearFishing;
+import com.bannerbound.antiquity.entity.SpearFishing;
 import com.bannerbound.antiquity.entity.SpearProjectile;
 
 import net.minecraft.resources.ResourceLocation;

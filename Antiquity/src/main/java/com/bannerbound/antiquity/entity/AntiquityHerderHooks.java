@@ -2,8 +2,8 @@ package com.bannerbound.antiquity.entity;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
 import com.bannerbound.antiquity.item.HideQuality;
-import com.bannerbound.antiquity.tannery.HideGrading;
-import com.bannerbound.antiquity.tannery.Hides;
+import com.bannerbound.antiquity.workshop.HideGrading;
+import com.bannerbound.antiquity.workshop.Hides;
 import com.bannerbound.core.api.herder.HerderHooks;
 
 import net.minecraft.world.entity.animal.Animal;

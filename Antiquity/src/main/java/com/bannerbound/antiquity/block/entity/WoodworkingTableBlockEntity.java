@@ -8,12 +8,12 @@ import java.util.Map;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.carpentry.CarpentryAssembly;
-import com.bannerbound.antiquity.carpentry.CarpentryAssemblyManager;
-import com.bannerbound.antiquity.carpentry.CarpentryOutput;
-import com.bannerbound.antiquity.carpentry.CarpentryOutputManager;
-import com.bannerbound.antiquity.carpentry.Cost;
-import com.bannerbound.antiquity.carpentry.WoodFamily;
+import com.bannerbound.antiquity.workshop.CarpentryAssembly;
+import com.bannerbound.antiquity.workshop.CarpentryAssemblyManager;
+import com.bannerbound.antiquity.workshop.CarpentryOutput;
+import com.bannerbound.antiquity.workshop.CarpentryOutputManager;
+import com.bannerbound.antiquity.workshop.Cost;
+import com.bannerbound.antiquity.workshop.WoodFamily;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;

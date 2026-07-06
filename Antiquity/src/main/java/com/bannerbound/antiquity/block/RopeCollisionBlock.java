@@ -18,6 +18,8 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.EntityCollisionContext;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import com.bannerbound.antiquity.event.RopeFenceEvents;
+import com.bannerbound.antiquity.rope.RopeTies;
 
 /**
  * Invisible marker placed in the cells a rope spans (by {@code RopeTies}, removed when the rope

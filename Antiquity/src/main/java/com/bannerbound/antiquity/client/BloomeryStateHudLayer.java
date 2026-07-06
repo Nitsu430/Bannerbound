@@ -22,6 +22,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import com.bannerbound.antiquity.workshop.MetalworkingItems;
 
 /**
  * The bloomery temperature readout (METALWORKING_PLAN.md Part 1). While the player looks at a
@@ -73,7 +74,7 @@ public final class BloomeryStateHudLayer implements LayeredDraw.Layer {
                         cap(c.dominantMetal()), c.totalMb())
                     .withStyle(s -> s.withColor(WHITE));
             } else {
-                var resolved = com.bannerbound.antiquity.metalworking.MetalworkingItems
+                var resolved = com.bannerbound.antiquity.workshop.MetalworkingItems
                     .resolveCharge(c.charge());
                 if (resolved == null) {
                     line2 = Component.translatable("bannerboundantiquity.hud.bloomery.empty")

@@ -9,9 +9,9 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.carpentry.CarpentryAssemblyManager;
-import com.bannerbound.antiquity.carpentry.CarpentryOutputManager;
-import com.bannerbound.antiquity.masonry.MasonryOutputManager;
+import com.bannerbound.antiquity.workshop.CarpentryAssemblyManager;
+import com.bannerbound.antiquity.workshop.CarpentryOutputManager;
+import com.bannerbound.antiquity.workshop.MasonryOutputManager;
 import com.bannerbound.antiquity.recipe.BloomeryRecipeManager;
 import com.bannerbound.antiquity.recipe.CraftingStoneRecipeManager;
 import com.bannerbound.antiquity.recipe.FletchingRecipeManager;
@@ -29,6 +29,7 @@ import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.fml.ModList;
+import com.bannerbound.antiquity.workshop.MetalworkingData;
 
 /**
  * Loads the mod's custom datapack recipes ({@code data/<modid>/crafting_stone_recipes/}, ...) on the
@@ -66,7 +67,7 @@ public final class ClientDatapackRecipes implements ResourceManagerReloadListene
         load("fletching_recipes", FletchingRecipeManager::applyEntries);
         // arrow_parts intentionally absent: ArrowPartsSyncPayload pushes it on join/reload, and a client F3+T must not clobber that synced set.
         load("anvil_recipes", com.bannerbound.antiquity.recipe.AnvilRecipeManager::applyEntries);
-        load("metalworking", com.bannerbound.antiquity.metalworking.MetalworkingData::applyEntries);
+        load("metalworking", com.bannerbound.antiquity.workshop.MetalworkingData::applyEntries);
         load("pottery_recipes", PotteryRecipeManager::applyEntries);
         load("bloomery_recipes", BloomeryRecipeManager::applyEntries);
         load("kiln_recipes", KilnRecipeManager::applyEntries);

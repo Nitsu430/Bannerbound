@@ -28,6 +28,7 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
+import com.bannerbound.antiquity.craft.Knapping;
 
 /**
  * Two-phase knapping minigame screen (a PolishedScreen with the dimmed backdrop disabled: the world
@@ -383,7 +384,7 @@ public class KnappingScreen extends PolishedScreen {
         g.drawCenteredString(this.font, Math.min(resolvedCount + 1, reps) + "/" + reps,
                 cursorX, trackY - 34, 0xFFFFFFFF);
 
-        QualityTier tier = com.bannerbound.antiquity.Knapping.rollTier(matched.percentage_standard(), matched.percentage_fine(), scoresSoFar(), reps);
+        QualityTier tier = com.bannerbound.antiquity.craft.Knapping.rollTier(matched.percentage_standard(), matched.percentage_fine(), scoresSoFar(), reps);
         g.drawCenteredString(this.font, tier.displayName(), cx, trackY - 34, 0xFFFFFFFF);
 
         g.fill(cursorX - 8, trackY - 1, cursorX + travelDist, trackY + 1, 0x66FFFFFF);

@@ -72,6 +72,7 @@ import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
 import net.neoforged.neoforge.registries.NeoForgeRegistries;
+import com.bannerbound.antiquity.workshop.MetalworkingItems;
 
 /**
  * The @Mod main class for Bannerbound: Antiquity, the Antiquity-age expansion to Bannerbound: Core.
@@ -1513,15 +1514,15 @@ public class BannerboundAntiquity {
                 output.accept(STONE_ANVIL_ITEM.get());
                 output.accept(BELLOWS_BLOCK_ITEM.get());
                 //output.accept(WORM_CRATE_ITEM.get());
-                com.bannerbound.antiquity.metalworking.MetalworkingItems.MOLDS.values()
+                com.bannerbound.antiquity.workshop.MetalworkingItems.MOLDS.values()
                     .forEach(i -> output.accept(i.get()));
-                com.bannerbound.antiquity.metalworking.MetalworkingItems.HAMMERS.values()
+                com.bannerbound.antiquity.workshop.MetalworkingItems.HAMMERS.values()
                     .forEach(i -> output.accept(i.get()));
-                com.bannerbound.antiquity.metalworking.MetalworkingItems.CASTINGS.values()
+                com.bannerbound.antiquity.workshop.MetalworkingItems.CASTINGS.values()
                     .forEach(i -> output.accept(i.get()));
-                com.bannerbound.antiquity.metalworking.MetalworkingItems.TOOLS.values()
+                com.bannerbound.antiquity.workshop.MetalworkingItems.TOOLS.values()
                     .forEach(i -> output.accept(i.get()));
-                com.bannerbound.antiquity.metalworking.MetalworkingItems.TONGS.values()
+                com.bannerbound.antiquity.workshop.MetalworkingItems.TONGS.values()
                     .forEach(i -> output.accept(i.get()));
 
                 output.accept(TIN_SPEAR.get());
@@ -1590,7 +1591,7 @@ public class BannerboundAntiquity {
         modEventBus.addListener(this::registerCapabilities);
         modEventBus.addListener(this::addCookingFireToCampfireBE);
 
-        com.bannerbound.antiquity.metalworking.MetalworkingItems.register();
+        com.bannerbound.antiquity.workshop.MetalworkingItems.register();
 
         BLOCKS.register(modEventBus);
         ITEMS.register(modEventBus);
@@ -1650,11 +1651,11 @@ public class BannerboundAntiquity {
             .section(band("metalworking", 0xFFCF9152))
                 .add(TIN_ORE_ITEM, RAW_TIN, UNFIRED_CRUCIBLE, CRUCIBLE, STONE_ANVIL_ITEM,
                      BELLOWS_BLOCK_ITEM)
-                .add(com.bannerbound.antiquity.metalworking.MetalworkingItems.MOLDS.values())
-                .add(com.bannerbound.antiquity.metalworking.MetalworkingItems.HAMMERS.values())
-                .add(com.bannerbound.antiquity.metalworking.MetalworkingItems.CASTINGS.values())
-                .add(com.bannerbound.antiquity.metalworking.MetalworkingItems.TOOLS.values())
-                .add(com.bannerbound.antiquity.metalworking.MetalworkingItems.TONGS.values())
+                .add(com.bannerbound.antiquity.workshop.MetalworkingItems.MOLDS.values())
+                .add(com.bannerbound.antiquity.workshop.MetalworkingItems.HAMMERS.values())
+                .add(com.bannerbound.antiquity.workshop.MetalworkingItems.CASTINGS.values())
+                .add(com.bannerbound.antiquity.workshop.MetalworkingItems.TOOLS.values())
+                .add(com.bannerbound.antiquity.workshop.MetalworkingItems.TONGS.values())
                 .add(TIN_SPEAR, COPPER_SPEAR, BRONZE_SPEAR)
             .section(band("pottery", 0xFFC8785A))
                 .add(CLAY_POT_UNFIRED, CLAY_POT_FIRED, CLAY_BUCKET, CLAY_FIRED_BUCKET,

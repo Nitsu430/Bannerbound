@@ -9,6 +9,7 @@ import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
+import com.bannerbound.antiquity.event.PoisonEvents;
 
 /**
  * The blunt-weapon crit stun -- the shared effect every blunt weapon (bone club, smithing hammers;

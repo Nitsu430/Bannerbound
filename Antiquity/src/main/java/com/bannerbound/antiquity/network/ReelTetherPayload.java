@@ -8,6 +8,7 @@ import io.netty.buffer.ByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
+import com.bannerbound.antiquity.entity.SpearFishing;
 
 /**
  * C -> S: the player shift-right-clicked to reel in their rope-tethered spear / speared-fish catch

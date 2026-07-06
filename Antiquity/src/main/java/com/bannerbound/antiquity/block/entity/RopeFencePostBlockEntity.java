@@ -10,9 +10,9 @@ import java.util.Set;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.RopeAnchor;
-import com.bannerbound.antiquity.RopeTieHost;
-import com.bannerbound.antiquity.RopeTies;
+import com.bannerbound.antiquity.rope.RopeAnchor;
+import com.bannerbound.antiquity.rope.RopeTieHost;
+import com.bannerbound.antiquity.rope.RopeTies;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;

@@ -35,6 +35,7 @@ import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.item.crafting.RecipeType;
 import net.minecraft.world.level.block.entity.CampfireBlockEntity;
 import net.minecraft.world.phys.AABB;
+import com.bannerbound.antiquity.craft.Tannery;
 
 /**
  * NPC driver for the Kitchen workshop (the generic Crafter staffs it). The work block is a stone

@@ -15,6 +15,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.UseAnim;
 import net.minecraft.world.level.Level;
+import com.bannerbound.antiquity.BannerboundAntiquity;
 
 /**
  * A bamboo blowgun - fires a {@link PoisonDart} from the inventory as ammo (any poison's dart

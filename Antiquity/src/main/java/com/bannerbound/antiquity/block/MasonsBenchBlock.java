@@ -1,7 +1,7 @@
 package com.bannerbound.antiquity.block;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.Masonry;
+import com.bannerbound.antiquity.craft.Masonry;
 import com.bannerbound.antiquity.block.entity.MasonsBenchBlockEntity;
 import com.mojang.serialization.MapCodec;
 

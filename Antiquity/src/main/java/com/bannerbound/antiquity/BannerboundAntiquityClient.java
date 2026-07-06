@@ -48,6 +48,7 @@ import net.neoforged.neoforge.client.event.RegisterMenuScreensEvent;
 import net.neoforged.neoforge.client.event.RegisterParticleProvidersEvent;
 import net.neoforged.neoforge.client.gui.ConfigurationScreen;
 import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
+import com.bannerbound.antiquity.workshop.MetalworkingItems;
 
 /**
  * Client-only registration hub for the Antiquity mod. The whole class is gated to {@link Dist#CLIENT}
@@ -280,7 +281,7 @@ public class BannerboundAntiquityClient {
 
     @SubscribeEvent
     static void onRegisterAdditionalModels(ModelEvent.RegisterAdditional event) {
-        for (String shape : com.bannerbound.antiquity.metalworking.MetalworkingItems.MOLD_SHAPES) {
+        for (String shape : com.bannerbound.antiquity.workshop.MetalworkingItems.MOLD_SHAPES) {
             event.register(com.bannerbound.antiquity.client.StoneAnvilRenderer.placedMoldModel(shape));
         }
     }

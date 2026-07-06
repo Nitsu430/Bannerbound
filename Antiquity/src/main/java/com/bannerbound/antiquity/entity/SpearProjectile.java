@@ -23,6 +23,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.EntityHitResult;
 import net.minecraft.world.phys.Vec3;
+import com.bannerbound.antiquity.event.HuntingEvents;
 
 /**
  * Thrown spear projectile (player and NPC), an {@link AbstractArrow} that flies, sticks in blocks as

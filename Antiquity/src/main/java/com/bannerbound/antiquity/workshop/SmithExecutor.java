@@ -11,13 +11,13 @@ import java.util.Set;
 import javax.annotation.Nullable;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.Fletching;
+import com.bannerbound.antiquity.craft.Fletching;
 import com.bannerbound.antiquity.block.entity.BloomeryBlockEntity;
 import com.bannerbound.antiquity.block.entity.BloomeryHeat;
 import com.bannerbound.antiquity.block.entity.StoneAnvilBlockEntity;
 import com.bannerbound.antiquity.item.CrucibleContents;
-import com.bannerbound.antiquity.metalworking.MetalworkingData;
-import com.bannerbound.antiquity.metalworking.MetalworkingItems;
+import com.bannerbound.antiquity.workshop.MetalworkingData;
+import com.bannerbound.antiquity.workshop.MetalworkingItems;
 import com.bannerbound.antiquity.recipe.AnvilRecipe;
 import com.bannerbound.antiquity.recipe.AnvilRecipeManager;
 import com.bannerbound.core.api.quality.QualityMath;
@@ -38,6 +38,8 @@ import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import com.bannerbound.antiquity.craft.Hammer;
+import com.bannerbound.antiquity.craft.Tannery;
 
 /**
  * NPC driver for the Smithy workshop (staffed by the generic Crafter; work block = Stone Anvil).

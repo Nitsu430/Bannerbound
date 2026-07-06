@@ -3,9 +3,9 @@ package com.bannerbound.antiquity.client;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.RopeAnchor;
-import com.bannerbound.antiquity.RopeTies;
-import com.bannerbound.antiquity.RopeTieState;
+import com.bannerbound.antiquity.rope.RopeAnchor;
+import com.bannerbound.antiquity.rope.RopeTies;
+import com.bannerbound.antiquity.rope.RopeTieState;
 import com.bannerbound.antiquity.block.RopeFenceGateBlock;
 import com.bannerbound.antiquity.block.RopeFencePostBlock;
 import com.bannerbound.core.BannerboundCore;
@@ -31,6 +31,7 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
+import com.bannerbound.antiquity.event.HerdingEvents;
 
 /**
  * Client-side rope render event hub: every world-space plant-fibre green rope ribbon that is not a

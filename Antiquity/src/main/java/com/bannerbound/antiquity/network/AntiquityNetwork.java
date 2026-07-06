@@ -3,8 +3,8 @@ package com.bannerbound.antiquity.network;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.RopeFenceEvents;
-import com.bannerbound.antiquity.SpearFishing;
+import com.bannerbound.antiquity.event.RopeFenceEvents;
+import com.bannerbound.antiquity.entity.SpearFishing;
 
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.api.distmarker.Dist;
@@ -13,6 +13,16 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.loading.FMLEnvironment;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
+import com.bannerbound.antiquity.craft.Knapping;
+import com.bannerbound.antiquity.craft.Carves;
+import com.bannerbound.antiquity.craft.Hammer;
+import com.bannerbound.antiquity.craft.Fletching;
+import com.bannerbound.antiquity.craft.Pottery;
+import com.bannerbound.antiquity.craft.MortarGrind;
+import com.bannerbound.antiquity.craft.Masonry;
+import com.bannerbound.antiquity.craft.Carpentry;
+import com.bannerbound.antiquity.craft.Tannery;
+import com.bannerbound.antiquity.craft.GhostWorkstationActions;
 
 /**
  * Antiquity's payload registration, mirroring Core's {@code BannerboundNetwork}; every handler hops
@@ -62,7 +72,7 @@ public final class AntiquityNetwork {
             FletchingActionPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() -> {
                 if (context.player() instanceof ServerPlayer player) {
-                    com.bannerbound.antiquity.Fletching.handleAction(player, payload);
+                    com.bannerbound.antiquity.craft.Fletching.handleAction(player, payload);
                 }
             }));
         registrar.playToServer(
@@ -70,7 +80,7 @@ public final class AntiquityNetwork {
             PotteryActionPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() -> {
                 if (context.player() instanceof ServerPlayer player) {
-                    com.bannerbound.antiquity.Pottery.handleAction(player, payload);
+                    com.bannerbound.antiquity.craft.Pottery.handleAction(player, payload);
                 }
             }));
 
@@ -79,7 +89,7 @@ public final class AntiquityNetwork {
             MortarGrindActionPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() -> {
                 if (context.player() instanceof ServerPlayer player) {
-                    com.bannerbound.antiquity.MortarGrind.handleAction(player, payload);
+                    com.bannerbound.antiquity.craft.MortarGrind.handleAction(player, payload);
                 }
             }));
 
@@ -88,7 +98,7 @@ public final class AntiquityNetwork {
             KnappingActionPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() -> {
                 if (context.player() instanceof ServerPlayer player) {
-                    com.bannerbound.antiquity.Knapping.handleAction(player, payload);
+                    com.bannerbound.antiquity.craft.Knapping.handleAction(player, payload);
                 }
             }));
 
@@ -97,7 +107,7 @@ public final class AntiquityNetwork {
             GhostActionPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() -> {
                 if (context.player() instanceof ServerPlayer player) {
-                    com.bannerbound.antiquity.GhostWorkstationActions.serverHandle(
+                    com.bannerbound.antiquity.craft.GhostWorkstationActions.serverHandle(
                         player, payload.pos(), payload.action());
                 }
             }));
@@ -107,7 +117,7 @@ public final class AntiquityNetwork {
             CarveCommitPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() -> {
                 if (context.player() instanceof ServerPlayer player) {
-                    com.bannerbound.antiquity.Carves.commit(player, payload.anchor());
+                    com.bannerbound.antiquity.craft.Carves.commit(player, payload.anchor());
                 }
             }));
 
@@ -116,7 +126,7 @@ public final class AntiquityNetwork {
             CarpentryActionPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() -> {
                 if (context.player() instanceof ServerPlayer player) {
-                    com.bannerbound.antiquity.Carpentry.handleAction(player, payload);
+                    com.bannerbound.antiquity.craft.Carpentry.handleAction(player, payload);
                 }
             }));
 
@@ -125,7 +135,7 @@ public final class AntiquityNetwork {
             TanningActionPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() -> {
                 if (context.player() instanceof ServerPlayer player) {
-                    com.bannerbound.antiquity.Tannery.handleAction(player, payload);
+                    com.bannerbound.antiquity.craft.Tannery.handleAction(player, payload);
                 }
             }));
 
@@ -134,7 +144,7 @@ public final class AntiquityNetwork {
             MasonryActionPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() -> {
                 if (context.player() instanceof ServerPlayer player) {
-                    com.bannerbound.antiquity.Masonry.handleAction(player, payload);
+                    com.bannerbound.antiquity.craft.Masonry.handleAction(player, payload);
                 }
             }));
 
@@ -143,7 +153,7 @@ public final class AntiquityNetwork {
             HammerActionPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() -> {
                 if (context.player() instanceof ServerPlayer player) {
-                    com.bannerbound.antiquity.Hammer.handleAction(player, payload);
+                    com.bannerbound.antiquity.craft.Hammer.handleAction(player, payload);
                 }
             }));
         // Handler touches only the COMMON ArrowPartRegistry -> safe to register unguarded on both dists.

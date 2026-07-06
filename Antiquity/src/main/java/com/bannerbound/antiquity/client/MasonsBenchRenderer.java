@@ -22,6 +22,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import com.bannerbound.antiquity.BannerboundAntiquity;
 
 /**
  * Renders the Mason's Bench's dynamic items - the deposited stone pile, the spinning picker result

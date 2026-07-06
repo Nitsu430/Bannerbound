@@ -26,6 +26,7 @@ import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import com.bannerbound.antiquity.craft.Tannery;
 
 /**
  * NPC driver for the Brewery workshop (the generic Crafter staffs it). The work block is a

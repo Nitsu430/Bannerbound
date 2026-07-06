@@ -8,9 +8,9 @@ import java.util.Map;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.masonry.MasonryOutput;
-import com.bannerbound.antiquity.masonry.MasonryOutputManager;
-import com.bannerbound.antiquity.masonry.StoneFamily;
+import com.bannerbound.antiquity.workshop.MasonryOutput;
+import com.bannerbound.antiquity.workshop.MasonryOutputManager;
+import com.bannerbound.antiquity.workshop.StoneFamily;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;

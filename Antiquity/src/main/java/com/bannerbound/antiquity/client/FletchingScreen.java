@@ -28,6 +28,7 @@ import net.minecraft.util.RandomSource;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
+import com.bannerbound.antiquity.craft.Fletching;
 
 /**
  * The fletching stretch minigame: a transparent in-world overlay (a plain {@link Screen}, not a

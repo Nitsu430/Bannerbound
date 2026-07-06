@@ -2,7 +2,7 @@ package com.bannerbound.antiquity.client;
 
 import org.jetbrains.annotations.ApiStatus;
 
-import com.bannerbound.antiquity.RopeTies;
+import com.bannerbound.antiquity.rope.RopeTies;
 import com.bannerbound.antiquity.block.entity.RopeFencePostBlockEntity;
 import com.mojang.blaze3d.vertex.PoseStack;
 

@@ -1,0 +1,30 @@
+{
+  "trigger": {
+    "any": [
+      {
+        "type": "item_obtained",
+        "item": "bannerboundantiquity:bone_axe"
+      }
+    ]
+  },
+  "priority": "interrupt",
+  "once": true,
+  "order": 30,
+  "pages": [
+    {
+      "title": "Path Towards a Settlement",
+      "text": "You've made a &abone axe&r! It is time to obtain the &cfirewood&r for your first campfire, which will start your first settlement!",
+      "image": "bannerbound:path_settlement_img0"
+    },
+    {
+      "title": "The chopping stump",
+      "text": "&b{key:key.use}&r on a lone log with your &4bone axe&r to create a &6chopping stump!&r\n\nPlace logs on it, and &b{key:key.use}&r with your bone axe to chop them into &cfirewood&r.",
+      "clip": "bannerbound:path_settlement_c0"
+    },
+    {
+      "title": "The founding campfire",
+      "text": "&b{key:key.use}&r with 4 firewood on a spot on the ground where you'll want to found your &6settlement&r. \n\nWhen the campfire is ready, &b{key:key.use}&r to open the menu and found your &6settlement&r!",
+      "clip": "bannerbound:path_settlement_c1"
+    }
+  ]
+}

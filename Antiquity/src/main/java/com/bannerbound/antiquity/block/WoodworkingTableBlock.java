@@ -1,7 +1,7 @@
 package com.bannerbound.antiquity.block;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.Carpentry;
+import com.bannerbound.antiquity.craft.Carpentry;
 import com.bannerbound.antiquity.block.entity.WoodworkingTableBlockEntity;
 import com.mojang.serialization.MapCodec;
 
@@ -35,6 +35,7 @@ import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import com.bannerbound.antiquity.event.AntiquityEvents;
 
 /**
  * Carpenter's Table - a 2-block multiblock: the MAIN (master) cell holds the block entity and renders

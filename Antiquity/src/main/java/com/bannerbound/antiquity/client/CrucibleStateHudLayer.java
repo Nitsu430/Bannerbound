@@ -4,7 +4,7 @@ import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.antiquity.block.entity.CrucibleBlockEntity;
 import com.bannerbound.antiquity.item.CrucibleContents;
-import com.bannerbound.antiquity.metalworking.MetalworkingItems;
+import com.bannerbound.antiquity.workshop.MetalworkingItems;
 
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.Minecraft;

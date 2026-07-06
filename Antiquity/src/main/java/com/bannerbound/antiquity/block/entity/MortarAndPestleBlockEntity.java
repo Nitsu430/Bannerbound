@@ -15,6 +15,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import com.bannerbound.antiquity.craft.MortarGrind;
 
 /**
  * Block entity for the Mortar and Pestle. Holds the bowl's liquid (by string id, "" = empty) and

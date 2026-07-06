@@ -1,6 +1,6 @@
 package com.bannerbound.antiquity.item;
 
-import com.bannerbound.antiquity.SpearFishing;
+import com.bannerbound.antiquity.entity.SpearFishing;
 
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResultHolder;

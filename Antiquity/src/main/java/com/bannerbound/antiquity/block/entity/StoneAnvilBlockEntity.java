@@ -7,7 +7,7 @@ import java.util.Map;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
 import com.bannerbound.antiquity.item.CrucibleContents;
-import com.bannerbound.antiquity.metalworking.MetalworkingItems;
+import com.bannerbound.antiquity.workshop.MetalworkingItems;
 import com.bannerbound.antiquity.recipe.AnvilRecipe;
 import com.bannerbound.antiquity.recipe.AnvilRecipeManager;
 
@@ -26,6 +26,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import com.bannerbound.antiquity.craft.Fletching;
 
 /**
  * The Stone Anvil block entity: a Crafting-Stone-style pile station that ALSO doubles as the casting

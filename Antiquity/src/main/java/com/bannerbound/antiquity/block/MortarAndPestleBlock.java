@@ -30,6 +30,8 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import com.bannerbound.antiquity.event.AntiquityEvents;
+import com.bannerbound.antiquity.craft.MortarGrind;
 
 /**
  * The Mortar and Pestle block. Body + dynamic liquid are drawn by {@code MortarAndPestleRenderer}
@@ -187,12 +189,12 @@ public class MortarAndPestleBlock extends Block implements EntityBlock {
         if (player instanceof net.minecraft.server.level.ServerPlayer sp
                 && !mortar.getIngredient().isEmpty()
                 && MortarRecipeManager.find(mortar.getIngredient(), mortar.getLiquidId()) != null) {
-            if (!com.bannerbound.antiquity.MortarGrind.canGrindAt(level, pos)) {
+            if (!com.bannerbound.antiquity.craft.MortarGrind.canGrindAt(level, pos)) {
                 sp.displayClientMessage(net.minecraft.network.chat.Component
                     .translatable("bannerboundantiquity.mortar.locked")
                     .withStyle(net.minecraft.ChatFormatting.RED), true);
             } else {
-                com.bannerbound.antiquity.MortarGrind.startSession(sp, pos, mortar);
+                com.bannerbound.antiquity.craft.MortarGrind.startSession(sp, pos, mortar);
             }
         }
         return InteractionResult.CONSUME;
@@ -206,7 +208,7 @@ public class MortarAndPestleBlock extends Block implements EntityBlock {
             if (!loaded.isEmpty()) {
                 Block.popResource(level, pos, loaded);
             }
-            com.bannerbound.antiquity.MortarGrind.abortSessionAt(pos);
+            com.bannerbound.antiquity.craft.MortarGrind.abortSessionAt(pos);
         }
         super.onRemove(oldState, level, pos, newState, moved);
     }
