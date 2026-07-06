@@ -1,0 +1,13 @@
+{
+  "variants": {
+    "facing=north,waterlogged=false": { "model": "bannerboundantiquity:block/worm_crate" },
+    "facing=south,waterlogged=false": { "model": "bannerboundantiquity:block/worm_crate", "y": 180 },
+    "facing=west,waterlogged=false":  { "model": "bannerboundantiquity:block/worm_crate", "y": 270 },
+    "facing=east,waterlogged=false":  { "model": "bannerboundantiquity:block/worm_crate", "y": 90 },
+
+    "facing=north,waterlogged=true":  { "model": "bannerboundantiquity:block/worm_crate" },
+    "facing=south,waterlogged=true":  { "model": "bannerboundantiquity:block/worm_crate", "y": 180 },
+    "facing=west,waterlogged=true":   { "model": "bannerboundantiquity:block/worm_crate", "y": 270 },
+    "facing=east,waterlogged=true":   { "model": "bannerboundantiquity:block/worm_crate", "y": 90 }
+  }
+}

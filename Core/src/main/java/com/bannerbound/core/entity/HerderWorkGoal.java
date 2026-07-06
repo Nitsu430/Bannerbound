@@ -220,17 +220,15 @@ public class HerderWorkGoal extends OrderedWorkGoal {
     private void manageOwnGate(ServerLevel sl) {
         if (gatePos == null) return;
         GateHolds.hold(gatePos, citizen.getId(), sl.getGameTime());
-        // Hold the gate OPEN the whole time there's a claimed flock to bring in. Proximity-only opening was a
-        // DEADLOCK: a closed gate's 1.5-tall collision bar makes vanilla reject the gate cell (floor-level
-        // step-up), so the animal can't path TO the gate to trigger the opening in the first place. Holding
-        // it open from the start means the animal's pathfinder sees a clear, routable gate.
-        boolean wantOpen = !batch.isEmpty()
-            || herderCrossingGate()
-            || herdedAnimalNear(sl, gatePos, 7.5)
-            || (phase == Phase.LEAVE && insideHerder());
+
+        boolean flockIncoming = (phase == Phase.LEAD) && (!batch.isEmpty() || herdedAnimalNear(sl, gatePos, 7.5));
+
+        boolean wantOpen = flockIncoming
+                || herderCrossingGate()
+                || (phase == Phase.LEAVE && insideHerder());
+
         setOwnGate(sl, wantOpen);
     }
-
     /** True while the herder is actively walking through (within ~2.5 of) its gate — so it opens for the
      *  herder's own entry/exit, not just the flock. The herder is citizen-narrow, so vanilla A* routes it
      *  through a 1-wide gate fine; it only needs the gate open by the time it arrives. */
@@ -447,7 +445,7 @@ public class HerderWorkGoal extends OrderedWorkGoal {
         prevZ = citizen.getZ();
 
 
-        // Telepport the remaining animals when the herder reaches the goal path. Becuz sometimes the herder is stuck for too long allowing other animals to get out.
+        // Teleport the remaining animals when the herder reaches the goal path. Becuz sometimes the herder is stuck for too long allowing other animals to get out.
         double distToDest = citizen.distanceToSqr(dropCell.getX() + 0.5, dropCell.getY(), dropCell.getZ() + 0.5);
         if (distToDest <= 2.25) {
             placeBatch(sl);
