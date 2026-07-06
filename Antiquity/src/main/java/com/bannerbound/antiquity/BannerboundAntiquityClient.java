@@ -23,6 +23,8 @@ import com.bannerbound.antiquity.client.StuckSpearLayer;
 
 import java.util.Map;
 
+import com.bannerbound.antiquity.client.model.WormBaitModel;
+import com.bannerbound.antiquity.client.model.WormBaitRenderer;
 import net.minecraft.client.renderer.entity.EntityRenderer;
 import net.minecraft.client.renderer.entity.ItemRenderer;
 import net.minecraft.client.renderer.entity.LivingEntityRenderer;
@@ -286,6 +288,10 @@ public class BannerboundAntiquityClient {
         // Raft: a Boat-derived vehicle drawn with the raft model + keyframe paddle animations.
         event.registerEntityRenderer(BannerboundAntiquity.RAFT.get(),
             RaftRenderer::new);
+
+        event.registerEntityRenderer(BannerboundAntiquity.WORM_BAIT.get(),
+            WormBaitRenderer::new);
+
         // Replace the vanilla leash-knot renderer with one that hides the knot on a "roped" rope-fence
         // post (a fiber-tied raft shows the post's with-rope model instead of a knot).
         event.registerEntityRenderer(net.minecraft.world.entity.EntityType.LEASH_KNOT,
@@ -367,6 +373,10 @@ public class BannerboundAntiquityClient {
         event.registerLayerDefinition(
             com.bannerbound.antiquity.client.HelmetModel.LAYER,
             com.bannerbound.antiquity.client.HelmetModel::createBodyLayer);
+
+        event.registerLayerDefinition(
+            WormBaitModel.LAYER_LOCATION, WormBaitModel::createBodyLayer
+        );
     }
 
     @SubscribeEvent

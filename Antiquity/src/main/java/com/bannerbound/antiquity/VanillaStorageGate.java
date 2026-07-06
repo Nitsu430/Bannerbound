@@ -1,5 +1,6 @@
 package com.bannerbound.antiquity;
 
+import com.bannerbound.core.api.research.ItemKnowledge;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.core.api.research.ResearchManager;
@@ -37,9 +38,6 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID)
 @ApiStatus.Internal
 public final class VanillaStorageGate {
-    private static final String FLAG_BARREL = "bannerbound.unlock.barrel";
-    private static final String FLAG_CHEST = "bannerbound.unlock.chest";
-
     private VanillaStorageGate() {
     }
 
@@ -48,30 +46,26 @@ public final class VanillaStorageGate {
         if (VanillaContentState.isEnabled()) return;
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
         if (player.isShiftKeyDown()) return; // sneaking never opens the GUI; allow place-against
+        if (player.isCreative()) return; // don't check if on creative. always allow
+
+        MinecraftServer server = player.getServer();
+        if (server == null) return;
+        SettlementData data = SettlementData.get(server.overworld());
+        Settlement s = data.getByPlayer(player.getUUID());
 
         Block block = event.getLevel().getBlockState(event.getPos()).getBlock();
-        final String flag;
         if (block == Blocks.BARREL) {
-            flag = FLAG_BARREL;
+            if (ItemKnowledge.isKnown(s, Blocks.BARREL.asItem())) return;
         } else if (block == Blocks.CHEST || block == Blocks.TRAPPED_CHEST) {
-            flag = FLAG_CHEST;
+            if (ItemKnowledge.isKnown(s, Blocks.CHEST.asItem())) return;
         } else {
             return;
         }
 
-        if (settlementHasFlag(player, flag)) return;
         event.setCanceled(true);
         event.setCancellationResult(InteractionResult.FAIL);
         player.displayClientMessage(
             Component.translatable("bannerbound.vanilla.storage_locked").withStyle(ChatFormatting.RED),
             true);
-    }
-
-    private static boolean settlementHasFlag(ServerPlayer player, String flag) {
-        MinecraftServer server = player.getServer();
-        if (server == null) return true; // fail-open if no server context
-        SettlementData data = SettlementData.get(server.overworld());
-        Settlement s = data.getByPlayer(player.getUUID());
-        return s != null && ResearchManager.hasFlag(s, flag);
     }
 }
