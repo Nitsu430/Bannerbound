@@ -25,6 +25,9 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import com.bannerbound.antiquity.event.AntiquityEvents;
+import com.bannerbound.antiquity.craft.Fletching;
+import com.bannerbound.antiquity.craft.Tannery;
 
 /**
  * The crafter's driver at a Crafting Stone ("General Crafts" workshops). chooseCraft runs, in
@@ -403,7 +406,7 @@ public class GeneralCraftsExecutor implements WorkExecutor {
                 com.bannerbound.core.api.quality.QualityTier.of(out);
             com.bannerbound.core.api.quality.QualityTier tier =
                 npcTier.ordinal() >= inputTier.ordinal() ? npcTier : inputTier;
-            out = com.bannerbound.antiquity.Fletching.applyQuality(out, tier);
+            out = com.bannerbound.antiquity.craft.Fletching.applyQuality(out, tier);
         }
         return out;
     }

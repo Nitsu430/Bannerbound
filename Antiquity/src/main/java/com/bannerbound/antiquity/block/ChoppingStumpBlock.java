@@ -34,6 +34,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.neoforged.neoforge.client.extensions.common.IClientBlockExtensions;
+import com.bannerbound.antiquity.event.AntiquityEvents;
 
 /**
  * Chopping Stump -- a log butchering block made by right-clicking a lone log with an axe

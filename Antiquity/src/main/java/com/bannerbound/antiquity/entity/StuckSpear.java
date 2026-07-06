@@ -9,6 +9,7 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.world.item.ItemStack;
+import com.bannerbound.antiquity.BannerboundAntiquity;
 
 /**
  * One spear embedded in a mob - the arrow-style replacement for a follow-entity. A mob carries a

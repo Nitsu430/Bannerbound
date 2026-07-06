@@ -18,6 +18,7 @@ import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.item.ItemStack;
+import com.bannerbound.antiquity.event.AntiquityEvents;
 
 /**
  * Datapack loader for Bloomery smelting recipes - reads every JSON under

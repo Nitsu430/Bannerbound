@@ -22,6 +22,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import com.bannerbound.antiquity.craft.Tannery;
 
 /**
  * NPC driver for the Tannery workshop (staffed by the generic Crafter). Whenever leather is wanted

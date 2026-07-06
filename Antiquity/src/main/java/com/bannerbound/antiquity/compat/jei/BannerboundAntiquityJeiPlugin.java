@@ -7,13 +7,13 @@ import java.util.Map;
 import java.util.function.Predicate;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.carpentry.CarpentryAssembly;
-import com.bannerbound.antiquity.carpentry.CarpentryAssemblyManager;
-import com.bannerbound.antiquity.carpentry.CarpentryOutput;
-import com.bannerbound.antiquity.carpentry.CarpentryOutputManager;
-import com.bannerbound.antiquity.carpentry.WoodFamily;
-import com.bannerbound.antiquity.metalworking.MetalworkingData;
-import com.bannerbound.antiquity.metalworking.MetalworkingItems;
+import com.bannerbound.antiquity.workshop.CarpentryAssembly;
+import com.bannerbound.antiquity.workshop.CarpentryAssemblyManager;
+import com.bannerbound.antiquity.workshop.CarpentryOutput;
+import com.bannerbound.antiquity.workshop.CarpentryOutputManager;
+import com.bannerbound.antiquity.workshop.WoodFamily;
+import com.bannerbound.antiquity.workshop.MetalworkingData;
+import com.bannerbound.antiquity.workshop.MetalworkingItems;
 import com.bannerbound.antiquity.recipe.*;
 import com.bannerbound.core.Config;
 import com.bannerbound.core.compat.jei.BannerboundCoreJeiPlugin;
@@ -51,6 +51,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import org.jetbrains.annotations.Nullable;
+import com.bannerbound.antiquity.craft.Carpentry;
 
 /**
  * JEI integration for Antiquity: registers every custom recipe category (crafting stone, fletching,

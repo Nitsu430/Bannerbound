@@ -31,6 +31,9 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.gameevent.GameEvent;
 import net.minecraft.world.phys.Vec3;
+import com.bannerbound.antiquity.event.AntiquityEvents;
+import com.bannerbound.antiquity.rope.RopeTies;
+import com.bannerbound.antiquity.rope.RopeAnchor;
 
 /**
  * A primitive raft. Extends vanilla {@link Boat} to inherit water physics, WASD steering, paddle
@@ -273,14 +276,14 @@ public class RaftEntity extends Boat {
         }
         if (!java.util.Objects.equals(target, this.ropedPostPos)) {
             if (this.ropedPostPos != null) {
-                com.bannerbound.antiquity.RopeTies.refreshRoped(this.level(),
-                    new com.bannerbound.antiquity.RopeAnchor(this.ropedPostPos, 0));
+                com.bannerbound.antiquity.rope.RopeTies.refreshRoped(this.level(),
+                    new com.bannerbound.antiquity.rope.RopeAnchor(this.ropedPostPos, 0));
             }
             this.ropedPostPos = target;
         }
         if (target != null) {
-            com.bannerbound.antiquity.RopeTies.setRopedModel(this.level(),
-                new com.bannerbound.antiquity.RopeAnchor(target, 0), true);
+            com.bannerbound.antiquity.rope.RopeTies.setRopedModel(this.level(),
+                new com.bannerbound.antiquity.rope.RopeAnchor(target, 0), true);
         }
     }
 
@@ -431,8 +434,8 @@ public class RaftEntity extends Boat {
     @Override
     public void remove(Entity.RemovalReason reason) {
         if (this.ropedPostPos != null && !this.level().isClientSide) {
-            com.bannerbound.antiquity.RopeTies.refreshRoped(this.level(),
-                new com.bannerbound.antiquity.RopeAnchor(this.ropedPostPos, 0));
+            com.bannerbound.antiquity.rope.RopeTies.refreshRoped(this.level(),
+                new com.bannerbound.antiquity.rope.RopeAnchor(this.ropedPostPos, 0));
             this.ropedPostPos = null;
         }
         super.remove(reason);

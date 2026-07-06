@@ -17,6 +17,7 @@ import com.bannerbound.core.api.world.BlockSelectionRegistry;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import com.bannerbound.antiquity.craft.Tannery;
 
 /**
  * Shared NPC drying-rack tending, split by {@link DryingRackRecipe#category()}: the Cook tends

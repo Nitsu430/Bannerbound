@@ -22,6 +22,7 @@ import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import com.bannerbound.antiquity.craft.Pottery;
 
 /**
  * Datapack loader for Pottery Slab recipes ({@code data/<namespace>/pottery_recipes/*.json}),

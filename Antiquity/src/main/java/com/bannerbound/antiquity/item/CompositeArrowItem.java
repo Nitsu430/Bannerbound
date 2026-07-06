@@ -18,6 +18,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.level.Level;
+import com.bannerbound.antiquity.BannerboundAntiquity;
 
 /**
  * The modular arrow - ONE bow-ammo item assembled from three interchangeable parts (tip / shaft /

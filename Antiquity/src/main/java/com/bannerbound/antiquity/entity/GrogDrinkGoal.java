@@ -20,6 +20,7 @@ import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.chunk.LevelChunk;
+import com.bannerbound.antiquity.BannerboundAntiquity;
 
 /**
  * Leisure goal (GROG_PLAN.md Phase 4): an idle adult citizen walks to the nearest claimed-chunk

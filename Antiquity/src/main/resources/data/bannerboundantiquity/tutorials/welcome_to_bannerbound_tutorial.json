@@ -1,0 +1,38 @@
+{
+  "priority": "interrupt",
+  "once": true,
+  "entry": "getting-started",
+  "order": 10,
+  "pages": [
+    {
+      "title": "Welcome to Bannerbound: Antiquity!",
+      "text": "Before starting your first &2&lsettlement&r, you must first survive on your own in this new world. First, you'll notice you &4cannot punch trees&r like in the regular game; you must craft your first &cset of bone tools&r. This is only one of many changes this mod will introduce.",
+      "clip": "bannerbound:welcome_c0"
+    },
+    {
+      "title": "The Chronicle",
+      "text": "If you press &e{key:key.bannerbound.chronicle}&r on your keyboard, it will bring up the &eChronicle&r. This is the tutorial book of the mod, where you will find explanations for every system in the mod. You may also close this pop-up and reopen it whenever you'd like from the &eChronicle&r. Now, let's get started.",
+      "clip": "bannerbound:welcome_c1"
+    },
+    {
+      "title": "Flint Age",
+      "text": "First, you must get yourself a &7&nflint knife&r. Start by &6smashing&r (&e{key:key.use}&r) gravel against a hard surface like stone.",
+      "clip": "bannerbound:welcome_c2"
+    },
+    {
+      "title": "Flint blade",
+      "text": "Then, &6smash&r the flint again to get an &e&nflint blade&r.\n ",
+      "clip": "bannerbound:welcome_c3"
+    },
+    {
+      "title": "Grass fiber & sticks.",
+      "text": "Use the &eflint blade&r to destroy grass to get &2&ngrass fiber&r. Use the &eblade&r to gather sticks from leaves or dead bushes. \nThen, in your inventory &9{key:key.inventory}&r, place a &6stick&r, a &2fiber&r, and a &eflint blade&r to get your first &3&lflint knife. ",
+      "clip": "bannerbound:welcome_c4"
+    },
+    {
+      "title": "Hunt",
+      "text": "It is time to hunt. Use your &3flint knife&r to kill animals or fish for &lbone.&r Note: Bigger animals drop more &lbone&r. &bFish&r only have a &e50%&r chance of dropping a &lbone&r.\n&2Tip: Cows are the easiest land animal to hunt, as they are the slowest. Get hunting!",
+      "clip": "bannerbound:welcome_c5"
+    }
+  ]
+}

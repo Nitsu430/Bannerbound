@@ -2,7 +2,7 @@ package com.bannerbound.antiquity.block.entity;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
 import com.bannerbound.antiquity.item.CrucibleContents;
-import com.bannerbound.antiquity.metalworking.MetalworkingItems;
+import com.bannerbound.antiquity.workshop.MetalworkingItems;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;

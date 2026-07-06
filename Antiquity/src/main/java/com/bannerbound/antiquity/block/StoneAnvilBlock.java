@@ -8,7 +8,7 @@ import com.bannerbound.antiquity.BannerboundAntiquity;
 import com.bannerbound.antiquity.block.entity.StoneAnvilBlockEntity;
 import com.bannerbound.antiquity.item.CrucibleContents;
 import com.bannerbound.antiquity.item.HammerItem;
-import com.bannerbound.antiquity.metalworking.MetalworkingItems;
+import com.bannerbound.antiquity.workshop.MetalworkingItems;
 
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
@@ -38,6 +38,7 @@ import net.minecraft.world.level.block.state.properties.DirectionProperty;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import com.bannerbound.antiquity.craft.Hammer;
 
 /**
  * The Stone Anvil - a Crafting-Stone-style pile station hosting the cold-hammer minigame, doubling as
@@ -225,7 +226,7 @@ public class StoneAnvilBlock extends BaseEntityBlock {
             return false;
         }
         if (!level.isClientSide && player instanceof ServerPlayer sp) {
-            com.bannerbound.antiquity.Hammer.startSession(sp, pos, be, rank);
+            com.bannerbound.antiquity.craft.Hammer.startSession(sp, pos, be, rank);
         }
         return true;
     }
@@ -257,7 +258,7 @@ public class StoneAnvilBlock extends BaseEntityBlock {
                 if (moldItem != null) Block.popResource(level, pos, new ItemStack(moldItem.get()));
             }
             if (be.isForging()) Block.popResource(level, pos, be.forgeItem().copy());
-            com.bannerbound.antiquity.Hammer.abortSessionAt(pos);
+            com.bannerbound.antiquity.craft.Hammer.abortSessionAt(pos);
         }
         super.onRemove(state, level, pos, newState, moved);
     }

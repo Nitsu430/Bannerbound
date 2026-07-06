@@ -10,6 +10,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
+import com.bannerbound.antiquity.event.AntiquityEvents;
 
 /**
  * Cobblestone packed with clay -- the building block of the Kiln. Created by right-clicking a

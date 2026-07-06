@@ -7,6 +7,7 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
+import com.bannerbound.antiquity.BannerboundAntiquity;
 
 /**
  * The poison currently afflicting one entity - the value of the {@code POISON_STATE} data attachment

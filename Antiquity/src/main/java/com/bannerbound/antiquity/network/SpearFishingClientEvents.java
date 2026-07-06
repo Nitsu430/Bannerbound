@@ -1,7 +1,7 @@
 package com.bannerbound.antiquity.network;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.SpearFishing;
+import com.bannerbound.antiquity.entity.SpearFishing;
 
 import net.minecraft.world.entity.player.Player;
 import net.neoforged.api.distmarker.Dist;

@@ -25,6 +25,7 @@ import net.minecraft.world.entity.ai.attributes.AttributeInstance;
 import net.minecraft.world.entity.ai.attributes.AttributeModifier;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.phys.Vec3;
+import com.bannerbound.antiquity.event.PoisonEvents;
 
 /**
  * The poison "spine" - the {@code HuntingFear}-style helper every poison reads and writes, backed by

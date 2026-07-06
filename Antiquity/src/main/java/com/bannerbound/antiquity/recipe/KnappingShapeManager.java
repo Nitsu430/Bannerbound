@@ -18,6 +18,7 @@ import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.item.Item;
+import com.bannerbound.antiquity.event.AntiquityEvents;
 
 /**
  * Datapack loader for knapping shapes - reads every JSON under

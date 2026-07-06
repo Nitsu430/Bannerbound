@@ -12,6 +12,7 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import com.bannerbound.antiquity.craft.Pottery;
 
 /**
  * Data-driven Pottery Slab recipe: an unordered, count-based clay pile recipe plus the spin count

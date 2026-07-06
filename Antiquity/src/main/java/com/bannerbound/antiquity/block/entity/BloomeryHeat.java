@@ -1,6 +1,6 @@
 package com.bannerbound.antiquity.block.entity;
 
-import com.bannerbound.antiquity.metalworking.MetalworkingData;
+import com.bannerbound.antiquity.workshop.MetalworkingData;
 
 /**
  * The bloomery's temperature model (METALWORKING_PLAN.md Part 1). Heat is fire-driven and

@@ -12,11 +12,11 @@ import javax.annotation.Nullable;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.carpentry.CarpentryAssembly;
-import com.bannerbound.antiquity.carpentry.CarpentryAssemblyManager;
-import com.bannerbound.antiquity.carpentry.CarpentryOutput;
-import com.bannerbound.antiquity.carpentry.CarpentryOutputManager;
-import com.bannerbound.antiquity.carpentry.WoodFamily;
+import com.bannerbound.antiquity.workshop.CarpentryAssembly;
+import com.bannerbound.antiquity.workshop.CarpentryAssemblyManager;
+import com.bannerbound.antiquity.workshop.CarpentryOutput;
+import com.bannerbound.antiquity.workshop.CarpentryOutputManager;
+import com.bannerbound.antiquity.workshop.WoodFamily;
 import com.bannerbound.core.api.research.CraftGating;
 import com.bannerbound.core.api.settlement.Settlement;
 import com.bannerbound.core.api.settlement.Workshop;
@@ -33,6 +33,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Blocks;
+import com.bannerbound.antiquity.craft.Carpentry;
 
 /**
  * The Carpenter NPC's craft driver at a Carpenter's Table. The player path is the headline (the

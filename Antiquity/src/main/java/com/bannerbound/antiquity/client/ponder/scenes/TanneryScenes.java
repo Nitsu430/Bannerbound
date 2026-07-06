@@ -15,6 +15,7 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import com.bannerbound.antiquity.craft.Tannery;
 
 /**
  * Ponder storyboards for the Tannery workflow -- a 2x2 Tanning Rack beside a stacked Clay Tank --

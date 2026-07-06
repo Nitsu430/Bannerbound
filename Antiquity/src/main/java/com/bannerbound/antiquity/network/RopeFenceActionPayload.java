@@ -9,6 +9,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
+import com.bannerbound.antiquity.event.RopeFenceEvents;
 
 /**
  * C->S: the player left-clicked the rope part of a rope fence post at {@code pos}. Left-click is

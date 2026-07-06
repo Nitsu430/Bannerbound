@@ -17,6 +17,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockState;
+import com.bannerbound.antiquity.event.AntiquityEvents;
 
 /**
  * Detects and forms the Kiln. Whenever a clayed cobblestone is created (by claying - see

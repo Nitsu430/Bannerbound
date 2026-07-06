@@ -11,6 +11,7 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import com.bannerbound.antiquity.craft.Fletching;
 
 /**
  * A data-driven Fletching Station recipe - an unordered, count-based pile recipe (same exact-match

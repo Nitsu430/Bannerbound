@@ -2,10 +2,10 @@ package com.bannerbound.antiquity.block;
 
 import javax.annotation.Nullable;
 
-import com.bannerbound.antiquity.AntiquityEvents;
+import com.bannerbound.antiquity.event.AntiquityEvents;
 import com.bannerbound.antiquity.BannerboundAntiquity;
 import com.bannerbound.antiquity.block.entity.TanningRackBlockEntity;
-import com.bannerbound.antiquity.tannery.Hides;
+import com.bannerbound.antiquity.workshop.Hides;
 import com.mojang.serialization.MapCodec;
 
 import net.minecraft.core.BlockPos;
@@ -34,6 +34,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import com.bannerbound.antiquity.craft.Tannery;
 
 /**
  * The Tanning Rack - a tier-2 tannery work block. The model is 2 wide and 2 tall, so the block is a
@@ -170,7 +171,7 @@ public class TanningRackBlock extends HorizontalDirectionalBlock implements Enti
                 if (com.bannerbound.core.api.workshop.WorkBlockLocks.isLockedByOther(mPos, sp.getUUID())) {
                     showBusy(player);
                 } else {
-                    com.bannerbound.antiquity.Tannery.startSession(sp, mPos);
+                    com.bannerbound.antiquity.craft.Tannery.startSession(sp, mPos);
                 }
             }
             return ItemInteractionResult.sidedSuccess(level.isClientSide);
@@ -211,7 +212,7 @@ public class TanningRackBlock extends HorizontalDirectionalBlock implements Enti
         if (!oldState.is(newState.getBlock())) {
             BlockPos mPos = masterPos(pos, oldState);
             Direction facing = oldState.getValue(FACING);
-            com.bannerbound.antiquity.Tannery.abortSessionAt(mPos);
+            com.bannerbound.antiquity.craft.Tannery.abortSessionAt(mPos);
             if (!level.isClientSide && level.getBlockEntity(mPos) instanceof TanningRackBlockEntity be) {
                 ItemStack out = be.retrieve();
                 if (!out.isEmpty()) Block.popResource(level, mPos, out);

@@ -29,6 +29,7 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.level.block.state.properties.EnumProperty;
 import net.minecraft.world.phys.BlockHitResult;
+import com.bannerbound.antiquity.event.AntiquityEvents;
 
 /**
  * The formed Bloomery -- a 1x1x2 multiblock created by stacking two mud-brick blocks and

@@ -8,6 +8,7 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import com.bannerbound.antiquity.craft.Tannery;
 
 /**
  * A data-driven Drying Rack recipe: one input item that dries, over {@code ticks}, into a result.

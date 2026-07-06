@@ -16,6 +16,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.UseAnim;
 import net.minecraft.world.level.Level;
+import com.bannerbound.antiquity.event.PoisonEvents;
 
 /**
  * A ground poison paste (the dart coating) that also COATS food or arrows: hold the paste and a

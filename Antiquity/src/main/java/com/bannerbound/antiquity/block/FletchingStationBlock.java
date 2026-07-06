@@ -1,7 +1,7 @@
 package com.bannerbound.antiquity.block;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.Fletching;
+import com.bannerbound.antiquity.craft.Fletching;
 import com.bannerbound.antiquity.block.entity.FletchingStationBlockEntity;
 import com.mojang.serialization.MapCodec;
 

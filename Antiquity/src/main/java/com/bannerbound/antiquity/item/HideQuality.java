@@ -9,6 +9,7 @@ import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.util.StringRepresentable;
 import net.minecraft.world.item.ItemStack;
+import com.bannerbound.antiquity.BannerboundAntiquity;
 
 /**
  * Quality of a raw animal hide (the tannery's input), set at the moment the animal is obtained:

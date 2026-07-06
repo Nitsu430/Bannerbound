@@ -22,6 +22,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import com.bannerbound.antiquity.BannerboundAntiquity;
 
 /**
  * Renders the Carpenter's Table's dynamic items: the low decorative log pile (counts live on the

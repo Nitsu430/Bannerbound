@@ -1,0 +1,30 @@
+{
+  "trigger": {
+    "any": [
+      {
+        "type": "item_obtained",
+        "item": "minecraft:bone"
+      }
+    ]
+  },
+  "priority": "interrupt",
+  "once": true,
+  "order": 20,
+  "pages": [
+    {
+      "title": "Bone Age",
+      "text": "Now, you can &6smash&r your well-earned &lbones&r against a hard surface again, to get &ebone blades&r. With these, you can craft your &cbone tool set&r in the &2crafting stone&r.",
+      "clip": "bannerbound:bone_age_c0"
+    },
+    {
+      "title": "The Crafting Stone - Part 1",
+      "text": "You may have noticed rocks around in the world. Pick them up! They are useful ranged weapons, but also a key in your progression towards a &2crafting stone&r.\nPlace 4 in your crafting grid in your inventory &e{key:key.inventory}&r, to get a full block.",
+      "clip": "bannerbound:bone_age_c1"
+    },
+    {
+      "title": "The Crafting Stone - Part 2",
+      "text": "Use &b{key:key.use}&r a blade/knife on a crafted rock block to get a crafting stone.\nPlace sticks, fiber, and bone blades, and browse the arrows to make your tools!\n\n&b{key:key.use}&r on the preview will automatically add all items required for the recipe from your inventory, and will auto-craft the item. You can always add them yourself and &b{key:key.sneak}+{key:key.use}&r the block to craft it yourself.",
+      "clip": "bannerbound:bone_age_c2"
+    }
+  ]
+}

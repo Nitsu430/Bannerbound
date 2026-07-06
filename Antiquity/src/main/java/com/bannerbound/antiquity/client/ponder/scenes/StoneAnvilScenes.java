@@ -12,6 +12,7 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import com.bannerbound.antiquity.craft.Hammer;
 
 /**
  * Ponder storyboards for the Stone Anvil - dressed from a plain Stone block with a hammer, it

@@ -14,6 +14,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
+import com.bannerbound.antiquity.BannerboundAntiquityClient;
 
 /**
  * One-shot client bootstrap (run once at client setup, only when Create is installed) that wires

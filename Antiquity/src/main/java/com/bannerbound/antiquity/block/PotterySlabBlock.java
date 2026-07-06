@@ -1,7 +1,7 @@
 package com.bannerbound.antiquity.block;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.Pottery;
+import com.bannerbound.antiquity.craft.Pottery;
 import com.bannerbound.antiquity.block.entity.PotterySlabBlockEntity;
 import com.mojang.serialization.MapCodec;
 

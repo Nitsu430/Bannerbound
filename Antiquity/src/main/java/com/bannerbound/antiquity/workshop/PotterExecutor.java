@@ -38,6 +38,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
+import com.bannerbound.antiquity.craft.Pottery;
 
 /**
  * The Potter NPC's WorkExecutor (craft driver) at a Pottery Slab. Two plan kinds: unfired outputs

@@ -6,7 +6,7 @@ import java.util.Map;
 import org.jetbrains.annotations.Nullable;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.Carves;
+import com.bannerbound.antiquity.craft.Carves;
 import com.bannerbound.antiquity.network.CarveCommitPayload;
 import com.bannerbound.core.client.UnknownItemHelper;
 import com.mojang.blaze3d.vertex.PoseStack;
@@ -42,6 +42,7 @@ import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.InputEvent;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
+import com.bannerbound.antiquity.rope.RopeTies;
 
 /**
  * Client-only ghost preview for block carving (see {@link Carves}): while the local player aims at a

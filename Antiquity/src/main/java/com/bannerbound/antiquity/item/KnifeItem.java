@@ -27,6 +27,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import com.bannerbound.antiquity.event.AntiquityEvents;
 
 /**
  * Base for primitive knives - a durable cutting edge that doubles as a light weapon. Knives are

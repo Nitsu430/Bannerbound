@@ -15,6 +15,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.SimpleJsonResourceReloadListener;
 import net.minecraft.util.profiling.ProfilerFiller;
+import com.bannerbound.antiquity.event.AntiquityEvents;
 
 /**
  * Datapack loader for modular {@link ArrowPart}s - reads every JSON under

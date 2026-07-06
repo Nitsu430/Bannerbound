@@ -26,6 +26,7 @@ import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
+import com.bannerbound.antiquity.event.AntiquityEvents;
 
 /**
  * A small loose rock scattered on the ground - the worldgen seed of the stone-age opening loop

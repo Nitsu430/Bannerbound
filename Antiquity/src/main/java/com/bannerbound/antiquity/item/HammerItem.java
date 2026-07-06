@@ -26,6 +26,7 @@ import net.minecraft.world.level.block.HorizontalDirectionalBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.core.particles.BlockParticleOption;
 import net.minecraft.core.particles.ParticleTypes;
+import com.bannerbound.antiquity.workshop.MetalworkingData;
 
 /**
  * Smithing hammers - the tool that drives the cold-hammer minigame at the stone anvil
@@ -86,7 +87,7 @@ public class HammerItem extends Item {
     }
 
     public int rank() {
-        return com.bannerbound.antiquity.metalworking.MetalworkingData.rank(metalId);
+        return com.bannerbound.antiquity.workshop.MetalworkingData.rank(metalId);
     }
 
     public Tier tier() {

@@ -11,9 +11,9 @@ import javax.annotation.Nullable;
 
 import org.jetbrains.annotations.ApiStatus;
 
-import com.bannerbound.antiquity.masonry.MasonryOutput;
-import com.bannerbound.antiquity.masonry.MasonryOutputManager;
-import com.bannerbound.antiquity.masonry.StoneFamily;
+import com.bannerbound.antiquity.workshop.MasonryOutput;
+import com.bannerbound.antiquity.workshop.MasonryOutputManager;
+import com.bannerbound.antiquity.workshop.StoneFamily;
 import com.bannerbound.core.api.research.CraftGating;
 import com.bannerbound.core.api.settlement.Settlement;
 import com.bannerbound.core.api.settlement.Workshop;
@@ -31,6 +31,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Blocks;
+import com.bannerbound.antiquity.craft.Masonry;
 
 /**
  * The Mason NPC's craft driver at a Mason's Bench - the stone analogue of

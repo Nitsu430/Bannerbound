@@ -15,6 +15,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import com.bannerbound.antiquity.craft.Tannery;
 
 /**
  * Block entity for the Tanning Rack: ONE hide in progress at a time (like the pottery slab), walked
