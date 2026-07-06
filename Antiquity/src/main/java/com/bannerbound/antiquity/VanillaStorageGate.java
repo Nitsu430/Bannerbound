@@ -46,6 +46,7 @@ public final class VanillaStorageGate {
         if (VanillaContentState.isEnabled()) return;
         if (!(event.getEntity() instanceof ServerPlayer player)) return;
         if (player.isShiftKeyDown()) return; // sneaking never opens the GUI; allow place-against
+        if (player.isCreative()) return; // don't check if on creative. always allow
 
         MinecraftServer server = player.getServer();
         if (server == null) return;
