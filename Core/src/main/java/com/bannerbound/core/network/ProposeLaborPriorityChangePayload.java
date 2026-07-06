@@ -14,14 +14,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: a Town Hall "Labor" tab edit — the full new gatherer-job priority order, which jobs are
- * disabled, and the auto-assign flag. The server validates the ids (gatherers only), applies it to
- * the settlement, and re-broadcasts the labor state.
- *
- * @param orderedJobIds gatherer job ids in the player's chosen priority order
- * @param disabledJobIds gatherer job ids switched off
- * @param caps           parallel to {@code orderedJobIds}: worker cap per job ({@code -1} = no limit)
- * @param autoAssign     whether to auto-distribute labor (only editable under a government)
+ * Client -> server: a Town Hall "Labor" tab edit - the full new gatherer-job priority order, which
+ * jobs are disabled, and the auto-assign flag. The server validates the ids (gatherers only),
+ * applies it to the settlement, and re-broadcasts the labor state. orderedJobIds is the chosen
+ * priority order; caps is parallel to it (worker cap per job, -1 = no limit); disabledJobIds are the
+ * jobs switched off; autoAssign toggles auto-distribution (only editable under a government).
  */
 @ApiStatus.Internal
 public record ProposeLaborPriorityChangePayload(
@@ -38,7 +35,7 @@ public record ProposeLaborPriorityChangePayload(
         (buf, p) -> {
             ByteBufCodecs.VAR_INT.encode(buf, p.orderedJobIds().size());
             for (String s : p.orderedJobIds()) ByteBufCodecs.STRING_UTF8.encode(buf, s);
-            for (int v : p.caps()) ByteBufCodecs.VAR_INT.encode(buf, v);   // parallel to orderedJobIds
+            for (int v : p.caps()) ByteBufCodecs.VAR_INT.encode(buf, v);   // no own length prefix: caps must stay parallel to orderedJobIds
             ByteBufCodecs.VAR_INT.encode(buf, p.disabledJobIds().size());
             for (String s : p.disabledJobIds()) ByteBufCodecs.STRING_UTF8.encode(buf, s);
             ByteBufCodecs.BOOL.encode(buf, p.autoAssign());

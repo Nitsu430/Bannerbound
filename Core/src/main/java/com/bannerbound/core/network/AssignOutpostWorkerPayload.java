@@ -12,11 +12,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server. The Outpost Banner screen's assign/unassign action: bind the outpost's deposit
- * marker to the chosen miner ({@code citizenUuid}), or clear it ({@code ""} = unassign, which
- * removes the marker entirely — an outpost with nobody appointed mines nothing). The server
- * validates membership/claim/job, mutates the marker, and replies with a fresh
- * {@link OpenOutpostScreenPayload} so the screen live-updates.
+ * C->S: the Outpost Banner screen's assign/unassign action -- bind the outpost's deposit marker
+ * to the chosen miner citizenUuid, or clear it ("" = unassign, which removes the marker entirely,
+ * so an outpost with nobody appointed mines nothing). The server validates membership/claim/job,
+ * mutates the marker, and replies with a fresh OpenOutpostScreenPayload so the screen live-updates.
  */
 @ApiStatus.Internal
 public record AssignOutpostWorkerPayload(BlockPos bannerPos, String citizenUuid)

@@ -8,7 +8,11 @@ import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-/** Client-only entry point for the server's pottery minigame payload. */
+/**
+ * Client-only entry point for the server's pottery minigame payload: opens {@link PotteryScreen}.
+ * Exists as a separate class so the common payload handler never references client classes
+ * directly (dist safety).
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class PotteryClientHandler {

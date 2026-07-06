@@ -4,23 +4,11 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Metadata for one labelled band ("section") inside a creative-mode tab — the equivalent of the
- * "Aeronautics / Offroad / Tracks…" dividers seen in Create Aeronautics. Pure data, safe to build on
- * either physical side (no client-only types).
- *
- * <p>The band itself is a GUI sprite (see {@link #sprite}) tinted by {@link #bannerTint} so a single
- * greyscale strip can serve every section; the label sits on a coloured chip ({@link #labelBackground})
- * with {@link #textColor} text. Register sections via {@link CreativeSections#forTab}.
- *
- * @param id              stable identifier (handy for logging / future per-section state)
- * @param title           the band label (translatable component recommended)
- * @param sprite          GUI sprite id, e.g. {@code bannerboundantiquity:sections/banner}
- *                        (file at {@code assets/<ns>/textures/gui/sprites/sections/banner.png})
- * @param bannerTint      ARGB multiplier applied to the whole strip (0xFFFFFFFF = untinted)
- * @param labelBackground ARGB fill drawn behind the label text
- * @param textColor       ARGB label text colour
- * @param animateOnHover  reserved: only tick the strip's animation while hovered (needs an animated
- *                        sprite; currently a no-op for static strips)
+ * Immutable metadata for one labelled band ("section") inside a creative-mode tab, like the dividers
+ * in Create Aeronautics. Pure data (no client-only types), safe on either physical side: the band is
+ * a greyscale GUI sprite multiplied by bannerTint so one strip serves every section, with the title
+ * on a labelBackground chip in textColor. Register sections via CreativeSections.forTab; animateOnHover
+ * is reserved for future animated strips and is a no-op today.
  */
 public record CreativeSection(
         String id,
@@ -31,7 +19,6 @@ public record CreativeSection(
         int textColor,
         boolean animateOnHover) {
 
-    /** Convenience: opaque, untinted band with a translucent-dark label chip and light text. */
     public static CreativeSection of(String id, Component title, ResourceLocation sprite, int bannerTint) {
         return new CreativeSection(id, title, sprite, bannerTint, 0xBB000000, 0xFFFFFFFF, false);
     }

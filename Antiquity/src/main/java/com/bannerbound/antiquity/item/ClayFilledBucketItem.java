@@ -11,7 +11,11 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.material.Fluid;
 
-/** Filled fired clay bucket. Vanilla handles placement; this swaps the empty result back to clay. */
+/**
+ * Filled fired clay bucket. Vanilla {@link BucketItem} handles the actual fluid placement; this
+ * only intercepts the vanilla empty-bucket result and swaps it back to the clay bucket - or to
+ * nothing when {@code breaksOnPlace} is set (the bucket is sacrificed on emptying, e.g. lava).
+ */
 public class ClayFilledBucketItem extends BucketItem {
     private final boolean breaksOnPlace;
 

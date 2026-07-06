@@ -28,9 +28,13 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity for a Rope Fence Gate — two rope tie points: slot 0 = left upright, slot 1 = right
- * upright. Each upright keeps its own set of {@link RopeAnchor}s; ropes the gate owns keep their
- * collision-filler cells. {@link com.bannerbound.antiquity.RopeTies} drives the linking/breaking.
+ * Block entity for a Rope Fence Gate: two rope tie points, slot 0 = left upright and slot 1 = right
+ * upright, each keeping its own insertion-ordered set of far-end {@link RopeAnchor}s. Ropes this gate
+ * owns also record their invisible collision-filler cells here, keyed by the far anchor. All
+ * linking/breaking logic lives in {@link RopeTies}; onLoad/setRemoved notify it of host chunk
+ * load/unload so rope state can be rebuilt. setChanged() doubles as the client sync point
+ * (sendBlockUpdated + full-state update tag), so every mutation above calls it. NBT layout:
+ * "Left"/"Right" anchor lists plus a "Fillers" list of anchor tags each carrying a "Cells" long array.
  */
 @ApiStatus.Internal
 public class RopeFenceGateBlockEntity extends BlockEntity implements RopeTieHost {

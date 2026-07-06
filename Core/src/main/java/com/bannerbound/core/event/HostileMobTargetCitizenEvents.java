@@ -12,15 +12,15 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
 
 /**
- * Injects a citizen-targeting goal into every hostile mob that joins the level. Without this,
- * hostile mobs would treat citizens like villagers and mostly ignore them (vanilla mob target
- * selectors are AbstractVillager-specific, not LivingEntity-broad). With this, the same mobs
- * that target the player also target citizens.
+ * Injects a citizen-targeting goal into every hostile mob that joins the level
+ * (EntityJoinLevelEvent). Without this, hostile mobs would treat citizens like villagers and
+ * mostly ignore them (vanilla mob target selectors are AbstractVillager-specific, not
+ * LivingEntity-broad); with it, the same mobs that target the player also target citizens.
  *
- * <p>Whitelist is shared with {@link CitizenEntity#isHostileToCitizens} (Zombies, Skeletons,
- * Spiders, Creepers, Witches, Illagers, Vex — Enderman excluded). The reciprocal target on the
- * citizen side lives in {@code CitizenEntity.registerGoals}; together they form a symmetric
- * combat relationship that fires whenever the two are in range of each other.
+ * The whitelist is shared with CitizenEntity.isHostileToCitizens (Zombies, Skeletons, Spiders,
+ * Creepers, Witches, Illagers, Vex -- Enderman excluded). The reciprocal target on the citizen
+ * side lives in CitizenEntity.registerGoals; together they form a symmetric combat relationship
+ * that fires whenever the two are in range of each other.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -33,9 +33,7 @@ public final class HostileMobTargetCitizenEvents {
         if (event.getLevel().isClientSide()) return;
         if (!(event.getEntity() instanceof Mob mob)) return;
         if (!CitizenEntity.isHostileToCitizens(mob)) return;
-        // Priority 3 — sits at a similar tier to vanilla's "target nearest villager" goal so
-        // citizens aren't ranked above other priority-1/2 targets (like the player). mustSee +
-        // !mustReach matches vanilla zombie's villager-targeting tuning.
+        // Priority 3: vanilla's "target nearest villager" tier, so citizens don't outrank the player.
         mob.targetSelector.addGoal(3,
             new NearestAttackableTargetGoal<>(mob, CitizenEntity.class, true));
     }

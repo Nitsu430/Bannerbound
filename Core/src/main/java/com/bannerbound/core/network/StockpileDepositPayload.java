@@ -11,7 +11,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: deposit the cursor (carried) stack into the open Stockpile terminal by clicking
+ * Client -> server: deposit the cursor (carried) stack into the open Stockpile terminal by clicking
  * the storage grid. {@code single} = right-click (one item) vs left-click (the whole carried stack).
  * Handled by {@code StockpileMenu.deposit}.
  */

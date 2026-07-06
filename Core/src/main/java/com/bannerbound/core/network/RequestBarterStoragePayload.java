@@ -11,9 +11,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: the open barter screen polls (every ~10 ticks) for a fresh storage snapshot so the offer can be
- * greyed out the instant the town inventory drops below what's on the table mid-negotiation. The server
- * replies with a {@link BarterStoragePayload}.
+ * C->S: the open barter screen polls (every ~10 ticks) for a fresh storage snapshot so the offer
+ * can be greyed out the instant the town inventory drops below what's on the table mid-negotiation.
+ * The server replies with a BarterStoragePayload.
  */
 @ApiStatus.Internal
 public record RequestBarterStoragePayload(int messengerEntityId) implements CustomPacketPayload {

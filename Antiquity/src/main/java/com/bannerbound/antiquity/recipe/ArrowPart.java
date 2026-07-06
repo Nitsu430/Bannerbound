@@ -13,33 +13,19 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
 
 /**
- * One datapack-defined modular-arrow part — a tip, shaft, or back. Loaded from
- * {@code data/<namespace>/arrow_parts/*.json} by {@link ArrowPartManager} and synced to clients for
- * rendering, so a modpack adds an arrow material (e.g. an iron tip) with a single JSON + its two
- * textures and gets crafting, stats, the NPC fletcher's part choice, the in-flight projectile, and
- * the layered inventory icon — no code or model files.
- *
- * <pre>
- * { "slot": "tip",                                  // tip | shaft | back
- *   "material": "bronze",                            // the id stored on the arrow's component
- *   "ingredient": "bannerboundantiquity:bronze_arrow_head",
- *   "damage": 1.45,                                  // tip: base damage factor (default 1.0)
- *   "weight": 3,                                     // tip/shaft: trajectory + small dmg (default 0)
- *   "accuracy": 1.0,                                 // back: bow-inaccuracy multiplier (default 1.0)
- *   "priority": 30,                                  // NPC "best part first" ordering (default 0)
- *   "item_texture": "bannerboundantiquity:item/arrows/bronze_arrow_tip",
- *   "projectile_texture": "bannerboundantiquity:textures/projectiles/bronze_arrow_tip.png" }
- * </pre>
- *
- * @param slot       which of the three layers this part fills ("tip" / "shaft" / "back")
- * @param material   the id written to the arrow's {@code ARROW_TIP/SHAFT/BACK} component
- * @param ingredient the crafting item consumed at the fletching station for this part
- * @param damage     tip-only base damage factor (1.0 = flint baseline)
- * @param weight     density points (0 = light flint/wood) — heavier = more damage + faster drop
- * @param accuracy   back-only multiplier on the bow's inaccuracy (lower = tighter)
- * @param priority   higher = an NPC fletcher prefers this part when several are stocked
- * @param itemTexture       atlas sprite for the inventory-icon layer (under {@code textures/item/…})
- * @param projectileTexture full texture path for the in-flight layer ({@code textures/…/x.png})
+ * One datapack-defined modular-arrow part - a tip, shaft, or back. Loaded from
+ * {@code data/<namespace>/arrow_parts/*.json} by {@link ArrowPartManager}, held in
+ * {@link ArrowPartRegistry}, and synced server->client via {@code ArrowPartsSyncPayload}
+ * (STREAM_CODEC below), so a modpack adds an arrow material (e.g. an iron tip) with a single JSON
+ * plus two textures and gets crafting, stats, the NPC fletcher's part choice, the in-flight
+ * projectile, and the layered inventory icon - no code or model files. Field semantics are
+ * slot-specific: {@code material} is the id written to the arrow's ARROW_TIP/SHAFT/BACK component;
+ * {@code ingredient} is the item consumed at the fletching station; {@code damage} is a tip-only
+ * base damage factor (1.0 = flint baseline); {@code weight} (tip/shaft; 0 = light flint/wood) adds
+ * damage but steepens drop; {@code accuracy} is a back-only multiplier on the bow's inaccuracy
+ * (lower = tighter); {@code priority} orders NPC fletcher preference (higher = preferred).
+ * {@code itemTexture} is an atlas sprite under {@code textures/item/}; {@code projectileTexture}
+ * is a full texture path (textures/.../x.png) for the in-flight layer.
  */
 @ApiStatus.Internal
 public record ArrowPart(String slot, String material, Item ingredient,
@@ -62,7 +48,6 @@ public record ArrowPart(String slot, String material, Item ingredient,
         ResourceLocation.CODEC.fieldOf("projectile_texture").forGetter(ArrowPart::projectileTexture)
     ).apply(i, ArrowPart::new));
 
-    /** Network codec for the server→client registry sync ({@link ArrowPartsSyncPayload}). */
     public static final StreamCodec<RegistryFriendlyByteBuf, ArrowPart> STREAM_CODEC = StreamCodec.of(
         (buf, p) -> {
             ByteBufCodecs.STRING_UTF8.encode(buf, p.slot);

@@ -13,26 +13,24 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * A data-driven Stone Anvil recipe — an <b>unordered, count-based</b> pile recipe (same match
- * semantics as the Crafting Stone / Fletching Station) plus the number of cold-hammer strikes the
- * minigame requires. Loaded from {@code data/<namespace>/anvil_recipes/*.json}.
- *
- * <p>Example — {@code .../anvil_recipes/copper_sword.json}:
+ * A data-driven Stone Anvil recipe - an <b>unordered, count-based</b> pile recipe (same match
+ * semantics as the Crafting Stone / Fletching Station, via {@code PileRecipes}) plus the number of
+ * drag-and-release cold-hammer strikes the minigame requires (one per ~50 mB of the part; default 3).
+ * {@code inProgress} is an optional display-only item shown on the anvil while the minigame runs.
+ * The nested {@link Ing} is one counted ingredient: a concrete item plus how many of it the pile
+ * must contain (count defaults to 1). Loaded from {@code data/<namespace>/anvil_recipes/*.json},
+ * e.g. {@code .../anvil_recipes/copper_sword.json}:
  * <pre>
  * { "ingredients": [ { "item": "bannerboundantiquity:copper_blade", "count": 1 },
  *                    { "item": "minecraft:stick", "count": 1 } ],
  *   "result": { "id": "bannerboundantiquity:copper_sword", "count": 1 },
  *   "strikes": 4 }
  * </pre>
- *
- * @param strikes    number of drag-and-release hammer strikes (one per ~50 mB of the part)
- * @param inProgress optional display-only item shown on the anvil while the minigame runs
  */
 @ApiStatus.Internal
 public record AnvilRecipe(List<Ing> ingredients, ItemStack result, int strikes,
                           java.util.Optional<Item> inProgress) {
 
-    /** One counted ingredient (a concrete item + how many of it the pile must contain). */
     public record Ing(Item item, int count) implements PileRecipes.Counted {
         public static final Codec<Ing> CODEC = RecordCodecBuilder.create(i -> i.group(
             BuiltInRegistries.ITEM.byNameCodec().fieldOf("item").forGetter(Ing::item),

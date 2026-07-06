@@ -22,22 +22,18 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * A thrown rock — chucked by hand like a snowball, or flung far harder from a {@code SlingshotItem}.
+ * A thrown rock - chucked by hand like a snowball, or flung far harder from a {@code SlingshotItem}.
  * On impact it shatters into the matching stone's break particles (stone / sandstone / red sandstone,
- * from the carried rock item) and plays the {@code rock_impact} sound. The carried item is preserved
- * so it both renders and shatters as the specific rock that was thrown.
- *
- * <p>Impact behaviour is configurable so one projectile covers both launch paths: a hand throw deals
- * minimal damage and briefly stuns (a ~2s rooting slow), while a sling shot is set to a heavier
- * {@link #setImpactDamage(float)} with the stun usually turned off (a sling is a killing weapon, not
- * a stunner).
+ * chosen from the carried rock item, which is preserved so it both renders and shatters as the
+ * specific rock thrown) and plays the {@code rock_impact} sound. Impact behaviour is configurable so
+ * one projectile covers both launch paths: a hand throw deals minimal damage (1) and applies a brief
+ * rooting stun (2s of amplifier-6 slowness), while a slingshot sets a heavier
+ * {@link #setImpactDamage(float)} (about 4) with the stun usually off - a sling is a killing weapon,
+ * not a stunner. Damage and stun settings persist to NBT.
  */
 public class ThrownRock extends ThrowableItemProjectile {
-    /** Stun duration in ticks (2 seconds). */
     private static final int STUN_TICKS = 40;
-    /** Slowness amplifier high enough to effectively root the target for the stun. */
     private static final int STUN_AMPLIFIER = 6;
-    /** Default (hand-throw) impact damage. */
     private static final float DEFAULT_DAMAGE = 1.0F;
 
     private float impactDamage = DEFAULT_DAMAGE;
@@ -51,12 +47,10 @@ public class ThrownRock extends ThrowableItemProjectile {
         super(BannerboundAntiquity.THROWN_ROCK.get(), shooter, level);
     }
 
-    /** Sets the damage this rock deals on a direct hit (hand throw ≈ 1, sling shot ≈ 4). */
     public void setImpactDamage(float damage) {
         this.impactDamage = damage;
     }
 
-    /** Whether a direct hit applies the brief rooting stun (on for hand throws, off for sling shots). */
     public void setStun(boolean stun) {
         this.stun = stun;
     }
@@ -93,7 +87,6 @@ public class ThrownRock extends ThrowableItemProjectile {
         }
     }
 
-    /** The stone block whose break particles this rock shatters into, from the carried rock item. */
     private BlockState impactState() {
         Item item = getItem().getItem();
         if (item == BannerboundAntiquity.SANDSTONE_ROCK_ITEM.get()) {

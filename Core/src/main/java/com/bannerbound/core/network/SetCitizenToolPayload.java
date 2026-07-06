@@ -10,9 +10,9 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: install the tool in the player's inventory slot {@code playerInvSlot} into the citizen's
- *  primary slot, or the pickaxe (second) slot when {@code pickaxe} is true. The server validates the
- *  item is the right role tool at/below the current tool age and moves exactly one. */
+/** C->S: install the tool in the player's inventory slot playerInvSlot into the citizen's primary
+ *  slot, or the pickaxe (second) slot when pickaxe is true. The server validates the item is the
+ *  right role tool at/below the current tool age and moves exactly one. */
 @ApiStatus.Internal
 public record SetCitizenToolPayload(int entityId, int playerInvSlot, boolean pickaxe)
         implements CustomPacketPayload {

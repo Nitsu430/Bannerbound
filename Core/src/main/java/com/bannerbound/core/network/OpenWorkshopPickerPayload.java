@@ -14,18 +14,12 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: the Job tab assigned <i>Crafter</i> — pick which workshop the citizen works.
- * One entry per settlement workshop; the client disables rows that are invalid or full. Picking
- * one sends the existing {@code AssignWorkshopWorkerPayload} (assign=true), which performs the
- * real assignment (job + binding + roster) server-side.
- *
- * @param citizenId      the citizen being assigned (UUID string)
- * @param workshopIds    workshop ids (UUID strings), parallel to all lists below
- * @param customNames    player-chosen names ("" = client shows the derived type)
- * @param typeIds        derived workshop type ids (for the type label / fallback name)
- * @param statusOrdinals {@code Workshop.Status} ordinals (non-VALID rows are disabled)
- * @param assignedCounts current worker counts
- * @param capacities     max workers per workshop
+ * Server -> client: the Job tab assigned a Crafter - pick which workshop the citizen works. One
+ * entry per settlement workshop; the client disables rows that are invalid or full. Picking one
+ * sends the existing AssignWorkshopWorkerPayload (assign=true), which performs the real assignment
+ * (job + binding + roster) server-side. citizenId is a UUID string and all the workshop* / *Names /
+ * *Ordinals / *Counts / capacities lists are parallel; customNames "" means the client shows the
+ * derived type, and rows whose statusOrdinal (a Workshop.Status ordinal) is non-VALID are disabled.
  */
 @ApiStatus.Internal
 public record OpenWorkshopPickerPayload(String citizenId, String jobTypeId, List<String> workshopIds,

@@ -25,10 +25,15 @@ import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.items.IItemHandler;
 
 /**
- * Structure rules for Antiquity smithy workshops: a smithy needs a complete bloomery with a bellows
- * beside it (the smith's heat source — {@code MISSING_HEAT_SOURCE}) and a hammer kept in reachable
- * storage (the carpentry bone-saw pattern — {@code MISSING_TOOL}). The hammer's material rank also
- * caps NPC craft quality, exactly like the player minigame's hammer-rank gate.
+ * Structure rules for the Antiquity smithy workshop, used by validation and by
+ * {@link SmithExecutor}: a smithy needs a complete bloomery (found via its LOWER half inside the
+ * workshop's marked boxes) with a bellows horizontally beside that lower cell -- the smith's heat
+ * source and pump station ({@code MISSING_HEAT_SOURCE} otherwise) -- and at least one hammer kept
+ * in reachable storage (the carpentry bone-saw pattern -- {@code MISSING_TOOL}). The best stored
+ * hammer's material rank ({@code -1} = none) also caps NPC craft quality, exactly like the player
+ * minigame's hammer-rank gate. {@code bestHammerRank} scans the item-handler capabilities
+ * directly rather than the workshop's cached storage list, which is not guaranteed current
+ * mid-validation.
  */
 @ApiStatus.Internal
 public final class SmithyWorkshopRules {
@@ -57,7 +62,6 @@ public final class SmithyWorkshopRules {
         return null;
     }
 
-    /** The workshop's bloomery (the lower half's block entity), resolved from its marked boxes. */
     @Nullable
     public static BloomeryBlockEntity findBloomery(ServerLevel sl, Workshop workshop) {
         List<BlockSelection> boxes = BlockSelectionRegistry.get(sl).findByWorkshop(workshop.id());
@@ -66,8 +70,6 @@ public final class SmithyWorkshopRules {
         return lower != null && sl.getBlockEntity(lower) instanceof BloomeryBlockEntity be ? be : null;
     }
 
-    /** A bellows block horizontally beside the bloomery's lower cell (where the smith stands to
-     *  pump), or {@code null}. */
     @Nullable
     public static BlockPos findBellows(ServerLevel sl, BlockPos bloomeryLower) {
         for (Direction d : Direction.Plane.HORIZONTAL) {
@@ -77,8 +79,6 @@ public final class SmithyWorkshopRules {
         return null;
     }
 
-    /** The best hammer rank in the given storage blocks ({@code -1} = no hammer at all). Scans the
-     *  handlers directly — the workshop's cached storage list isn't guaranteed mid-validation. */
     public static int bestHammerRank(ServerLevel sl, List<BlockPos> storage) {
         int best = -1;
         for (BlockPos p : storage) {
@@ -94,7 +94,6 @@ public final class SmithyWorkshopRules {
         return best;
     }
 
-    /** The best hammer rank kept anywhere in this workshop's storage ({@code -1} = none). */
     public static int bestHammerRank(ServerLevel sl, Workshop workshop) {
         return bestHammerRank(sl, workshop.storageBlocks());
     }

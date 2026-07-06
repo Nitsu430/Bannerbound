@@ -10,9 +10,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client. Trigger to open the {@code ForemansRodPickerScreen}. Carries no payload
- * fields today — the picker list is hard-coded client-side (only "Digger" + Clear in v1).
- * When more workstation types come online, this can grow into carrying the allowlist.
+ * S->C: trigger to open the ForemansRodPickerScreen. Carries no payload fields today; the picker
+ * list is hard-coded client-side ("Digger" + Clear in v1). When more workstation types come online
+ * this can grow into carrying the allowlist.
  */
 @ApiStatus.Internal
 public record OpenForemansRodPickerPayload() implements CustomPacketPayload {

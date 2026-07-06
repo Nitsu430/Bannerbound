@@ -7,7 +7,7 @@ import java.util.UUID;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * The goods a camp can put on the table — generated procedurally from its biome, type and (via the
+ * The goods a camp can put on the table - generated procedurally from its biome, type and (via the
  * relationship) how far your dealings with it have come, NOT a persisted inventory. Camps still don't
  * run a worker economy; this is a derived "what they'd plausibly have to trade" pool whose VARIETY and
  * QUANTITY widen as your standing improves ("they get more things as they progress with you").
@@ -22,7 +22,6 @@ public final class CampGoods {
 
     private CampGoods() {}
 
-    /** Relationship → stock tier: 0 (cold) … 3 (trusted). Higher tiers unlock better, plentier goods. */
     public static int tierOf(int relScore) {
         if (relScore >= 40) return 3;
         if (relScore >= 10) return 2;
@@ -30,7 +29,6 @@ public final class CampGoods {
         return 0;
     }
 
-    /** The list of goods this camp would currently offer the given settlement. */
     public static List<Stock> available(BarbarianCamp camp, UUID settlementId) {
         int rel = camp.relScore.getOrDefault(settlementId, 0);
         int tier = tierOf(rel);
@@ -38,7 +36,6 @@ public final class CampGoods {
 
         List<Cand> cands = new ArrayList<>();
 
-        // ── Biome staples ──────────────────────────────────────────────────────────────────────────
         boolean desert = biome.contains("desert") || biome.contains("badlands");
         if (desert) {
             cand(cands, "minecraft:cactus", 0);
@@ -55,10 +52,9 @@ public final class CampGoods {
                 || biome.contains("windswept") || biome.contains("stony")) {
             cand(cands, "minecraft:cobblestone", 0);
             cand(cands, "minecraft:coal", 1);
-            cand(cands, "minecraft:iron_ingot", 3); // only the trusted get metal
+            cand(cands, "minecraft:iron_ingot", 3);
         }
 
-        // ── Type loot (nomads trade widest; marauders barely deal at all) ────────────────────────────
         switch (camp.type) {
             case NOMAD -> {
                 cand(cands, "minecraft:leather", 1);
@@ -82,12 +78,11 @@ public final class CampGoods {
             }
         }
 
-        // ── Resolve to stock, gating by tier and scaling quantity by how warm relations are ──────────
         List<Stock> out = new ArrayList<>();
         for (Cand c : cands) {
             if (c.minTier > tier) continue;
-            if (ItemValue.value(c.itemId, 1) <= 0) continue; // skip ids that don't resolve
-            int base = 2 + tier;                                  // wealthier-feeling as you bond
+            if (ItemValue.value(c.itemId, 1) <= 0) continue;
+            int base = 2 + tier;
             int jitter = (int) Math.floorMod((camp.languageSeed ^ c.itemId.hashCode()), 3);
             out.add(new Stock(c.itemId, Math.max(1, base + jitter)));
         }

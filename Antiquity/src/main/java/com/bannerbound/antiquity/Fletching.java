@@ -26,10 +26,23 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * Server-authoritative driver for the fletching stretch minigame. Holds one in-flight session per
- * player (station pos + matched recipe + committed flag), opens the client minigame, and on
- * completion rolls the {@link QualityTier} via the shared {@link QualityMath} and pops the finished
- * item with the {@code TOOL_QUALITY} component. The station's pile is consumed at the COMMIT step
- * (first stretch) so cancelling before any stretch is free and cancelling after forfeits the inputs.
+ * player (station pos + a snapshot of the matched recipe's base output + committed flag) in a
+ * plain HashMap, opens the client minigame, and on completion rolls the {@link QualityTier} via the
+ * shared {@link QualityMath} and pops the finished item stamped with {@code TOOL_QUALITY}.
+ *
+ * The output stack is snapshotted at start (not re-fetched at completion) because a synthetic
+ * modular-arrow recipe has no registry id to re-fetch, so it must complete the same as a
+ * data-driven one. The station is claimed via WorkBlockLocks at start so a crafter citizen skips it
+ * mid-minigame (mirror of the NPC's own craft lock); that lock MUST be released on every exit path
+ * (COMPLETE, CANCEL, disconnect, abort) or a rebuilt block inherits a stale claim. The station pile
+ * is consumed at the COMMIT step (first stretch): cancelling before any stretch is free, cancelling
+ * after forfeits the inputs.
+ *
+ * applyQuality is shared by this player path and the Fletcher NPC's simulated path so quality is
+ * computed identically; it stamps TOOL_QUALITY and scales durability (MAX_DAMAGE), the ATTACK_DAMAGE
+ * ADD_VALUE modifier (so it lands in a player's melee hit and tooltip), and mining speed on the Tool
+ * component amplified ~3x so a fine tool is clearly felt while digging. NPC hunters scale damage off
+ * the settlement tool-age value (HunterWorkGoal), not item attributes, so this never double-counts.
  */
 @ApiStatus.Internal
 public final class Fletching {
@@ -38,10 +51,7 @@ public final class Fletching {
 
     private static final class Session {
         final BlockPos pos;
-        /** Base output (no quality yet), snapshotted at start so a synthetic modular-arrow recipe —
-         *  which has no registry id to re-fetch — completes the same as a data-driven one. */
         final ItemStack result;
-        /** Display-only "work in progress" sprite for this recipe, or null. */
         final net.minecraft.world.item.Item inProgress;
         final int stretches;
         final long startTime;
@@ -57,25 +67,21 @@ public final class Fletching {
         }
     }
 
-    /** Active sessions keyed by player UUID (server thread only). */
+    // Server thread only; plain HashMap, never touch off-thread.
     private static final Map<UUID, Session> SESSIONS = new HashMap<>();
 
-    /** Opens the minigame for {@code player} on the station at {@code pos} (recipe already validated). */
     public static void startSession(ServerPlayer player, BlockPos pos, FletchingStationBlockEntity be) {
         FletchingRecipe recipe = be.matchedRecipe();
         if (recipe == null) return;
         SESSIONS.put(player.getUUID(), new Session(pos.immutable(),
             recipe.result().copy(), recipe.inProgress().orElse(null),
             recipe.stretches(), player.serverLevel().getGameTime()));
-        // Claim the station for the player so a crafter citizen skips it mid-minigame (the
-        // mirror of the NPC's own craft lock). Released wherever the session ends.
         com.bannerbound.core.api.workshop.WorkBlockLocks.lock(pos, player.getUUID());
         PacketDistributor.sendToPlayer(player, new OpenFletchingPayload(
             pos, recipe.stretches(), recipe.baseZonePct(), recipe.zoneDecay(),
             recipe.minZonePct(), recipe.yellowPadPct()));
     }
 
-    /** Handles a client minigame step (COMMIT / COMPLETE / CANCEL). */
     public static void handleAction(ServerPlayer player, FletchingActionPayload payload) {
         Session session = SESSIONS.get(player.getUUID());
         if (session == null || !session.pos.equals(payload.pos())) return;
@@ -87,7 +93,6 @@ public final class Fletching {
                         && level.getBlockEntity(session.pos) instanceof FletchingStationBlockEntity be) {
                     be.consumePile();
                     session.committed = true;
-                    // Show the recipe's work-in-progress sprite lying on the table (if it has one).
                     if (session.inProgress != null) {
                         be.setInProgress(new ItemStack(session.inProgress));
                     }
@@ -119,8 +124,6 @@ public final class Fletching {
         }
     }
 
-    /** Drops a disconnecting player's session and clears the table's in-progress sprite (the
-     *  committed inputs are forfeit, same as a cancel). */
     public static void onPlayerDisconnect(ServerPlayer player) {
         Session session = SESSIONS.remove(player.getUUID());
         if (session != null) {
@@ -139,8 +142,6 @@ public final class Fletching {
         Block.popResource(level, session.pos.above(), out);
         level.playSound(null, session.pos, SoundEvents.VILLAGER_WORK_FLETCHER,
             SoundSource.BLOCKS, 0.8F, 1.0F);
-        // Completion burst, visible to everyone nearby (the per-stretch puffs are client-side on the
-        // crafter only). Fine+ work earns an extra enchanted flourish.
         double x = session.pos.getX() + 0.5;
         double y = session.pos.getY() + 1.1;
         double z = session.pos.getZ() + 0.5;
@@ -152,24 +153,15 @@ public final class Fletching {
         }
     }
 
-    /** Stamps the rolled craftsmanship tier on a fletched output: the TOOL_QUALITY component plus
-     *  quality-scaled durability via the MAX_DAMAGE stack component (works for ANY damageable
-     *  output — the primitive bow and the vanilla fishing rod alike). Shared by the player
-     *  minigame path and the Fletcher NPC's simulated path so quality is computed identically. */
     public static ItemStack applyQuality(ItemStack out, QualityTier tier) {
         out.set(BannerboundCore.TOOL_QUALITY.get(), tier);
         float m = tier.statMultiplier();
-        // Durability.
         Integer baseMax = out.get(net.minecraft.core.component.DataComponents.MAX_DAMAGE);
         if (baseMax != null && baseMax > 0) {
             out.set(net.minecraft.core.component.DataComponents.MAX_DAMAGE, Math.max(1, Math.round(baseMax * m)));
         }
         if (m == 1.0F) return out;
 
-        // Attack damage — scale the item's ATTACK_DAMAGE modifier so quality shows in the tooltip
-        // AND lands in a player's melee hit. Citizen hunters scale damage off the settlement tool-age
-        // value (HunterWorkGoal#qualityScaledDamage), not the item's attributes, so this never
-        // double-counts for NPCs.
         net.minecraft.world.item.component.ItemAttributeModifiers mods =
             out.get(net.minecraft.core.component.DataComponents.ATTRIBUTE_MODIFIERS);
         if (mods != null && !mods.modifiers().isEmpty()) {
@@ -188,8 +180,6 @@ public final class Fletching {
             out.set(net.minecraft.core.component.DataComponents.ATTRIBUTE_MODIFIERS, b.build());
         }
 
-        // Mining — scale the tool component's speeds, AMPLIFIED so a fine tool is clearly felt while
-        // digging (a +10% stat tier becomes ~+30% mining speed). Not a tooltip number, but real.
         net.minecraft.world.item.component.Tool tool =
             out.get(net.minecraft.core.component.DataComponents.TOOL);
         if (tool != null) {
@@ -206,8 +196,6 @@ public final class Fletching {
         return out;
     }
 
-    /** Drops any session anchored at {@code pos} (e.g. the station was broken) and clears the
-     *  station's work lock so a rebuilt block doesn't inherit a stale claim. */
     public static void abortSessionAt(BlockPos pos) {
         SESSIONS.values().removeIf(s -> s.pos.equals(pos));
         com.bannerbound.core.api.workshop.WorkBlockLocks.forceUnlock(pos);

@@ -16,7 +16,12 @@ import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.event.level.BlockEvent;
 
-/** Vanilla-action Chronicle triggers. */
+/**
+ * Bridges vanilla player actions (item pickup/craft, block use/place, advancement earn) into
+ * {@link CodexManager}, which fires the matching Chronicle codex triggers. Server-side only.
+ * Block use/place run at LOWEST priority and skip cancelled events so a protection cancel
+ * (e.g. ClaimProtectionEvents) settles first and a denied action does not count as done.
+ */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
 public final class CodexEvents {

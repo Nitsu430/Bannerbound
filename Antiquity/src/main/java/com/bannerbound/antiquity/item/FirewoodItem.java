@@ -21,11 +21,11 @@ import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Firewood — split logs that build a campfire by hand. Right-clicking the ground places a
- * {@link FirewoodPileBlock} (1 log); right-clicking the pile raises it 1 → 3, and the fourth
- * firewood swaps the pile for an unlit vanilla campfire. That campfire is the settlement seed
- * (Core's FactionEvents founds on it when right-clicked in unclaimed land) and can otherwise be
- * lit with Fire Sticks as an ordinary cook-fire.
+ * Firewood - split logs that build a campfire by hand. Right-clicking supported open ground places
+ * a {@link FirewoodPileBlock} (1 log); right-clicking the pile raises it 1 -> 3, and the fourth
+ * firewood swaps the pile for an unlit vanilla campfire (facing preserved, codex-credited). That
+ * campfire is the settlement seed (Core's FactionEvents founds on it when right-clicked in
+ * unclaimed land) and can otherwise be lit with Fire Sticks as an ordinary cook-fire.
  */
 public class FirewoodItem extends Item {
     public FirewoodItem(Properties properties) {
@@ -40,7 +40,6 @@ public class FirewoodItem extends Item {
         Player player = ctx.getPlayer();
         ItemStack stack = ctx.getItemInHand();
 
-        // Clicking an existing firewood pile → grow it, or (at max) turn it into a campfire.
         if (clickedState.getBlock() instanceof FirewoodPileBlock) {
             if (!level.isClientSide) {
                 int logs = clickedState.getValue(FirewoodPileBlock.LOGS);
@@ -48,7 +47,9 @@ public class FirewoodItem extends Item {
                     level.setBlock(clicked, clickedState.setValue(FirewoodPileBlock.LOGS, logs + 1),
                         Block.UPDATE_ALL);
                 } else {
-                    CodexManager.onItemObtained((ServerPlayer) player, "minecraft:campfire");
+                    if (player instanceof ServerPlayer sp) {
+                        CodexManager.onItemObtained(sp, "minecraft:campfire");
+                    }
 
                     BlockState campfire = Blocks.CAMPFIRE.defaultBlockState()
                         .setValue(CampfireBlock.LIT, false)
@@ -62,7 +63,6 @@ public class FirewoodItem extends Item {
             return InteractionResult.sidedSuccess(level.isClientSide);
         }
 
-        // Otherwise start a new pile on top of the clicked face, if it's a supported open spot.
         Direction face = ctx.getClickedFace();
         BlockPos placePos = clicked.relative(face);
         BlockPos below = placePos.below();

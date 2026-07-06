@@ -19,11 +19,14 @@ import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.item.Item;
 
 /**
- * Datapack loader for grog recipes — reads every JSON under {@code data/<namespace>/grog_recipes/}.
- * Server-side reload listener (registered in {@code AntiquityEvents}); re-read jar-side on remote
- * clients by {@code ClientDatapackRecipes} so the trough renderer can colour the liquid there too.
- * The map key is the recipe id (the JSON's path) — the Fermentation Trough stores that id while it
- * ferments and resolves the tint/identity back through {@link #byId(String)}.
+ * Datapack loader for grog recipes - reads every JSON under {@code data/<namespace>/grog_recipes/}.
+ * Server-side reload listener (registered in {@code AntiquityEvents}); {@code applyEntries} is
+ * public so {@code ClientDatapackRecipes} can re-read the same JSONs jar-side on remote clients,
+ * letting the trough renderer colour the liquid there too. The map key is the recipe id (the
+ * JSON's path) - the Fermentation Trough stores that id while it ferments and resolves the
+ * tint/identity back through {@link #byId(String)}. {@code inputs()} is the set of items that
+ * charge a trough; the Brewer's pestle-set filter ("which mortar outputs are brewable") and its
+ * charge-item storage scan both key off it.
  */
 @ApiStatus.Internal
 public class GrogRecipeManager extends SimpleJsonResourceReloadListener {
@@ -40,7 +43,6 @@ public class GrogRecipeManager extends SimpleJsonResourceReloadListener {
         applyEntries(entries);
     }
 
-    /** Parse + store the loaded entries (reused by the client jar loader on remote clients). */
     public static void applyEntries(Map<ResourceLocation, JsonElement> entries) {
         Map<ResourceLocation, GrogRecipe> loaded = new LinkedHashMap<>();
         for (Map.Entry<ResourceLocation, JsonElement> entry : entries.entrySet()) {
@@ -53,22 +55,18 @@ public class GrogRecipeManager extends SimpleJsonResourceReloadListener {
         BannerboundAntiquity.LOGGER.info("Loaded {} grog recipe(s).", recipes.size());
     }
 
-    /** The recipe stored under {@code id} (the trough's saved ferment id), or {@code null}. */
     @Nullable
     public static GrogRecipe byId(String id) {
         if (id == null || id.isEmpty()) return null;
         return recipes.get(ResourceLocation.parse(id));
     }
 
-    /** Every item that charges a trough (some grog recipe's input) — the Brewer's pestle-set filter
-     *  ("which mortar outputs are brewable") and its charge-item storage scan both key off this. */
     public static java.util.Set<Item> inputs() {
         java.util.Set<Item> out = new java.util.HashSet<>();
         for (GrogRecipe r : recipes.values()) out.add(r.input());
         return out;
     }
 
-    /** The first recipe whose input is {@code item} (for charging a trough), or {@code null}. */
     @Nullable
     public static Map.Entry<ResourceLocation, GrogRecipe> findForInput(Item item) {
         for (Map.Entry<ResourceLocation, GrogRecipe> e : recipes.entrySet()) {

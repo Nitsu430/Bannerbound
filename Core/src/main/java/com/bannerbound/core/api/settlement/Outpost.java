@@ -17,39 +17,49 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * The OUTPOST — a remote, exclusive-but-unprotected <b>working claim</b> on an unclaimed chunk
- * near (but outside) a settlement's borders. There is no longer a custom outpost block: an outpost
- * is established by planting a <b>faction banner</b> outside the border and confirming it in the
- * banner's right-click screen ("place then confirm"). The miner/herder/farmer rod markers and
- * worker drop-offs treat a working-claimed chunk as workable territory, and stockers haul from its
- * containers like any other drop-off — so a remote ore chunk becomes a real, supplied extraction
- * site with an exposed supply line.
- *
- * <p><b>The weakness is the design:</b> the banner sits on unprotected land, and breaking it
- * (anyone, survival) drops the claim on the spot — that IS conquest v1. The owning settlement is
- * told the moment it happens.
- *
- * <p>World-event wiring (break / right-click / stale sweep) lives in
+ * The OUTPOST: a remote, exclusive-but-unprotected working claim on an unclaimed chunk near (but
+ * outside) a settlement's borders. There is no custom outpost block - an outpost is established by
+ * planting a faction banner outside the border and confirming it in the banner's right-click
+ * screen ("place then confirm"). Rod markers and worker drop-offs treat a working-claimed chunk as
+ * workable territory and stockers haul from its containers, so a remote ore chunk becomes a real,
+ * supplied extraction site with an exposed supply line. The weakness IS the design: the banner
+ * sits on unprotected land, and breaking it (anyone, survival) drops the claim on the spot - that
+ * is conquest v1. Unless a member dismantled it, the loss sounds a faction-wide alarm: on-site
+ * toll, per-member toll for those out of earshot, red broadcast, and an ~1h ALERT status entry so
+ * offline members still learn of it (stopgap until proper offline-event delivery,
+ * OFFLINE_PLAY_PLAN.md). World-event wiring (break / right-click / stale sweep) lives in
  * {@code FactionBannerEvents}; this class holds the rules and the management/establish screen
  * payloads, parallel to {@link FactionBanner}. See MINER_PLAN.md / FACTION_BANNER_PLAN.md.
+ *
+ * <p>Rules: the cap is {@link #BASE_OUTPOSTS} (deliberately stingy - outpost slots are a strategic
+ * scarcity lever) plus one per completed research, science OR culture, granting a numbered
+ * bannerbound.outpost_slot_N flag - counted, so several researches stack without code changes.
+ * Range is Chebyshev {@link #OUTPOST_RANGE_CHUNKS} chunks from the settlement's nearest
+ * fully-claimed chunk. Outposts may sit NEAR a city-state but never on its claimed territory.
+ * {@link #validateOutposts}, called from the once-a-second banner sweep (mirroring
+ * {@link FactionBanner#validate}), catches removals that fire no break event (explosion, piston,
+ * /setblock); only loaded banner positions are judged - an unloaded banner is presumed standing -
+ * and legacy claims with no recorded banner pos are skipped.
+ *
+ * <p>Worker appointment: ore/material/crop chunks get a banner-owned marker (miner deposit /
+ * digger deposit / crop field) created on appoint and removed on recall or claim loss, while
+ * herder PENS carry the player's animal/keep config and are only ever bound/unbound, never
+ * auto-created or destroyed. The appointed citizen becomes an outpost RESIDENT: its persistent
+ * outpostSite anchor keeps patrol/idle/sleep on site and its town house is vacated; recall
+ * reverses this so tryAutoAssignHome re-homes it in town. openScreen auto-vacates stale
+ * appointments (worker dead or re-jobbed) so a post never points at a ghost. Citizen display
+ * names embed a private-use-area job-glyph char that only the name-tag font can draw; cleanName
+ * strips it before any plain-GUI text or it renders as a tofu box.
  */
 @ApiStatus.Internal
 public final class Outpost {
     private Outpost() {}
 
-    /** Research flag gating outposts. */
     public static final String FLAG_OUTPOST = "bannerbound.unlock.outpost";
-    /** Base simultaneous outposts per settlement (the strategic scarcity lever — start stingy).
-     *  Research raises it — see {@link #maxOutposts}. */
     public static final int BASE_OUTPOSTS = 2;
-    /** How many numbered {@code bannerbound.outpost_slot_N} flags the cap scan checks. */
     private static final int MAX_SLOT_FLAGS = 3;
-    /** Max distance (chunks, Chebyshev) from the settlement's nearest claimed chunk. */
     public static final int OUTPOST_RANGE_CHUNKS = 8;
 
-    /** The settlement's outpost cap: {@link #BASE_OUTPOSTS} + one per completed research (science
-     *  OR culture) granting a numbered {@code bannerbound.outpost_slot_N} flag — counted, so
-     *  several researches stack without code changes. */
     public static int maxOutposts(Settlement settlement) {
         int max = BASE_OUTPOSTS;
         for (int i = 1; i <= MAX_SLOT_FLAGS; i++) {
@@ -58,8 +68,6 @@ public final class Outpost {
         return max;
     }
 
-    /** True when {@code cp} is within {@link #OUTPOST_RANGE_CHUNKS} of any chunk the settlement
-     *  fully claims (the "near, but outside, the border" rule). */
     public static boolean withinRange(Settlement settlement, ChunkPos cp) {
         for (long packed : settlement.claimedChunks()) {
             ChunkPos own = new ChunkPos(packed);
@@ -70,12 +78,6 @@ public final class Outpost {
         return false;
     }
 
-    /**
-     * Validates everything and, on success, grants the working claim, records the banner block
-     * that established it (so the stale sweep can later notice if it's blown up), and plays the
-     * founding fanfare. Returns null on success, else the failure lang key. Called from the
-     * banner's "Establish outpost here" action.
-     */
     public static String tryEstablish(ServerLevel sl, ServerPlayer player, BlockPos pos) {
         if (sl.dimension() != Level.OVERWORLD) return "bannerbound.outpost.overworld_only";
         SettlementData data = SettlementData.get(sl.getServer().overworld());
@@ -85,7 +87,6 @@ public final class Outpost {
         ChunkPos cp = new ChunkPos(pos);
         long packed = cp.toLong();
         if (settlement.claimedChunks().contains(packed)) return "bannerbound.outpost.inside_territory";
-        // Outposts may sit NEAR a city-state, but not on its claimed territory.
         if (com.bannerbound.core.citystate.CityStateData.get(sl.getServer().overworld())
                 .getByChunk(packed) != null) return "bannerbound.outpost.in_city_state";
         if (data.getByChunk(packed) != null) return "bannerbound.outpost.chunk_taken";
@@ -99,8 +100,6 @@ public final class Outpost {
             Component.translatable("bannerbound.outpost.established",
                 settlement.workingClaims().size(), maxOutposts(settlement))
                 .withStyle(ChatFormatting.GREEN), true);
-        // Founding fanfare — same celebratory voice as a town-hall food deposit (bell + sparks),
-        // so "the claim took" is felt in the world, not just read in chat.
         sl.playSound(null, pos, net.minecraft.sounds.SoundEvents.NOTE_BLOCK_BELL.value(),
             net.minecraft.sounds.SoundSource.BLOCKS, 1.0f, 1.2f);
         sl.sendParticles(net.minecraft.core.particles.ParticleTypes.HAPPY_VILLAGER,
@@ -108,19 +107,11 @@ public final class Outpost {
         return null;
     }
 
-    /**
-     * The outpost is lost: drop the working claim, remove the banner-owned work marker (miner
-     * deposit / crop field — pens are unbound, not destroyed), and — UNLESS a member dismantled
-     * it — sound the alarm faction-wide (on-site toll, faction-wide toll, red broadcast, ~1h
-     * ALERT status so offline members still learn of it). The member "dismantled" toast is sent
-     * by the break handler (it knows the breaker); this handles the claim drop + the hostile
-     * alarm, matching the pre-refactor split.
-     */
     public static void loseOutpost(ServerLevel sl, Settlement owner, BlockPos pos, boolean memberBreak) {
         MinecraftServer server = sl.getServer();
         SettlementData data = SettlementData.get(server.overworld());
         ChunkPos cp = new ChunkPos(pos);
-        if (data.getByWorkingClaim(cp.toLong()) == null) return; // no live claim here
+        if (data.getByWorkingClaim(cp.toLong()) == null) return;
         data.unclaimWorkingChunk(owner, cp);
         com.bannerbound.core.api.world.BlockSelection marker = findWorkMarker(sl, owner, cp, null);
         if (marker != null) {
@@ -131,9 +122,6 @@ public final class Outpost {
         if (!memberBreak) {
             sl.playSound(null, pos, net.minecraft.sounds.SoundEvents.BELL_BLOCK,
                 net.minecraft.sounds.SoundSource.BLOCKS, 1.5f, 0.6f);
-            // The loss SURVIVES the moment: a town-hall Statuses entry (~1h real) so members who
-            // were OFFLINE still learn of it when they next check in. Stopgap — proper offline-event
-            // delivery is OFFLINE_PLAY_PLAN.md's project.
             owner.addStatusEffect(new StatusEffect(
                 UUID.randomUUID(), "bannerbound.status.outpost_lost",
                 java.util.List.of(pos.getX() + ", " + pos.getZ()),
@@ -145,8 +133,6 @@ public final class Outpost {
                 member.sendSystemMessage(Component.translatable("bannerbound.outpost.lost",
                         pos.getX(), pos.getZ())
                     .withStyle(ChatFormatting.RED));
-                // The toll reaches the WHOLE faction, wherever they are — the alarm is half the
-                // message. Members near the site already heard the world toll, so skip them.
                 boolean heardOnSite = member.level() == sl
                     && member.blockPosition().closerThan(pos, 48);
                 if (!heardOnSite) {
@@ -157,16 +143,9 @@ public final class Outpost {
         }
     }
 
-    /**
-     * Stale-registration sweep: re-checks each of the settlement's outpost banner positions and,
-     * if the block is gone (explosion, piston, {@code /setblock} — removals that fire no break
-     * event), treats the outpost as struck down. Only loaded positions are judged; an unloaded
-     * banner is presumed standing. Legacy claims with no recorded banner pos are skipped. Called
-     * from the once-a-second banner sweep, mirroring {@link FactionBanner#validate}.
-     */
     public static void validateOutposts(ServerLevel sl, Settlement owner) {
         if (owner.workingClaims().isEmpty()) return;
-        // Snapshot — loseOutpost mutates workingClaims.
+        // Snapshot: loseOutpost mutates workingClaims.
         for (long packed : new java.util.ArrayList<>(owner.workingClaims())) {
             BlockPos pos = owner.outpostBannerPos(packed);
             if (pos == null || !sl.isLoaded(pos)) continue;
@@ -176,14 +155,6 @@ public final class Outpost {
         }
     }
 
-    // ─── Management / establish screen ───────────────────────────────────────────────────────
-
-    /**
-     * Builds the outpost's full status (deposit / storage / lodging / appointed miner /
-     * candidates) and sends the management screen for an ALREADY-established outpost. Also the
-     * post-assign refresh — the assign handler calls this after mutating the marker so the open
-     * screen live-updates.
-     */
     public static void openScreen(ServerLevel sl, ServerPlayer sp, BlockPos bannerPos) {
         SettlementData data = SettlementData.get(sl.getServer().overworld());
         ChunkPos cp = new ChunkPos(bannerPos);
@@ -202,10 +173,6 @@ public final class Outpost {
 
         com.bannerbound.core.api.world.BlockSelection marker =
             markerType == null ? null : findWorkMarker(sl, owner, cp, markerType);
-        // STALE APPOINTMENT cleanup: the bound worker died (gone from the roster) or was
-        // re-jobbed — the post auto-vacates instead of pointing at a ghost forever. A miner
-        // marker is banner-owned, so it's removed outright; a herder PEN survives (it carries
-        // the player's animal/keep config) and just unbinds.
         if (marker != null && !marker.targetsAllWorkers()) {
             java.util.UUID boundId = marker.assignedCitizenId();
             boolean dead = rosterName(owner, boundId) == null;
@@ -220,7 +187,7 @@ public final class Outpost {
                         || (com.bannerbound.core.entity.DiggerWorkGoal.SELECTION_TYPE.equals(mt)
                             && com.bannerbound.core.territory.MaterialDepositLayout
                                 .isMaterialPacked(marker.seedItemId()))) {
-                    registry.unregister(marker.rodId());   // banner-owned (miner deposit / crop field)
+                    registry.unregister(marker.rodId());
                     marker = null;
                 } else {
                     marker = marker.withAssignedCitizen(null);
@@ -232,12 +199,9 @@ public final class Outpost {
         boolean markerOpen = marker != null && marker.targetsAllWorkers();
         String assignedName = "";
         if (marker != null && !markerOpen) {
-            // Roster-backed name: correct even while the worker entity is unloaded far away.
             String n = rosterName(owner, marker.assignedCitizenId());
             assignedName = cleanName(n != null ? n : "Worker");
         }
-        // Vein gauge: how many ore faces are mineable RIGHT NOW vs the deposit's full face count —
-        // drives the screen's vein bar, and 0 ready = "she's waiting for the next refresh wave".
         int veinReady = -1;
         int veinTotal = 0;
         int richness = ore ? com.bannerbound.core.territory.BoulderLayout.richness(sl.getSeed(), cp) : -1;
@@ -275,8 +239,6 @@ public final class Outpost {
                 }
             }
         }
-        // Assignable candidates: loaded settlement citizens holding the chunk's expected job
-        // (miner for ore, herder for livestock) — minus the one already appointed here.
         java.util.UUID appointedId = marker != null && !markerOpen ? marker.assignedCitizenId() : null;
         java.util.List<String> ids = new java.util.ArrayList<>();
         java.util.List<String> names = new java.util.ArrayList<>();
@@ -297,11 +259,6 @@ public final class Outpost {
                 owner.workingClaims().size(), maxOutposts(owner), true));
     }
 
-    /**
-     * Sends the "establish" variant of the screen for a NOT-yet-claimed banner standing on a
-     * valid outpost site: the chunk's resource, lodging/storage readiness, the settlement's
-     * slot count, and an "Establish outpost here" button. Confirming runs {@link #tryEstablish}.
-     */
     public static void openEstablishScreen(ServerLevel sl, ServerPlayer sp, BlockPos bannerPos) {
         SettlementData data = SettlementData.get(sl.getServer().overworld());
         Settlement mine = data.getByPlayer(sp.getUUID());
@@ -321,13 +278,10 @@ public final class Outpost {
                 mine.workingClaims().size(), maxOutposts(mine), false));
     }
 
-    /** Citizen display names carry a private-use-area job-glyph char that only the name-tag font
-     *  can draw — in a plain GUI font it renders as a tofu box. Strip it for screen text. */
     private static String cleanName(String name) {
         return name.replaceAll("[\\uE000-\\uF8FF]", "").trim();
     }
 
-    /** Livestock chunk → the outpost's workforce is a HERDER (pen-based) rather than a miner. */
     private static boolean isLivestockChunk(com.bannerbound.core.territory.ChunkResource t) {
         return switch (t) {
             case HORSES, CATTLE, PIGS, CHICKENS, SHEEP -> true;
@@ -335,8 +289,6 @@ public final class Outpost {
         };
     }
 
-    /** The job id an outpost on this chunk appoints (miner for ore, herder for livestock, farmer for
-     *  a crop field), or null when the chunk supports no outpost work yet (fish — later). */
     public static String expectedJob(com.bannerbound.core.territory.ChunkResource t) {
         if (com.bannerbound.core.territory.BoulderLayout.isOreChunk(t)) {
             return com.bannerbound.core.entity.MinerWorkGoal.JOB_TYPE_ID;
@@ -351,7 +303,6 @@ public final class Outpost {
         return null;
     }
 
-    /** The rod-selection type the banner manages for this chunk, or null. */
     private static String markerTypeFor(com.bannerbound.core.territory.ChunkResource t) {
         if (com.bannerbound.core.territory.BoulderLayout.isOreChunk(t)) {
             return com.bannerbound.core.entity.MinerWorkGoal.SELECTION_TYPE;
@@ -366,8 +317,6 @@ public final class Outpost {
         return null;
     }
 
-    /** The outpost chunk's work marker (miner deposit / herder pen), or null. {@code selectionType}
-     *  null = match either kind (banner-fall cleanup). The banner owns at most one. */
     private static com.bannerbound.core.api.world.BlockSelection findWorkMarker(
             ServerLevel sl, Settlement owner, ChunkPos cp, @org.jetbrains.annotations.Nullable String selectionType) {
         for (com.bannerbound.core.api.world.BlockSelection sel
@@ -393,11 +342,6 @@ public final class Outpost {
         return null;
     }
 
-    /** Make {@code citizenId} a RESIDENT OF THE OUTPOST: anchor its persistent {@code outpostSite}
-     *  (so patrol/idle/sleep stay on site and it never wanders back to town) and evict any settlement
-     *  house it held (it lives out here now). Anchor = the chunk centre at banner height — an
-     *  approximate home point; the work goal refines it to the exact work block while it runs. No-op
-     *  on the entity if it's unloaded (the work goal sets it when the worker next loads + scans). */
     private static void bindOutpostResident(ServerLevel sl, Settlement owner, ChunkPos cp,
                                             BlockPos bannerPos, java.util.UUID citizenId) {
         if (citizenId == null) return;
@@ -412,15 +356,12 @@ public final class Outpost {
         }
     }
 
-    /** Reverse of {@link #bindOutpostResident}: the worker no longer lives at an outpost. Clears its
-     *  residence so {@code tryAutoAssignHome} re-homes it in town. (Home left for the auto-poll.) */
     private static void unbindOutpostResident(ServerLevel sl, @org.jetbrains.annotations.Nullable java.util.UUID citizenId) {
         if (citizenId != null && sl.getEntity(citizenId) instanceof com.bannerbound.core.entity.CitizenEntity c) {
             c.setOutpostSite(null);
         }
     }
 
-    /** Roster lookup (works while the entity is UNLOADED — the roster is settlement data). */
     private static String rosterName(Settlement owner, java.util.UUID citizenId) {
         for (com.bannerbound.core.api.settlement.Citizen c : owner.citizens()) {
             if (c.entityId().equals(citizenId)) return c.name();
@@ -428,13 +369,6 @@ public final class Outpost {
         return null;
     }
 
-    /**
-     * Appoints {@code citizenId} as the outpost's worker — miner on ore chunks (creating or
-     * re-binding the banner-owned deposit marker), herder on livestock chunks (re-binding the
-     * existing rod-marked PEN — pens carry player config and are never auto-created). A null
-     * {@code citizenId} recalls the worker (miner marker removed; herder pen unbound).
-     * Returns null on success, else the failure's lang key.
-     */
     @org.jetbrains.annotations.Nullable
     public static String setOutpostWorker(ServerLevel sl, Settlement owner, BlockPos bannerPos,
                                           @org.jetbrains.annotations.Nullable java.util.UUID citizenId,
@@ -453,20 +387,16 @@ public final class Outpost {
         com.bannerbound.core.api.world.BlockSelection existing = findWorkMarker(sl, owner, cp, markerType);
         if (citizenId == null) {
             if (existing != null) {
-                // Recalled → the worker no longer lives here; clear its outpost residence so it can be
-                // re-homed in town and resume settlement life.
                 if (!existing.targetsAllWorkers()) unbindOutpostResident(overworld, existing.assignedCitizenId());
                 if (ore || crop || material) {
-                    registry.unregister(existing.rodId());   // banner-owned; recreated on appoint
+                    registry.unregister(existing.rodId());
                 } else {
-                    registry.register(existing.withAssignedCitizen(null));   // pen survives, unbound
+                    registry.register(existing.withAssignedCitizen(null));
                 }
                 com.bannerbound.core.world.SelectionBroadcaster.broadcast(sl.getServer());
             }
             return null;
         }
-        // Appointed (here or in any branch below) → this citizen now LIVES at the outpost. Free the
-        // previous occupant (reappointment) and anchor the new one there + give up its town house.
         if (existing != null && !existing.targetsAllWorkers()) {
             java.util.UUID prev = existing.assignedCitizenId();
             if (prev != null && !prev.equals(citizenId)) unbindOutpostResident(overworld, prev);
@@ -478,9 +408,6 @@ public final class Outpost {
             return null;
         }
         if (crop) {
-            // Banner-owned crop field over the chunk's central region. The farmer tills/plants the
-            // chunk's crop (seedItemId) from the hauled-in seed chest and harvests at 2× (crop-chunk
-            // bonus); it wires its own in-chunk seed source + drop-off in FarmerWorkGoal each cycle.
             int baseY = com.bannerbound.core.territory.BoulderLayout.groundSurfaceY(
                 sl, cp.getMinBlockX() + 8, cp.getMinBlockZ() + 8);
             BlockPos lo = new BlockPos(cp.getMinBlockX() + 2, baseY - 5, cp.getMinBlockZ() + 2);
@@ -519,8 +446,6 @@ public final class Outpost {
             return null;
         }
         if (!ore) {
-            // No pen marked in this chunk yet — pens need fences + an animal choice, which only
-            // the Foreman's Rod flow provides. Tell the player what to build.
             return "bannerbound.outpost.no_pen";
         }
         if (com.bannerbound.core.territory.BoulderLayout.dropFor(type).isEmpty()) {
@@ -541,8 +466,6 @@ public final class Outpost {
         return null;
     }
 
-    /** Roofed bed HEADs in the outpost chunk (same roof rule as SleepGoal's outpost lodging:
-     *  any motion-blocking block within 6 above — walls not required). */
     private static int countRoofedBeds(ServerLevel sl, ChunkPos cp, int aroundY) {
         int count = 0;
         BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos();

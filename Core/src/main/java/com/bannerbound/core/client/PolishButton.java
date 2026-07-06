@@ -19,18 +19,14 @@ import net.neoforged.api.distmarker.OnlyIn;
  *
  * <p>Drop-in replacement: {@code PolishButton.polished(...)} mirrors {@link Button#builder} (pos /
  * size / bounds / width / tooltip / createNarration), so swapping a call site is a one-word change.
- * (The factory can't be named {@code builder} — hiding the superclass static with an unrelated
+ * (The factory can't be named {@code builder} -- hiding the superclass static with an unrelated
  * return type doesn't compile.)
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class PolishButton extends Button {
-    /** 0→1 hover ease — per-frame exponential approach toward the hover state. */
     private float hoverEase = 0f;
-    /** When the button was last activated; drives the press dip-and-pop. 0 = idle. */
     private long pressedAtMs = 0L;
-    /** Hover-wash tint (RGB part only; alpha comes from the ease). White by default; settlement
-     *  screens pass their identity primary so even button hovers carry the banner color. */
     private int washRgb = 0xFFFFFF;
 
     protected PolishButton(int x, int y, int width, int height, Component message,
@@ -51,15 +47,13 @@ public class PolishButton extends Button {
     @Override
     protected void renderWidget(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         boolean animate = Config.UI_ANIMATIONS.get();
-        // Hover only (not keyboard focus — focus lingers on the last-clicked button and would
-        // leave a permanent wash).
+        // Hover only, not keyboard focus: focus lingers on the last-clicked button, leaving a permanent wash.
         boolean hot = this.active && this.isHovered();
         if (animate) {
             hoverEase += ((hot ? 1f : 0f) - hoverEase) * 0.25f;
         } else {
             hoverEase = hot ? 1f : 0f;
         }
-        // Press dip: 0→1→0 triangle over ~90ms, translating the whole button down ≤1.5px.
         float press = 0f;
         if (animate && pressedAtMs > 0L) {
             float t = (net.minecraft.Util.getMillis() - pressedAtMs) / 90f;
@@ -73,11 +67,7 @@ public class PolishButton extends Button {
             g.pose().translate(0, dipY, 0);
         }
         super.renderWidget(g, mouseX, mouseY, partialTick);
-        // Hover wash: up to ~8% white over the sprite, eased — reads as a soft brighten. Drawn
-        // only while easing/hot so idle buttons cost nothing. (Vanilla's own hover sprite still
-        // applies underneath; this softens its on/off snap.)
         if (this.active && hoverEase > 0.02f) {
-            // Identity-tinted washes get a touch more alpha than plain white needs to read.
             int alpha = (int) (hoverEase * (washRgb == 0xFFFFFF ? 0x16 : 0x2A));
             g.fill(getX() + 1, getY() + 1, getX() + getWidth() - 1, getY() + getHeight() - 1,
                 (alpha << 24) | washRgb);
@@ -87,7 +77,6 @@ public class PolishButton extends Button {
         }
     }
 
-    /** Mirror of {@link Button.Builder} so call sites swap with a one-word change. */
     public static class Builder {
         private final Component message;
         private final OnPress onPress;
@@ -135,8 +124,6 @@ public class PolishButton extends Button {
             return this;
         }
 
-        /** Tints the hover wash with a settlement identity color (ARGB or RGB; alpha ignored).
-         *  Feed {@code primaryAccent()} from a PolishedScreen so hovers wear the banner. */
         public Builder accent(int accentColor) {
             this.washRgb = accentColor & 0x00FFFFFF;
             return this;

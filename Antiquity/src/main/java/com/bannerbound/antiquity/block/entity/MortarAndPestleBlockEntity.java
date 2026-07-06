@@ -17,30 +17,27 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity for the Mortar and Pestle. Holds the bowl's liquid and the (possibly batched)
- * ingredient being ground. Grinding is the press-and-grind minigame ({@code MortarGrind}); this
- * entity just stores the loaded ingredients and plays a short "Mix" flourish (driven by
- * {@link #mixAnimTicks}) when a grind finishes, so players nearby see the pestle strike. Liquid,
- * ingredient and the flourish timer are mirrored to the client; the live in-session pestle motion
- * is driven client-side by {@code MortarGrindState}.
+ * Block entity for the Mortar and Pestle. Holds the bowl's liquid (by string id, "" = empty) and
+ * the ingredient being ground -- possibly batched: item-output recipes grind up to MAX_BATCH in
+ * one go. Grinding itself is the press-and-grind minigame (MortarGrind); this entity just stores
+ * the loaded contents and plays a short completion flourish (mixAnimTicks, MIX_CYCLE_TICKS = the
+ * 1-second "Mix" animation) triggered server-side via playFlourish() so nearby players see the
+ * pestle strike. Liquid, ingredient and the flourish timer mirror to the client through
+ * setChanged() block updates; the live in-session pestle motion is driven client-side by
+ * MortarGrindState, not by this entity.
  */
 @ApiStatus.Internal
 public class MortarAndPestleBlockEntity extends BlockEntity {
-    /** Ticks the completion flourish runs — matches the 1-second "Mix" animation. */
     public static final int MIX_CYCLE_TICKS = 20;
-    /** Most ingredients the bowl holds at once (item-output recipes grind a whole batch in one go). */
     public static final int MAX_BATCH = 16;
 
     private String liquidId = "";
     private ItemStack ingredient = ItemStack.EMPTY;
-    /** Ticks left in the completion flourish; 0 means idle. */
     private int mixAnimTicks = 0;
 
     public MortarAndPestleBlockEntity(BlockPos pos, BlockState state) {
         super(BannerboundAntiquity.MORTAR_AND_PESTLE_BE.get(), pos, state);
     }
-
-    // ─── State ─────────────────────────────────────────────────────────────────────────────────
 
     public String getLiquidId() {
         return liquidId;
@@ -50,7 +47,6 @@ public class MortarAndPestleBlockEntity extends BlockEntity {
         return !liquidId.isEmpty();
     }
 
-    /** Sets the liquid (use {@code ""} to empty) and re-syncs. */
     public void setLiquid(String id) {
         this.liquidId = id == null ? "" : id;
         setChanged();
@@ -60,30 +56,24 @@ public class MortarAndPestleBlockEntity extends BlockEntity {
         return ingredient;
     }
 
-    /** Sets the (possibly batched) ingredient and re-syncs. */
     public void setIngredient(ItemStack stack) {
         this.ingredient = stack == null ? ItemStack.EMPTY : stack;
         setChanged();
     }
 
-    /** True while the completion flourish is playing — used to drive the renderer for nearby players. */
     public boolean isMixing() {
         return mixAnimTicks > 0;
     }
 
-    /** Ticks left in the completion flourish (0..MIX_CYCLE_TICKS). */
     public int getMixAnimTicks() {
         return mixAnimTicks;
     }
 
-    /** Plays one "Mix" flourish — a single pestle strike visible to everyone nearby. Called by the
-     *  server when a grind session completes (the live in-session motion is driven client-side). */
     public void playFlourish() {
         mixAnimTicks = MIX_CYCLE_TICKS;
         setChanged();
     }
 
-    /** Ticker — runs on both sides; counts down the completion flourish. */
     public static void tick(Level level, BlockPos pos, BlockState state, MortarAndPestleBlockEntity be) {
         if (be.mixAnimTicks > 0) {
             be.mixAnimTicks--;
@@ -97,8 +87,6 @@ public class MortarAndPestleBlockEntity extends BlockEntity {
             level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
         }
     }
-
-    // ─── NBT + client sync ─────────────────────────────────────────────────────────────────────
 
     @Override
     protected void saveAdditional(CompoundTag tag, HolderLookup.Provider provider) {

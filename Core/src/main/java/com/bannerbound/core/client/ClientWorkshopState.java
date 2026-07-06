@@ -7,9 +7,9 @@ import org.jetbrains.annotations.ApiStatus;
 import com.bannerbound.core.network.WorkshopStatsPayload;
 
 /**
- * Client-side cache of the latest {@link WorkshopStatsPayload} — the per-workshop stats (staffing,
- * output rate, pending orders) the Town Hall Statistics tab renders. Updated once a second for members
- * of a settlement that has unlocked Mathematics; empty otherwise.
+ * Client-side cache of the latest WorkshopStatsPayload: the per-workshop stats (staffing, output rate,
+ * pending orders) the Town Hall Statistics tab renders. The volatile snapshot is replaced wholesale
+ * once a second for members of a settlement that has unlocked Mathematics, and is empty otherwise.
  */
 @ApiStatus.Internal
 public final class ClientWorkshopState {

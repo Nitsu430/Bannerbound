@@ -117,7 +117,6 @@ public class ChunkClaimCostLoader extends SimpleJsonResourceReloadListener {
         return tiers;
     }
 
-    /** Look up the cost file for an era key (e.g. {@code "ancient"}). Null if none defined. */
     public static ChunkClaimCostFile get(String era) {
         return FILES.get(era);
     }

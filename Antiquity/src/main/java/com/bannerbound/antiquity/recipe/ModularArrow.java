@@ -12,25 +12,26 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * The fletching station's free-mix arrow assembly. Rather than a JSON recipe per material combination,
- * a pile of exactly three parts — one tip, one shaft, one back (each a single item) — is matched here
- * and turned into a synthetic {@link FletchingRecipe} whose result is a batch of composite arrows
- * stamped with the corresponding {@code ARROW_TIP/SHAFT/BACK} components (see {@link ArrowParts}). The
- * station runs the normal stretch minigame on it, so quality rolls exactly as for any other fletch.
- *
- * <p>Valid parts (resolved by {@link ArrowParts}, tag-mirrored in {@code tags/item/arrow_*}):
- * tips = flint blade / cast metal arrowheads; shafts = stick / metal ingot (metal costs an ingot per
- * batch); backs = feather / plant fiber.
+ * The fletching station's free-mix arrow assembly. Rather than a JSON recipe per material
+ * combination, a pile of exactly three parts - one tip, one shaft, one back, each a single item -
+ * is matched by {@code tryMatch} and turned into a synthetic {@link FletchingRecipe} whose result
+ * is a {@link #BATCH}-sized stack of composite arrows stamped with the corresponding
+ * ARROW_TIP/SHAFT/BACK components. The station runs the normal stretch minigame on it, so quality
+ * rolls exactly as for any other fletch; research gating on the result item is the caller's job.
+ * Valid parts are resolved by {@link ArrowParts} (tag-mirrored in {@code tags/item/arrow_*}):
+ * tips = flint blade / cast metal arrowheads; shafts = stick / metal ingot (metal costs an ingot
+ * per batch); backs = feather / plant fiber. {@code ghostCandidate} previews a PARTIAL pile (any
+ * mix of valid parts, at least one, no junk, <= 3 items total): missing slots are filled with the
+ * registry's default flint/stick/feather parts so the station's ghost shows the parts still needed
+ * and the arrow they would make - null when the pile holds no valid part, or a needed default part
+ * isn't defined in the registry.
  */
 @ApiStatus.Internal
 public final class ModularArrow {
     private ModularArrow() {}
 
-    /** Arrows produced per assembled batch (one tip + one shaft + one back). */
     public static final int BATCH = 16;
 
-    /** A synthetic recipe for the parts in {@code contents}, or {@code null} if the pile is not exactly
-     *  one tip + one shaft + one back. Research gating is applied by the caller on the result item. */
     @Nullable
     public static FletchingRecipe tryMatch(List<ItemStack> contents) {
         String tip = null;
@@ -44,7 +45,7 @@ public final class ModularArrow {
         for (ItemStack s : contents) {
             if (s.isEmpty()) continue;
             total += s.getCount();
-            if (s.getCount() != 1 || total > 3) return null; // exactly one of each part, nothing extra
+            if (s.getCount() != 1 || total > 3) return null;
 
             Item it = s.getItem();
             String t = ArrowParts.tipMaterial(it);
@@ -60,7 +61,7 @@ public final class ModularArrow {
                 if (back != null) return null;
                 back = b; backItem = it;
             } else {
-                return null; // an item that isn't a valid arrow part → no modular match
+                return null;
             }
         }
 
@@ -69,10 +70,6 @@ public final class ModularArrow {
         return recipe(tipItem, shaftItem, backItem, tip, shaft, back);
     }
 
-    /** A "could become" preview for a PARTIAL arrow pile: any mix of valid parts (at least one, no
-     *  invalid items, ≤3 total) → a synthetic recipe whose missing slots are filled with representative
-     *  defaults (flint blade / stick / feather) so the station's ghost shows the parts still needed and
-     *  the arrow they would make. Returns {@code null} if the pile has no arrow part or holds junk. */
     @Nullable
     public static FletchingRecipe ghostCandidate(List<ItemStack> contents) {
         String tip = null, shaft = null, back = null;
@@ -103,8 +100,6 @@ public final class ModularArrow {
         }
         if (!any) return null;
 
-        // Fill the empty slots with the basic default parts (data-driven) so the ghost shows what's
-        // still needed. If a default part isn't defined in the registry, there's nothing to preview.
         if (tipItem == null)   { tip = ArrowParts.DEFAULT_TIP;   tipItem = ArrowParts.tipItem(tip); }
         if (shaftItem == null) { shaft = ArrowParts.DEFAULT_SHAFT; shaftItem = ArrowParts.shaftItem(shaft); }
         if (backItem == null)  { back = ArrowParts.DEFAULT_BACK;  backItem = ArrowParts.backItem(back); }
@@ -119,7 +114,7 @@ public final class ModularArrow {
             new FletchingRecipe.Ing(shaftItem, 1),
             new FletchingRecipe.Ing(backItem, 1));
         ItemStack result = ArrowParts.makeArrow(tip, shaft, back, BATCH);
-        // Minigame knobs match the old metal-arrow fletch recipe.
+        // Minigame knob values deliberately match the old metal-arrow fletch recipe JSON.
         return new FletchingRecipe(ings, result, 3, 0.20F, 0.70F, 0.07F, 0.06F, Optional.empty());
     }
 }

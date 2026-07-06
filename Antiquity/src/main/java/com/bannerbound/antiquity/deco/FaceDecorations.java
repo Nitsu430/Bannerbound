@@ -20,9 +20,13 @@ import net.neoforged.neoforge.network.PacketDistributor;
 /**
  * Server-side API for the per-face plaster/trim decorations. Data lives in a chunk
  * {@linkplain net.neoforged.neoforge.attachment.AttachmentType attachment}
- * ({@link BannerboundAntiquity#CHUNK_DECORATIONS}) so it persists with the chunk; edits are pushed to
- * tracking clients via {@link DecoUpdatePayload}. The client mirror is
- * {@code com.bannerbound.antiquity.client.ClientDecorations}.
+ * ({@link BannerboundAntiquity#CHUNK_DECORATIONS}) so it persists with the chunk; every edit here
+ * must both re-set the attachment + mark the chunk unsaved AND push a {@link DecoUpdatePayload} to
+ * players tracking the chunk (the client mirror is
+ * {@code com.bannerbound.antiquity.client.ClientDecorations}). set() with a null/empty deco clears
+ * the face. onBlockRemoved() runs when the block is destroyed (player break / explosion): it clears
+ * every face there, syncs each removal, and when dropItems drops one plaster per plastered face plus
+ * one matching dye per trimmed face.
  */
 public final class FaceDecorations {
     private FaceDecorations() {}
@@ -31,12 +35,10 @@ public final class FaceDecorations {
         return chunk.getData(BannerboundAntiquity.CHUNK_DECORATIONS.get());
     }
 
-    /** Server-side read of one face's decoration ({@link FaceDeco#EMPTY} if none). */
     public static FaceDeco get(ServerLevel level, BlockPos pos, Direction dir) {
         return of(level.getChunkAt(pos)).get(pos, dir);
     }
 
-    /** Set or clear (when {@code deco.isEmpty()}) one face's decoration; persists + syncs to trackers. */
     public static void set(ServerLevel level, BlockPos pos, Direction dir, FaceDeco deco) {
         LevelChunk chunk = level.getChunkAt(pos);
         ChunkDecorations cd = of(chunk);
@@ -49,11 +51,6 @@ public final class FaceDecorations {
         }
     }
 
-    /**
-     * Called when the block at {@code pos} is destroyed (player break / explosion): clear every face
-     * decoration there, sync the removal, and — when {@code dropItems} — drop one plaster per
-     * plastered face and one matching dye per trimmed face.
-     */
     public static void onBlockRemoved(ServerLevel level, BlockPos pos, boolean dropItems) {
         LevelChunk chunk = level.getChunkAt(pos);
         ChunkDecorations cd = of(chunk);
@@ -69,7 +66,6 @@ public final class FaceDecorations {
         int plaster = 0;
         Map<DyeColor, Integer> dyes = new EnumMap<>(DyeColor.class);
         for (Map.Entry<Direction, FaceDeco> e : removed.entrySet()) {
-            // Tell trackers this face is gone.
             PacketDistributor.sendToPlayersTrackingChunk(level, chunkPos,
                 new DecoUpdatePayload(new FaceDecoEntry(key, e.getKey(), FaceDeco.EMPTY)));
             FaceDeco d = e.getValue();

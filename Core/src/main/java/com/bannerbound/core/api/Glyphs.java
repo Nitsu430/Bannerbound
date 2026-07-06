@@ -11,37 +11,35 @@ import net.minecraft.network.chat.TextColor;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Single source of truth for the mod's bitmap-font glyph codepoints and {@link Component}
- * builders that work on EITHER side (server or client). {@code Icons} (client-only) covers
- * the same set with convenience methods, but server-side code can't reach Icons due to its
- * {@code @OnlyIn(Dist.CLIENT)} guard — so the chief scoreboard-team prefix (built on the
- * server) lives here instead.
- *
- * <p>Add a new glyph by registering the bitmap in {@code assets/bannerbound/font/icons.json}
- * at a PUA codepoint, then pinning the codepoint as a {@code public static final char}
- * here. Both client and server can reference the codepoint without duplication.
+ * Single source of truth for the mod's bitmap-font glyph codepoints and the {@link Component}
+ * builders that work on EITHER side (server or client). The client-only {@code Icons} class covers
+ * the same set with convenience methods, but server-side code cannot reach it due to its
+ * {@code @OnlyIn(Dist.CLIENT)} guard - so shared pieces like the chief scoreboard-team prefix
+ * (built on the server) live here instead. ICONS_FONT is the font all glyphs route through and
+ * ICONS_STYLE is the white-on-anything style matching what Icons uses client-side, so both sides
+ * build identical components; {@link #crown()} is the one crown-glyph definition used by both
+ * {@code Icons.crown()} and the server-side chief prefix, keeping the glyph identical across chat,
+ * nametag, TAB list, and scoreboard prefix.
+ * <p>
+ * Add a new glyph by registering the bitmap in {@code assets/bannerbound/font/icons.json} at a PUA
+ * codepoint, then pinning that codepoint as a {@code public static final char} here so both sides
+ * reference it without duplication. Each char constant MUST match its provider codepoint in
+ * icons.json exactly (CROWN = U+E103).
  */
 @ApiStatus.Internal
 public final class Glyphs {
-    /** Font {@link ResourceLocation} all Bannerbound glyphs route through. */
     public static final ResourceLocation ICONS_FONT =
         ResourceLocation.fromNamespaceAndPath(BannerboundCore.MODID, "icons");
 
-    /** White-on-anything style for inline glyph components — same Style {@code Icons} uses
-     *  client-side, here so server-side code can build matching components. */
     public static final Style ICONS_STYLE = Style.EMPTY
         .withFont(ICONS_FONT)
         .withColor(TextColor.fromRgb(0xFFFFFF));
 
-    /** Crown glyph codepoint (matches the provider in {@code font/icons.json} keyed at U+E103). */
     public static final char CROWN = (char) 0xE103;
 
     private Glyphs() {
     }
 
-    /** A ready-to-use crown component — used by both the client {@code Icons.crown()} and the
-     *  server-side chief scoreboard-team prefix. Single definition keeps the chief glyph
-     *  identical everywhere (chat, nametag, TAB list, scoreboard prefix). */
     public static MutableComponent crown() {
         return Component.literal(String.valueOf(CROWN)).withStyle(ICONS_STYLE);
     }

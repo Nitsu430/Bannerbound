@@ -23,10 +23,16 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Transparent press-and-grind mortar minigame. Each beat: hold left-click to press the pestle into
- * the bowl, then drag the mouse in circles to grind; finish the loaded batch in {@code reps} beats.
- * Non-scored (like the pottery wheel) — the loaded ingredients and output are owned by the server
- * ({@code MortarGrind}). The pestle dips and circles in-world via {@link MortarGrindState}.
+ * Transparent press-and-grind mortar minigame screen. Each beat: hold left-click to press the
+ * pestle into the bowl (press depth builds over PRESS_MS while held and decays when lifted),
+ * then drag the mouse in circles around the guide ring to grind; a beat lands after REP_QUOTA
+ * radians of drag, and the player must physically release the button before the next press can
+ * begin (needRelease). Finishing all {@code reps} beats sends COMPLETE and closes; closing any
+ * other way sends CANCEL. The minigame is non-scored (like the pottery wheel) -- the loaded
+ * ingredients and output are owned entirely by the server ({@code MortarGrind}); this screen only
+ * reports completion. Press depth and grind angle are mirrored into {@link MortarGrindState}
+ * every frame so the in-world pestle dips and circles with the player, and removed() clears
+ * that state so the world animation cannot outlive the screen.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -56,7 +62,6 @@ public class MortarGrindScreen extends Screen {
     private boolean holding = false;
     private boolean engaged = false;
     private boolean completed = false;
-    /** After a beat lands, the player must physically release before the next press can begin. */
     private boolean needRelease = false;
     private float pressDepth = 0.0F;
     private double repGrindRadians = 0.0;
@@ -108,7 +113,7 @@ public class MortarGrindScreen extends Screen {
         }
         holding = true;
         if (!engaged) {
-            return true; // press the pestle down first
+            return true;
         }
 
         double radius = radiusOf(mouseX, mouseY);
@@ -142,7 +147,6 @@ public class MortarGrindScreen extends Screen {
             finishComplete();
             return;
         }
-        // Next beat: lift the pestle and require a fresh press (release-then-press).
         engaged = false;
         holding = false;
         needRelease = true;
@@ -173,7 +177,6 @@ public class MortarGrindScreen extends Screen {
         int boxTop = panelTop();
         int boxBottom = panelBottom();
 
-        // Title / step hint.
         Component hint = stepHint();
         float pulse = holding ? 1.0F : 0.72F + 0.28F * (float) Math.sin(net.minecraft.Util.getMillis() / 280.0);
         int titleColor = ((int) (pulse * 255.0F) << 24) | (COL_TITLE & 0xFFFFFF);
@@ -183,14 +186,12 @@ public class MortarGrindScreen extends Screen {
             Math.round(cx / 1.45F), Math.round((boxTop - 21) / 1.45F), titleColor);
         g.pose().popPose();
 
-        // Panel.
         g.fill(boxLeft, boxTop, boxRight, boxBottom, COL_BG);
         g.fillGradient(boxLeft, boxTop, boxLeft + 1, boxBottom, COL_BORDER_TOP, COL_BORDER_BOTTOM);
         g.fillGradient(boxRight - 1, boxTop, boxRight, boxBottom, COL_BORDER_TOP, COL_BORDER_BOTTOM);
         g.fill(boxLeft, boxTop, boxRight, boxTop + 1, COL_BORDER_TOP);
         g.fill(boxLeft, boxBottom - 1, boxRight, boxBottom, COL_BORDER_BOTTOM);
 
-        // Header: batch on the left, beats in the middle, percent on the right.
         g.drawString(font, "× " + batch, boxLeft + 10, boxTop + 9, 0xFFFFFFFF, false);
         g.drawCenteredString(font,
             Component.translatable("bannerboundantiquity.mortar.beats", repsDone, reps),
@@ -200,7 +201,6 @@ public class MortarGrindScreen extends Screen {
         drawPressGauge(g);
         drawRing(g, progress());
 
-        // Bottom progress bar.
         int barW = Math.min(310, panelWidth() - 70);
         int barLeft = cx - barW / 2;
         int barTop = panelBottom() - 22;
@@ -211,7 +211,6 @@ public class MortarGrindScreen extends Screen {
         g.fill(fillRight - 1, barTop - 2, fillRight + 1, barTop + 15, COL_CURSOR);
     }
 
-    /** Builds the press while the button is held (before grinding); decays it when lifted. */
     private void tickPress() {
         long now = net.minecraft.Util.getMillis();
         float dt = Math.min(120.0F, now - lastFrameMs);
@@ -246,8 +245,6 @@ public class MortarGrindScreen extends Screen {
             : "bannerboundantiquity.mortar.press");
     }
 
-    // ─── Visuals ─────────────────────────────────────────────────────────────────────────────────
-
     private void drawPressGauge(GuiGraphics g) {
         int gx = panelLeft() + 26;
         int top = panelTop() + 30;
@@ -257,7 +254,6 @@ public class MortarGrindScreen extends Screen {
         g.fill(gx - 5, top - 1, gx + 5, bottom + 1, 0xFF2D241B);
         g.fill(gx - 4, top, gx + 4, bottom, 0xFF4D4032);
         g.fill(gx - 4, bottom - fill, gx + 4, bottom, engaged ? COL_RING_FILL : COL_PRESS);
-        // Pestle head marker riding the fill.
         int py = bottom - fill;
         g.fill(gx - 6, py - 2, gx + 6, py + 2, COL_CURSOR);
     }
@@ -280,8 +276,6 @@ public class MortarGrindScreen extends Screen {
             g.fill(px - 3, py - 3, px + 3, py + 3, COL_CURSOR);
         }
     }
-
-    // ─── Feedback (sound + in-world particles) ───────────────────────────────────────────────────
 
     private void grindPulse() {
         playUi(SoundEvents.NOTE_BLOCK_HAT.value(), 1.1F, 0.18F);
@@ -312,8 +306,6 @@ public class MortarGrindScreen extends Screen {
                 && mc.level.getBlockEntity(pos) instanceof MortarAndPestleBlockEntity be
             ? be.getIngredient() : ItemStack.EMPTY;
     }
-
-    // ─── Geometry helpers ────────────────────────────────────────────────────────────────────────
 
     private double guideCx() {
         return width / 2.0;

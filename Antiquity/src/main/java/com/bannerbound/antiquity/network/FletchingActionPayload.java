@@ -14,19 +14,13 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: a step in the active fletching minigame.
- * <ul>
- *   <li>{@link #COMMIT} — fired on the FIRST stretch release; the server consumes the station's pile
- *       (the commitment point — cancelling after this forfeits the inputs).</li>
- *   <li>{@link #COMPLETE} — fired after the last stretch; {@code scores} carries the per-stretch
- *       0–100 scores. The server aggregates them, rolls the quality tier, and pops the finished item.</li>
- *   <li>{@link #CANCEL} — the player aborted (Escape). Server clears the session; if it had committed,
- *       the inputs are already gone (forfeit), otherwise the untouched pile stays on the station.</li>
- * </ul>
- *
- * @param pos    the station the session belongs to (matched against the server session)
- * @param action one of {@link #COMMIT} / {@link #COMPLETE} / {@link #CANCEL}
- * @param scores per-stretch scores (only meaningful for {@link #COMPLETE}; empty otherwise)
+ * Client -> server: a step in the active fletching minigame. {@code pos} is the station block,
+ * echoed back so the server can match its authoritative session. COMMIT fires on the FIRST stretch
+ * release and makes the server consume the station's pile - the commitment point; cancelling after
+ * this forfeits the inputs. COMPLETE fires after the last stretch with the per-stretch 0-100 scores
+ * in {@code scores} (empty for other actions); the server aggregates them, rolls the quality tier,
+ * and pops the finished item. CANCEL means the player aborted (Escape): a committed session's
+ * inputs are already gone, otherwise the untouched pile stays on the station.
  */
 @ApiStatus.Internal
 public record FletchingActionPayload(BlockPos pos, int action, List<Integer> scores)

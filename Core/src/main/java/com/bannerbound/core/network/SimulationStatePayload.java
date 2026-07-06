@@ -11,9 +11,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client snapshot for the throwaway {@code /bannerbound simulate} crowd-LOD stress test.
+ * Server -> client snapshot for the throwaway {@code /bannerbound simulate} crowd-LOD stress test.
  * Deliberately tiny: the whole point of the prototype is that a believable thousands-strong crowd
- * costs <em>a handful of synced numbers</em> and is generated client-side, never per-pedestrian.
+ * costs a handful of synced numbers and is generated client-side, never per-pedestrian.
  *
  * <p>The client deterministically reconstructs the decorative crowd from {@link #seed}, anchored
  * around the town hall within {@link #radius} blocks (movers also cluster toward claimed chunks the
@@ -21,6 +21,8 @@ import net.minecraft.resources.ResourceLocation;
  * shown on the HUD; the rendered mover count is view-relative and capped, never this number.
  *
  * <p>Sent on start, on stop ({@code active=false}), and roughly once per second while running.
+ * {@code debug} is true only for the /bannerbound simulate session (drives the on-screen debug
+ * overlay); false for the real ambient settlement crowd, which renders movers but shows no debug HUD.
  */
 @ApiStatus.Internal
 public record SimulationStatePayload(
@@ -36,8 +38,6 @@ public record SimulationStatePayload(
     int remainingTicks,
     float serverMsPerTick,
     int eraOrdinal,
-    /** True only for the /bannerbound simulate debug session (drives the on-screen debug overlay).
-     *  False for the real ambient settlement crowd, which renders movers but shows no debug HUD. */
     boolean debug
 ) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<SimulationStatePayload> TYPE =

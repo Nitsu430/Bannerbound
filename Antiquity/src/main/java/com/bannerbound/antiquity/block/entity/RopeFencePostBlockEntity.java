@@ -28,14 +28,19 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity for a Rope Fence Post — a single rope tie point (slot 0). Stores the {@link RopeAnchor}s
- * it's roped to and the collision-filler cells for the ropes it owns; {@link RopeTies} drives the rest.
+ * Block entity for a Rope Fence Post: a single rope tie point (slot 0). Stores the far-end
+ * {@link RopeAnchor}s this post is roped to (a LinkedHashSet on purpose - insertion order gives
+ * stable rendering and break-most-recent-first semantics) plus the invisible collision-filler cells
+ * of the ropes this post owns, keyed by the far anchor. All linking/breaking logic lives in
+ * {@link RopeTies}; onLoad/setRemoved notify it of host chunk load/unload so rope state can be
+ * rebuilt. setChanged() doubles as the client sync point (sendBlockUpdated + full-state update tag),
+ * so every mutation above calls it. NBT layout: an "Anchors" list plus a "Fillers" list of anchor
+ * tags each carrying a "Cells" long array; loadAdditional still migrates the pre-anchor save format
+ * ("Connections" long array / "Rope" filler keys, which were bare post positions, all slot 0).
  */
 @ApiStatus.Internal
 public class RopeFencePostBlockEntity extends BlockEntity implements RopeTieHost {
-    /** Far ends this post is roped to (insertion-ordered for stable rendering / most-recent breaking). */
     private final Set<RopeAnchor> connections = new LinkedHashSet<>();
-    /** Filler cells for the ropes this post owns, keyed by the far anchor. */
     private final Map<RopeAnchor, List<BlockPos>> fillers = new HashMap<>();
 
     public RopeFencePostBlockEntity(BlockPos pos, BlockState state) {
@@ -142,7 +147,7 @@ public class RopeFencePostBlockEntity extends BlockEntity implements RopeTieHost
                 connections.add(RopeAnchor.fromTag(conns.getCompound(i)));
             }
         } else if (tag.contains("Connections", Tag.TAG_LONG_ARRAY)) {
-            // Pre-anchor save: connections were bare post positions (all slot 0).
+            // Save-format migration: pre-anchor saves stored bare post positions (all slot 0).
             for (long l : tag.getLongArray("Connections")) {
                 connections.add(new RopeAnchor(BlockPos.of(l), 0));
             }
@@ -153,7 +158,7 @@ public class RopeFencePostBlockEntity extends BlockEntity implements RopeTieHost
         for (int i = 0; i < fillerList.size(); i++) {
             CompoundTag entry = fillerList.getCompound(i);
             RopeAnchor key = entry.contains("P") ? RopeAnchor.fromTag(entry)
-                : new RopeAnchor(BlockPos.of(entry.getLong("Rope")), 0); // pre-anchor filler key
+                : new RopeAnchor(BlockPos.of(entry.getLong("Rope")), 0); // pre-anchor save-format filler key
             List<BlockPos> cells = new ArrayList<>();
             for (long l : entry.getLongArray("Cells")) {
                 cells.add(BlockPos.of(l));

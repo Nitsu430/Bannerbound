@@ -11,13 +11,13 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: a member retracts their OWN suggestion. Mirrors {@link IgnoreSuggestionPayload}'s shape, but
- * the server removes ONLY the calling player's UUID from the suggestion's suggester set (a chief's
- * Ignore clears the whole set; a member's Retract pulls just themselves). After removal the server
- * re-broadcasts suggestion state so the chief's Suggestions tab updates live.
- *
- * @param kind {@code KIND_*} as in {@link IgnoreSuggestionPayload}
- * @param id   the suggested thing's id within its kind (citizen UUID string for exile, "" for tablet)
+ * C->S request by which a member retracts their OWN suggestion. Mirrors
+ * {@link IgnoreSuggestionPayload}'s shape, but the server removes ONLY the calling player's UUID
+ * from the suggestion's suggester set (a chief's Ignore clears the whole set; a member's Retract
+ * pulls just themselves), then re-broadcasts suggestion state so the chief's Suggestions tab
+ * updates live. Fields: {@code kind} is one of the {@code KIND_*} constants (same numbering as
+ * {@link IgnoreSuggestionPayload}); {@code id} is the suggested thing's id within its kind (citizen
+ * UUID string for exile, "" for tablet).
  */
 @ApiStatus.Internal
 public record RetractSuggestionPayload(int kind, String id) implements CustomPacketPayload {

@@ -8,7 +8,11 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 
-/** One checklist row inside a journal entry. Text is intentionally data-authored plain text. */
+/**
+ * One checklist row inside a journal entry: id, label, progress text, a complete flag, and optional
+ * sub-steps. Text is intentionally data-authored plain text (no translation keys). NBT round-tripped
+ * via save/load; the compact constructor null-guards every field.
+ */
 public record JournalObjective(
     String id,
     String label,

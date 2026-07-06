@@ -17,14 +17,19 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Ponder storyboards for the Tannery workflow — a 2×2 Tanning Rack beside a stacked Clay Tank.
- * Scenes registered under {@code bannerboundantiquity:tannery}.
+ * Ponder storyboards for the Tannery workflow -- a 2x2 Tanning Rack beside a stacked Clay Tank --
+ * registered under {@code bannerboundantiquity:tannery}. Two scenes: construction (placing the
+ * rack and a two-piece tank pillar) and operation (raw hide -> scrape with a knife -> lime-cure
+ * at the tank -> dry on the rack -> leather). Both multiblocks are placed cell-by-cell via
+ * setBlock with explicit PART values: the rack master (PART 0, the block-entity-bearing cell)
+ * sits at (RX,RY,RZ) with width running +EAST when facing NORTH and height running up; the
+ * clay-tank controller (PART 0) is the base of the pillar just to the rack's west at (TX,TY,TZ).
+ * Workflow progress (rack Phase/Held/DryTicks, tank Liquid/Buckets) is faked by writing block
+ * entity NBT on those master/controller positions rather than simulating real interaction.
  */
 @OnlyIn(Dist.CLIENT)
 public final class TanneryScenes {
-    /** Rack master (PART 0) — width runs +EAST when facing NORTH, height runs up. */
     private static final int RX = 2, RY = PonderUtil.CY, RZ = 2;
-    /** Clay-tank controller (PART 0) just to the rack's west. */
     private static final int TX = 0, TY = PonderUtil.CY, TZ = 2;
     private static final Direction FACING = Direction.NORTH;
 
@@ -34,7 +39,6 @@ public final class TanneryScenes {
         scene.title("tannery_construction", "Setting up the Tannery");
         PonderUtil.basePlate(scene, util, 0.8f);
 
-        // Rack.
         scene.overlay().showControls(util.vector().centerOf(util.grid().at(RX, RY, RZ)), Pointing.DOWN, 50)
             .rightClick().withItem(PonderUtil.stack("bannerboundantiquity:tanning_rack"));
         scene.idle(5);
@@ -47,7 +51,6 @@ public final class TanneryScenes {
             .placeNearTarget();
         scene.idle(80);
 
-        // Clay tank, stacked two high.
         scene.overlay().showControls(util.vector().centerOf(util.grid().at(TX, TY, TZ)), Pointing.DOWN, 50)
             .rightClick().withItem(PonderUtil.stack("bannerboundantiquity:clay_tank", 2));
         scene.idle(5);
@@ -70,7 +73,6 @@ public final class TanneryScenes {
         placeTank(scene, util, 2);
         scene.idle(10);
 
-        // 1. Lay a raw hide.
         scene.overlay().showControls(util.vector().centerOf(rack), Pointing.RIGHT, 40)
             .rightClick().withItem(PonderUtil.stack("bannerboundantiquity:cow_hide"));
         scene.idle(5);
@@ -86,7 +88,6 @@ public final class TanneryScenes {
             .placeNearTarget();
         scene.idle(70);
 
-        // 2. Scrape it (knife minigame).
         scene.overlay().showControls(util.vector().centerOf(rack), Pointing.RIGHT, 40)
             .rightClick().withItem(PonderUtil.stack("bannerboundantiquity:flint_knife"));
         scene.idle(5);
@@ -102,7 +103,6 @@ public final class TanneryScenes {
             .placeNearTarget();
         scene.idle(80);
 
-        // 3. Fill the tank with water, then add quicklime to make curing liquid.
         scene.overlay().showControls(util.vector().topOf(util.grid().at(TX, TY + 1, TZ)), Pointing.DOWN, 40)
             .rightClick().withItem(PonderUtil.stack("minecraft:water_bucket"));
         scene.idle(5);
@@ -127,7 +127,6 @@ public final class TanneryScenes {
             .placeNearTarget();
         scene.idle(70);
 
-        // 4. Cure the scraped hide at the tank.
         scene.overlay().showControls(util.vector().centerOf(util.grid().at(TX, TY + 1, TZ)), Pointing.DOWN, 40)
             .rightClick().withItem(PonderUtil.stack("bannerboundantiquity:scraped_hide"));
         scene.idle(5);
@@ -140,7 +139,6 @@ public final class TanneryScenes {
             .placeNearTarget();
         scene.idle(70);
 
-        // 5. Lay the cured hide back on the rack to dry, then collect leather.
         scene.overlay().showControls(util.vector().centerOf(rack), Pointing.RIGHT, 40)
             .rightClick().withItem(PonderUtil.stack("bannerboundantiquity:cured_hide"));
         scene.idle(5);
@@ -166,12 +164,9 @@ public final class TanneryScenes {
         scene.idle(80);
     }
 
-    // ─── Helpers ────────────────────────────────────────────────────────────────────────────────
-
-    /** Places the four rack cells; PART 0 (master, BE-bearing) at (RX,RY,RZ). */
     private static void placeRack(SceneBuilder scene, SceneBuildingUtil util) {
-        // PART: bit0 = width (+EAST), bit1 = height (+up).
-        int[][] cells = {{0, 0, 0}, {1, 0, 1}, {0, 1, 2}, {1, 1, 3}}; // {dxEast, dyUp, part}
+        // {dxEast, dyUp, PART}; PART bits: bit0 = width (+EAST), bit1 = height (up).
+        int[][] cells = {{0, 0, 0}, {1, 0, 1}, {0, 1, 2}, {1, 1, 3}};
         for (int[] c : cells) {
             BlockState s = BannerboundAntiquity.TANNING_RACK.get().defaultBlockState()
                 .setValue(TanningRackBlock.PART, c[2])
@@ -180,7 +175,6 @@ public final class TanneryScenes {
         }
     }
 
-    /** Places a Clay Tank pillar {@code pieces} high; PART 0 (controller) at the base. */
     private static void placeTank(SceneBuilder scene, SceneBuildingUtil util, int pieces) {
         for (int p = 0; p < pieces; p++) {
             BlockState s = BannerboundAntiquity.CLAY_TANK.get().defaultBlockState()

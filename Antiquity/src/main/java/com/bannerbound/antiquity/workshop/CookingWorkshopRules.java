@@ -13,9 +13,18 @@ import com.bannerbound.core.api.settlement.Workshop;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 
-/** Structure rules for Antiquity kitchen workshops: a kitchen needs at least one stone cooking pot
- *  sitting on a lit campfire (not the town hall's) — the pot's own heat test, so the workshop status
- *  flips the moment the fire goes out. */
+/**
+ * Structure rules and shared block queries for Antiquity kitchen workshops. Validation: a kitchen
+ * needs at least one stone cooking pot sitting on a lit campfire - it reuses the pot's own heat
+ * test, so the workshop status flips the moment the fire goes out. Also hosts the geography
+ * {@link CookExecutor} works against: {@code findWaterSource} finds the nearest open-water source
+ * block within a 10-block scoop radius of a pot (where the cook walks with the fired clay bucket -
+ * the tannery's water-fetch idiom); {@code roastingFires} lists the kitchen's open roasting fires,
+ * i.e. lit campfires in the marked selection that are NOT under a cooking pot (those are the pots'
+ * heat) and not the settlement's town-hall campfire (the cook lays raw food on their vanilla roast
+ * slots and the finished items pop off onto the ground); {@code idlePots} counts pots with no
+ * water, stew, or simmer, which sizes the cook's standing ingredient demand for the stocker.
+ */
 @ApiStatus.Internal
 public final class CookingWorkshopRules {
     private CookingWorkshopRules() {
@@ -32,11 +41,8 @@ public final class CookingWorkshopRules {
         return Workshop.Status.MISSING_HEAT_SOURCE;
     }
 
-    /** Horizontal reach (blocks) the cook will walk to scoop water for a pot. */
     private static final int WATER_SCOOP_RADIUS = 10;
 
-    /** The nearest open-water source within scoop reach of {@code pot}, or {@code null} — where the
-     *  cook walks with the fired clay bucket (the tannery's water-fetch idiom). */
     @Nullable
     public static BlockPos findWaterSource(ServerLevel sl, BlockPos pot) {
         BlockPos.MutableBlockPos p = new BlockPos.MutableBlockPos();
@@ -60,9 +66,6 @@ public final class CookingWorkshopRules {
         return best;
     }
 
-    /** The kitchen's open roasting fires: lit campfires in the marked set that are NOT under a
-     *  cooking pot (those are the pots' heat) and not the settlement's town-hall campfire. The cook
-     *  lays raw food on their vanilla roast slots; the finished items pop off onto the ground. */
     public static List<BlockPos> roastingFires(ServerLevel sl,
                                                com.bannerbound.core.api.settlement.Settlement settlement,
                                                Workshop workshop) {
@@ -82,8 +85,6 @@ public final class CookingWorkshopRules {
         return fires;
     }
 
-    /** How many of this kitchen's pots sit IDLE — empty (no water, no stew, nothing simmering).
-     *  Sizes the cook's standing ingredient demand for the stocker. */
     public static int idlePots(ServerLevel sl, Workshop workshop) {
         int count = 0;
         for (BlockPos p : workshop.workBlocks()) {

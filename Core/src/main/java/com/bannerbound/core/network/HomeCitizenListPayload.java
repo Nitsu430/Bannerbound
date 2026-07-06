@@ -15,25 +15,19 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: response to {@link RequestHomeCitizenListPayload}. One flat list of the
- * settlement's citizens, with each entry tagged by its relationship to the home with id
- * {@code homeId}:
- * <ul>
- *   <li>{@link Role#RESIDENT} — lives in this home; the picker shows an "Unassign" button.</li>
- *   <li>{@link Role#HOMELESS} — no home; "Assign" button moves them in.</li>
- *   <li>{@link Role#OTHER} — lives in a different home of the same settlement; "Assign" button
- *       transfers them (one home per citizen), and the picker shows {@link Entry#distance} as
- *       the Chebyshev distance from their current home to this one.</li>
- * </ul>
- * The flat-with-tag shape lets the screen sort and section the list however it likes without
- * the wire format growing a separate envelope per role.
+ * Server -> client: response to RequestHomeCitizenListPayload. One flat list of the settlement's
+ * citizens, each tagged by its relationship to the home with id homeId. RESIDENT lives in this home
+ * (picker shows "Unassign"); HOMELESS has no home ("Assign" moves them in); OTHER lives in a
+ * different home of the same settlement ("Assign" transfers them, one home per citizen). Entry.distance
+ * carries the Chebyshev distance from the citizen's current home to this one and is only meaningful
+ * when role == OTHER. The flat-with-tag shape lets the screen sort and section however it likes
+ * without the wire format growing a separate envelope per role.
  */
 @ApiStatus.Internal
 public record HomeCitizenListPayload(UUID homeId, List<Entry> entries) implements CustomPacketPayload {
 
     public enum Role { RESIDENT, HOMELESS, OTHER }
 
-    /** A single picker row. {@code distance} only carries a meaningful value when {@code role == OTHER}. */
     public record Entry(UUID id, String name, Role role, int distance) {}
 
     public static final CustomPacketPayload.Type<HomeCitizenListPayload> TYPE =

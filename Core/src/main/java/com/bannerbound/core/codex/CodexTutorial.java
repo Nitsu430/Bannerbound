@@ -2,7 +2,12 @@ package com.bannerbound.core.codex;
 
 import java.util.List;
 
-/** Optional data-authored checklist shown when a Chronicle entry is pinned. */
+/**
+ * Optional data-authored checklist shown when a Chronicle entry is pinned to the side journal.
+ * Each Objective carries a trigger condition plus progress/complete labels and optional substeps;
+ * isEmpty() distinguishes a real tutorial from the placeholder every entry gets. Both records
+ * null-normalize their fields so partial JSON is safe.
+ */
 public record CodexTutorial(
     String title,
     String subtitle,

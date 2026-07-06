@@ -20,6 +20,12 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * Beauty-debug overlay. While {@link ClientBeautyDebug#isEnabled()}, draws the name and resolved
  * appeal of whatever block the player is looking at, just below the crosshair.
+ *
+ * The appeal shown comes from the server (resolved against the block's OWNING settlement's culture
+ * styles) so it is identical for every viewer; the local ClientBlockAppealState value is culture-
+ * relative to YOUR settlement and would desync between players, so it is only a placeholder shown for
+ * the instant before the server reply for this position arrives. That reply also flips the label to
+ * "Home appeal" to reveal which scope drove the value.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -44,12 +50,6 @@ public final class BeautyDebugHudLayer implements LayeredDraw.Layer {
         Block block = state.getBlock();
         Component name = block.getName();
 
-        // The appeal AFTER diminishing returns for THIS specific block comes from the server,
-        // already resolved against the block's OWNING settlement's culture styles — so it's the
-        // same for every viewer (the local ClientBlockAppealState is culture-relative to YOUR own
-        // settlement and would desync between players). The local value is only a placeholder
-        // shown for the instant before the server reply for this position arrives. The reply also
-        // flips the label to "Home appeal" so the player can see which scope drove the value.
         float shown = ClientBlockAppealState.appealOf(block);
         boolean inHouse = false;
         if (ClientBeautyDebug.hasResultFor(pos)) {

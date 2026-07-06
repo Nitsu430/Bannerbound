@@ -14,8 +14,8 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.ItemTooltipEvent;
 
 /**
- * Shows a perishable food's freshness on its tooltip as a coloured word — {@code Fresh} (green) or
- * {@code Bland} (yellow, noting the halved food value) — plus a "Salted" line once preserved. Reads
+ * Shows a perishable food's freshness on its tooltip as a coloured word, {@code Fresh} (green) or
+ * {@code Bland} (yellow, noting the halved food value), plus a "Salted" line once preserved. Reads
  * only the synced {@link FoodSpoilage} component, so it needs nothing server-side. Items not yet
  * stamped (e.g. fresh from the creative menu) carry no component and show nothing until they enter a
  * real inventory. Fully spoiled food is a separate {@code spoiled_food} item, not a freshness level.

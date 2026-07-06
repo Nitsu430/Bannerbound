@@ -17,16 +17,16 @@ import net.minecraft.world.level.Level;
 /**
  * The modular arrow in flight. ONE {@link AbstractArrow} class backs every part combination. The parts
  * live on the pickup stack's {@code ARROW_TIP/SHAFT/BACK} data components (copied from the fired ammo),
- * but {@code AbstractArrow.pickupItemStack} is NOT synced to clients — so the stack is mirrored into a
- * synced {@link #DATA_ARROW} that the {@link com.bannerbound.antiquity.client.CompositeArrowRenderer
- * renderer} reads (via {@link ArrowParts}) to draw the three data-driven projectile layers. Heavier
- * metal parts also drop a bit faster (trajectory). A recovered arrow keeps its exact parts (and quality,
- * and any poison) via the stored pickup stack; base damage is set from the parts × craftsmanship in
+ * but {@code AbstractArrow.pickupItemStack} is NOT synced to clients -- so the stack is mirrored into
+ * the synced {@link #DATA_ARROW} that the {@link com.bannerbound.antiquity.client.CompositeArrowRenderer
+ * renderer} reads (via {@link ArrowParts}) to draw the three data-driven projectile layers; arrowStack()
+ * is therefore valid on both sides. Heavier metal parts also fall faster (getDefaultGravity by parts),
+ * giving a flatter, shorter-range arc. A recovered arrow keeps its exact parts (and quality, and any
+ * poison) via the stored pickup stack; base damage is set from the parts x craftsmanship in
  * {@link com.bannerbound.antiquity.item.CompositeArrowItem#createArrow}.
  */
 public class CompositeArrowEntity extends AbstractArrow {
 
-    /** A copy of the fired ammo (its part components) mirrored to clients for rendering. */
     private static final EntityDataAccessor<ItemStack> DATA_ARROW =
         SynchedEntityData.defineId(CompositeArrowEntity.class, EntityDataSerializers.ITEM_STACK);
 
@@ -46,7 +46,6 @@ public class CompositeArrowEntity extends AbstractArrow {
         builder.define(DATA_ARROW, new ItemStack(BannerboundAntiquity.ARROW.get()));
     }
 
-    /** The fired arrow stack (with part components), valid on both sides. */
     public ItemStack arrowStack() {
         return this.entityData.get(DATA_ARROW);
     }
@@ -62,7 +61,6 @@ public class CompositeArrowEntity extends AbstractArrow {
         this.entityData.set(DATA_ARROW, getPickupItemStackOrigin().copyWithCount(1));
     }
 
-    /** Heavier metal parts fall faster → a flatter, shorter-range arc (trajectory by weight). */
     @Override
     protected double getDefaultGravity() {
         return ArrowParts.gravityFor(arrowStack());

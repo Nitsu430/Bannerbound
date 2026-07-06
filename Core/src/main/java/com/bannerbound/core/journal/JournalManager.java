@@ -13,7 +13,13 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
 
-/** Server-side journal helpers and sync. */
+/**
+ * Server-side entry point for reading, mutating, and syncing journal entries. Entries live in two
+ * scopes: settlement-scoped (crises; stored on Settlement, broadcast to every member) and
+ * player-scoped (tutorials; stored in JournalPlayerData). sendTo merges both scopes for one player,
+ * sorts them (type ordinal, then priority desc, then createdTick), and pushes a JournalSyncPayload.
+ * Every mutation marks the backing SavedData dirty and re-syncs the affected player(s).
+ */
 public final class JournalManager {
     private JournalManager() {
     }

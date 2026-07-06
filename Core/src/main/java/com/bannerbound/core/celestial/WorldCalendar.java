@@ -1,31 +1,30 @@
 package com.bannerbound.core.celestial;
 
 /**
- * The world calendar (FAITH_PLAN.md): 12 months whose lengths come from config (default
- * 7 days each → an 84-day year) — and the year IS one observer orbit: {@link SkyField}
- * takes its year length from the calendar, so the calendar, the seasons and the sky are
- * one machine. Shortening a month genuinely speeds up the heavens.
- * <p>
- * Pure functions of {@code dayTime}, immutable; the server's month lengths reach clients
- * through the sky payload. Month NAMES are a later faith/culture feature (named via the
- * same governance flow as constellations); display falls back to "Month N". Season-mod
- * integration (Serene Seasons / Ecliptic Seasons reading this calendar) is a planned
- * compat layer — see the plan doc.
+ * The world calendar (FAITH_PLAN.md): 12 months whose lengths come from config (default 7 days each
+ * -> an 84-day year) - and the year IS one observer orbit: {@link SkyField} takes its year length
+ * from the calendar, so calendar, seasons and sky are one machine and shortening a month genuinely
+ * speeds up the heavens. Pure functions of {@code dayTime}, immutable; the server's month lengths
+ * reach clients through the sky payload, and {@link #DEFAULT} (all sevens) is the client fallback
+ * until that config arrives.
+ *
+ * <p>The constructor clamps each of the 12 month lengths to 1..31; a null or short input array falls
+ * back to 7s. {@link CalendarDate} month/day are 1-based for display. Month NAMES are a later
+ * faith/culture feature (named via the same governance flow as constellations); display falls back
+ * to "Month N". Season-mod integration (Serene Seasons / Ecliptic Seasons reading this calendar) is
+ * a planned compat layer - see the plan doc.
  */
 public final class WorldCalendar {
     public static final int MONTHS = 12;
     public static final int DEFAULT_DAYS_PER_MONTH = 7;
-    /** The all-sevens calendar — client fallback until the server's config arrives. */
     public static final WorldCalendar DEFAULT = new WorldCalendar(null);
 
     private final int[] monthDays;
     private final int yearDays;
 
-    /** One calendar moment. {@code month} and {@code day} are 1-based for display. */
     public record CalendarDate(long year, int month, int day, int dayOfYear) {
     }
 
-    /** @param monthDaysIn 12 entries, each 1-31; null or short arrays fall back to 7s. */
     public WorldCalendar(int[] monthDaysIn) {
         this.monthDays = new int[MONTHS];
         int total = 0;
@@ -56,7 +55,6 @@ public final class WorldCalendar {
             }
             rest -= monthDays[m];
         }
-        // Unreachable (yearDays = sum of monthDays), but keep the compiler honest.
         return new CalendarDate(year, MONTHS, monthDays[MONTHS - 1], dayOfYear);
     }
 }

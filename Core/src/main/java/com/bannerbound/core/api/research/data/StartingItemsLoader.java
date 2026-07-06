@@ -20,9 +20,9 @@ import net.minecraft.world.item.Item;
 
 /**
  * Loads the global "starting items" set from data/&lt;namespace&gt;/starting_items/*.json. Every
- * bannerbound knows these items by default, regardless of era. All other items are obfuscated
- * until unlocked by research. Datapacks can drop additional files into the folder; their item
- * lists are union'd into one flat set.
+ * settlement knows these items by default, regardless of era; all other items stay obfuscated
+ * until unlocked by research (this set is the base of the known-item gate). Datapacks can drop
+ * additional files into the folder; their item lists are union'd into one flat set.
  */
 public class StartingItemsLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "starting_items";

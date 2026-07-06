@@ -22,26 +22,27 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Ancient-era Town Hall — a "Chiseled Tablet" reskin of {@link TownHallScreen}, built from the
- * {@code bannerbound-antiquity} design bundle (Direction A). The tablet chrome — jagged stone
- * rim, bone face, stat troughs, engraved meander divider — is a baked PNG sprite (see
- * {@code tools/antiquity-assetgen}); the title, tabs, gauges and buttons are drawn / blitted on
- * top. Shares {@link TownHallScreen}'s constructor so it can stand in at the open site; gated to
- * {@link Era#ANCIENT} in {@code ClientPayloadHandler}. Live data is read from
- * {@link ClientPopulationState}.
+ * Ancient-era Town Hall -- a "Chiseled Tablet" reskin of {@link TownHallScreen}, built from the
+ * {@code bannerbound-antiquity} design bundle (Direction A). The tablet chrome (jagged stone rim,
+ * bone face, stat troughs, engraved meander divider) is a baked PNG sprite from
+ * {@code tools/antiquity-assetgen}; the title, tabs, gauges and buttons are drawn / blitted on top.
+ * The panel-geometry constants and palette (from direction-a.jsx A_PAL) must stay in lockstep with
+ * AntiquityAssetGen, or the drawn overlay drifts off the baked troughs. Shares
+ * {@link TownHallScreen}'s constructor so it can stand in at the open site; gated to
+ * {@link Era#ANCIENT} in {@code ClientPayloadHandler}, which also auto-routes a campfire right-click
+ * to ChooseGovernmentScreen while the code-of-laws window is open -- so "Choose Government" is
+ * deliberately NOT one of the action slots here. Live data is read from {@link ClientPopulationState}.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class AncientTownHallScreen extends Screen {
 
-    // ── Sprites ──────────────────────────────────────────────────────────────────────────
     private static final ResourceLocation BTN          = spr("btn");
     private static final ResourceLocation BTN_HOVER    = spr("btn_hover");
     private static final ResourceLocation BTN_DISABLED = spr("btn_disabled");
     private static final ResourceLocation TAB          = spr("tab");
     private static final ResourceLocation TAB_ACTIVE   = spr("tab_active");
     private static final ResourceLocation TAB_HOVER    = spr("tab_hover");
-    /** The artist's own cave-drawings strip — a 32x16 PNG, blitted at 1.5x. */
     private static final ResourceLocation CAVE_DRAWINGS =
         ResourceLocation.fromNamespaceAndPath("bannerbound", "textures/gui/antiquity/cave_drawings.png");
     private static final ResourceLocation FOOD_ICON =
@@ -49,7 +50,6 @@ public class AncientTownHallScreen extends Screen {
     private static final ResourceLocation CULTURE_ICON =
         ResourceLocation.fromNamespaceAndPath("bannerbound", "textures/gui/culture_antiquity.png");
 
-    // ── Palette (direction-a.jsx A_PAL) ──────────────────────────────────────────────────
     private static final int EMBER     = 0xFFA8442E;
     private static final int EMBER_LO  = 0xFF6F2418;
     private static final int OCHRE     = 0xFFC87F3A;
@@ -60,26 +60,23 @@ public class AncientTownHallScreen extends Screen {
     private static final int INK_SOFT  = 0xFF4A3520;
     private static final int READOUT   = 0xFF6F5631;
     private static final int DISABLED_TEXT = 0xFF7A6A52;
-    private static final int CULTURE   = 0xFF8B4FA0;   // culture's purple — kept game-consistent
+    private static final int CULTURE   = 0xFF8B4FA0;
 
-    // ── Panel geometry (mirrors AntiquityAssetGen) ───────────────────────────────────────
+    // Geometry must mirror the baked panel.png (AntiquityAssetGen) or the overlay drifts off the troughs.
     private static final int PANEL_W = 240, PANEL_H = 360;
     private static final int TAB_W = 100, TAB_H = 18;
     private static final int BTN_W = 192, BTN_H = 17;
     private static final int BTN_PITCH = 22;
-    /** Baked stat-trough left edge + width (panel-relative). */
     private static final int TROUGH_X = 27, TROUGH_W = 186;
 
     private enum TopTab { MAIN, STATUSES }
 
-    /** A painted, clickable region. */
     private record Hotspot(int x, int y, int w, int h, Runnable action) {
         boolean hit(double mx, double my) {
             return mx >= x && mx < x + w && my >= y && my < y + h;
         }
     }
 
-    /** A carved action-button slab. */
     private record ActionBtn(int x, int y, String label, boolean danger, boolean disabled,
                               Runnable action) { }
 
@@ -123,11 +120,9 @@ public class AncientTownHallScreen extends Screen {
         hotspots.clear();
         actions.clear();
 
-        // Folio tabs.
         hotspots.add(new Hotspot(panelX + 19, panelY + 92, TAB_W, TAB_H, () -> tab = TopTab.MAIN));
         hotspots.add(new Hotspot(panelX + 121, panelY + 92, TAB_W, TAB_H, () -> tab = TopTab.STATUSES));
 
-        // Carved action buttons.
         int bx = panelX + (PANEL_W - BTN_W) / 2, by = panelY + 212;
         addAction(bx, by,                  "Research", false, false,
             () -> this.minecraft.setScreen(new ResearchScreen()));
@@ -149,10 +144,6 @@ public class AncientTownHallScreen extends Screen {
             this.onClose();
         });
         addAction(bx, by + BTN_PITCH * 5,  "Cancel", false, false, this::onClose);
-        // Choose Government is NOT a slot in this action stack — when the code-of-laws window
-        // is open, right-clicking the campfire auto-routes to ChooseGovernmentScreen instead
-        // of this menu (see ClientPayloadHandler.handleOpenTownHallScreen). The regular menu
-        // stays unchanged.
     }
 
     private void addAction(int x, int y, String label, boolean danger, boolean disabled,
@@ -170,9 +161,6 @@ public class AncientTownHallScreen extends Screen {
 
         int cx = panelX + PANEL_W / 2;
 
-        // Title + era subtitle + settlement-rank line (Hearth / Tribe / …) + cave-drawings strip.
-        // The rank line sits between the era and the strip; its translation key comes from
-        // ClientPopulationState (Hearth below 8 pop, Tribe at 8+).
         drawScaled(g, settlementName, cx, panelY + 26, 2.0f, scaleRgb(color.rgb(), 0.5f));
         centered(g, eraLabel(), cx, panelY + 58, UMBER_HI);
         centered(g, net.minecraft.network.chat.Component.translatable(
@@ -180,12 +168,9 @@ public class AncientTownHallScreen extends Screen {
             cx, panelY + 66, UMBER_HI);
         g.blit(CAVE_DRAWINGS, cx - 24, panelY + 75, 48, 24, 0f, 0f, 32, 16, 32, 16);
 
-        // Folio tabs.
         drawTab(g, panelX + 19,  panelY + 92, "Main",     tab == TopTab.MAIN,     mouseX, mouseY);
         drawTab(g, panelX + 121, panelY + 92, "Statuses", tab == TopTab.STATUSES, mouseX, mouseY);
 
-        // Population + the two resource gauges. Renders as "Population · cur / max" so the
-        // player sees the lovemaking ceiling at a glance.
         g.drawString(this.font,
             "Population · " + ClientPopulationState.getPopulation()
                 + " / " + ClientPopulationState.getPopulationMax(),
@@ -201,7 +186,6 @@ public class AncientTownHallScreen extends Screen {
             ClientPopulationState.getCultureStored(), cultCap,
             ClientPopulationState.getCulturePerSecond(), CULTURE, 0xFFC074DB, 0xFF3F2050);
 
-        // Carved action buttons.
         for (ActionBtn b : actions) {
             boolean hover = !b.disabled() && mouseX >= b.x() && mouseX < b.x() + BTN_W
                          && mouseY >= b.y() && mouseY < b.y() + BTN_H;
@@ -221,10 +205,6 @@ public class AncientTownHallScreen extends Screen {
             active ? EMBER_LO : hover ? PARCH : BONE_SH);
     }
 
-    /**
-     * One Food / Culture gauge: label + era icon + readout on {@code labelY}, and a painted
-     * pigment fill inside the baked stone trough at {@code troughY}.
-     */
     private void drawGauge(GuiGraphics g, int labelY, int troughY, ResourceLocation icon,
                            String label, double value, double max, double rate,
                            int labelColor, int fillHi, int fillLo) {
@@ -234,7 +214,6 @@ public class AncientTownHallScreen extends Screen {
         String readout = (rate > 0 ? "+" + trim(rate) + "/s   " : "") + trim(value) + " / " + trim(max);
         g.drawString(this.font, readout, x + TROUGH_W - this.font.width(readout), labelY,
             READOUT, false);
-        // painted pigment fill inside the trough (the trough itself is baked into panel.png)
         double pct = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
         int fillW = (int) Math.round((TROUGH_W - 4) * pct);
         if (fillW > 0) {
@@ -242,19 +221,15 @@ public class AncientTownHallScreen extends Screen {
         }
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────────────────
-    /** "Antiquity Era" — the era name in title case (the enum is all-caps). */
     private String eraLabel() {
         String n = era.name();
         return n.charAt(0) + n.substring(1).toLowerCase(Locale.ROOT) + " Era";
     }
 
-    /** Centred text, no drop shadow. */
     private void centered(GuiGraphics g, String text, int cx, int y, int textColor) {
         g.drawString(this.font, text, cx - this.font.width(text) / 2, y, textColor, false);
     }
 
-    /** Draws {@code text} scaled about its top edge, centred on {@code anchorX}. */
     private void drawScaled(GuiGraphics g, String text, float anchorX, float anchorY,
                             float scale, int textColor) {
         g.pose().pushPose();
@@ -273,7 +248,6 @@ public class AncientTownHallScreen extends Screen {
         return ResourceLocation.fromNamespaceAndPath("bannerbound", "antiquity/" + name);
     }
 
-    /** Darkens a 0xRRGGBB faction colour so it reads as legible ink on the bone face. */
     private static int scaleRgb(int rgb, float f) {
         int r = Math.min(255, Math.round(((rgb >> 16) & 0xFF) * f));
         int gn = Math.min(255, Math.round(((rgb >> 8) & 0xFF) * f));

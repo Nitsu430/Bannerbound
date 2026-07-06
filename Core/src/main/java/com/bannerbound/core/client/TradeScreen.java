@@ -28,15 +28,24 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Settlement-to-settlement trade — two nations at one table. The {@code BarbarianBarterScreen}
+ * Settlement-to-settlement trade -- two nations at one table. Borrows the BarbarianBarterScreen
  * four-quadrant layout, but each column wears its settlement's banner identity: your cards carry
  * your banner accents (left), theirs carry theirs (right), with both names + pennants facing each
- * other across the header. NO item valuation anywhere — worth is whatever two players agree to.
+ * other across the header. There is NO item valuation anywhere -- worth is whatever the two players
+ * agree to, and the server re-validates every submitted action.
  *
- * <p>Negotiation states: fresh screen = compose + Propose. Their terms awaiting you = the offer is
- * shown READ-ONLY with Accept / Counter / Reject; pressing Counter unlocks editing (Accept greys
- * out, Counter becomes "Send counter", and "Nevermind" restores their original terms). Your offer
- * pending = Withdraw. Agreed/in-transit = read-only status. The server re-validates everything.
+ * <p>Negotiation state drives which buttons init() builds and whether the offer quadrants accept
+ * clicks (editable()): fresh screen = compose + Propose; their terms awaiting you = shown READ-ONLY
+ * with Accept / Counter / Reject, where Counter unlocks editing (Accept greys out, Counter becomes
+ * "Send counter", and "Nevermind" restores their original terms from originalGive/originalGet); your
+ * offer pending on their side = Withdraw; agreed / in-transit = read-only status. dealState is a
+ * TradeDeal.State ordinal, or -1 when no deal exists yet.
+ *
+ * <p>Auto-fit: the fixed PANEL_W x PANEL_H panel scales to the window (PolishedScreen opt-in), so
+ * every mouse event remaps through virtualX/virtualY and every scissor rect through
+ * scissorX/scissorY before use -- add neither without the remap or hit-tests and clipping drift off
+ * the scaled layout. tick() re-requests both pools every POLL_INTERVAL ticks so they stay live
+ * while the counterpart edits.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -52,7 +61,6 @@ public final class TradeScreen extends PolishedScreen {
     private static final int GAP = 12;
     private static final int POLL_INTERVAL = 10;
 
-    // Base palette — matches BarbarianBarterScreen; the per-side identity accents sit on top.
     private static final int BODY_TOP = 0xF016202C;
     private static final int BODY_BOT = 0xF00B1018;
     private static final int EDGE = 0xFF3A4A5E;
@@ -69,13 +77,12 @@ public final class TradeScreen extends PolishedScreen {
     private final List<Integer> myAccents;
     private final List<Integer> theirAccents;
     private final String dealId;
-    private final int dealState;    // TradeDeal.State ordinal, or -1 for none
+    private final int dealState;
     private final boolean awaitingUs;
     private final boolean canAct;
 
     private final LinkedHashMap<String, Integer> give = new LinkedHashMap<>();
     private final LinkedHashMap<String, Integer> get = new LinkedHashMap<>();
-    /** Their terms as proposed — restored by "Nevermind" when a counter is abandoned. */
     private final LinkedHashMap<String, Integer> originalGive = new LinkedHashMap<>();
     private final LinkedHashMap<String, Integer> originalGet = new LinkedHashMap<>();
     private final LinkedHashMap<String, Integer> storage = new LinkedHashMap<>();
@@ -84,7 +91,6 @@ public final class TradeScreen extends PolishedScreen {
     private int panelX, panelY;
     private int storageScroll, goodsScroll;
     private int pollTimer;
-    /** True while the player is composing a counter to the terms on the table. */
     private boolean counterMode;
 
     private net.minecraft.client.gui.components.Button primaryBtn;
@@ -108,8 +114,6 @@ public final class TradeScreen extends PolishedScreen {
         for (BarterEntry e : p.theirPool()) goods.put(e.itemId(), e.count());
     }
 
-    // Auto-fit: the fixed panel scales to the window (PolishedScreen opt-in); all mouse events
-    // below remap through virtualX/virtualY so hit-tests track the scaled layout.
     @Override
     protected int fitPanelWidth() {
         return PANEL_W;
@@ -133,8 +137,6 @@ public final class TradeScreen extends PolishedScreen {
         return st == TradeDeal.State.PROPOSED || st == TradeDeal.State.COUNTERED;
     }
 
-    /** The offer quadrants take clicks only while composing: a fresh proposal, or a counter the
-     *  player explicitly opened with the Counter button. */
     private boolean editable() {
         if (!canAct) return false;
         if (!hasDeal()) return true;
@@ -167,7 +169,7 @@ public final class TradeScreen extends PolishedScreen {
                 Component.translatable("bannerbound.trade.button.reject").withStyle(ChatFormatting.RED),
                 b -> submit(TradeManager.ACTION_REJECT)).bounds(cx - bw / 2, by + 42, bw, 16).build())
                 .active = canAct;
-        } else if (awaitingUs && negotiable()) { // counterMode
+        } else if (awaitingUs && negotiable()) {
             primaryBtn = addRenderableWidget(PolishButton.polished(
                 Component.translatable("bannerbound.trade.button.send_counter").withStyle(ChatFormatting.GREEN),
                 b -> submit(TradeManager.ACTION_COUNTER)).bounds(cx - bw / 2, by, bw, 18).build());
@@ -181,7 +183,7 @@ public final class TradeScreen extends PolishedScreen {
                     get.putAll(originalGet);
                     rebuildWidgets();
                 }).bounds(cx - bw / 2, by + 22, bw, 16).build());
-        } else if (negotiable()) { // our terms pending on their side
+        } else if (negotiable()) {
             primaryBtn = addRenderableWidget(PolishButton.polished(
                 Component.translatable("bannerbound.trade.button.withdraw").withStyle(ChatFormatting.RED),
                 b -> submit(TradeManager.ACTION_CANCEL)).bounds(cx - bw / 2, by, bw, 18).build());
@@ -206,7 +208,6 @@ public final class TradeScreen extends PolishedScreen {
             return;
         }
         if (!hasDeal() || counterMode) {
-            // Propose / Send counter: something on the table, backed by my pool.
             primaryBtn.active = affordable() && !(give.isEmpty() && get.isEmpty());
         }
     }
@@ -232,8 +233,9 @@ public final class TradeScreen extends PolishedScreen {
 
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
+        // Remap into auto-fit panel space before any hit-test; raw coords miss the scaled layout.
         mx = virtualX(mx);
-        my = virtualY(my); // map into auto-fit panel space (widgets included via super)
+        my = virtualY(my);
         if (button == 0 && editable()) {
             int step = hasShiftDown() ? 5 : 1;
             String sId = slotAt(storage, storageScroll, leftX(), bottomY(), mx, my);
@@ -256,7 +258,7 @@ public final class TradeScreen extends PolishedScreen {
     @Override
     public boolean mouseScrolled(double mx, double my, double dx, double dy) {
         mx = virtualX(mx);
-        my = virtualY(my); // map into auto-fit panel space
+        my = virtualY(my);
         if (inPanel(leftX(), bottomY(), mx, my)) {
             storageScroll = clampRows(storageScroll - (int) Math.signum(dy), storage.size());
             return true;
@@ -297,15 +299,11 @@ public final class TradeScreen extends PolishedScreen {
         return out;
     }
 
-    // ─── Rendering ──────────────────────────────────────────────────────────────────────────────────
-
     @Override
     protected void renderPolishedBackdrop(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         int myAccent = GuiPalette.primary(myAccents);
         int theirAccent = GuiPalette.primary(theirAccents);
 
-        // Panel: drop shadow, gradient body, bevelled border. The top stripe is split — your
-        // banner colour flows in from the left, theirs from the right, meeting in the middle.
         g.fill(panelX + 4, panelY + 5, panelX + PANEL_W + 4, panelY + PANEL_H + 5, 0x80000000);
         g.fillGradient(panelX, panelY, panelX + PANEL_W, panelY + PANEL_H, BODY_TOP, BODY_BOT);
         g.renderOutline(panelX, panelY, PANEL_W, PANEL_H, EDGE_DARK);
@@ -316,7 +314,6 @@ public final class TradeScreen extends PolishedScreen {
         drawHorizontalGradient(g, panelX + 2 + half, panelY + 2, half, 2,
             theirAccent & 0x30FFFFFF, theirAccent);
 
-        // Header: the two nations face each other — pennant + name on each side, ⇄ between.
         int nameY = panelY + 10;
         drawPennant(g, panelX + 14, nameY - 1, myAccents);
         g.drawString(this.font, Component.literal(myName), panelX + 28, nameY, myAccent, true);
@@ -331,7 +328,6 @@ public final class TradeScreen extends PolishedScreen {
             .withStyle(ChatFormatting.GRAY), panelX + 14, panelY + 23, TXT_DIM, false);
         g.drawString(this.font, trim(stateLine(), PANEL_W - 24), panelX + 14, panelY + 35,
             0xFFA9B0BA, false);
-        // Divider mirrors the top stripe: your colour fading right, theirs fading left.
         int divY = panelY + HEADER_H - 4;
         drawHorizontalGradient(g, panelX + 12, divY, (PANEL_W - 24) / 2, 1,
             myAccent & 0xCCFFFFFF, 0x10FFFFFF);
@@ -352,22 +348,20 @@ public final class TradeScreen extends PolishedScreen {
         buttonBacking(g);
     }
 
-    /** A little swallow-tailed banner in the settlement's accent colours, hung from a pole. */
     private void drawPennant(GuiGraphics g, int x, int y, List<Integer> accents) {
         List<Integer> bands = accents.isEmpty() ? List.of(0xFF888888) : accents;
         int w = 8, h = 8, tail = 3;
-        g.fill(x - 2, y - 1, x - 1, y + h + tail + 1, 0xFF6B5B45);         // pole
-        for (int i = 0; i < h; i++) {                                       // banded cloth
+        g.fill(x - 2, y - 1, x - 1, y + h + tail + 1, 0xFF6B5B45);
+        for (int i = 0; i < h; i++) {
             int color = bands.get(Math.min(bands.size() - 1, i * bands.size() / h));
             g.fill(x, y + i, x + w, y + i + 1, color);
         }
         int last = bands.get(bands.size() - 1);
-        g.fill(x, y + h, x + 3, y + h + tail, last);                        // swallow tails
+        g.fill(x, y + h, x + 3, y + h + tail, last);
         g.fill(x + w - 3, y + h, x + w, y + h + tail, last);
         g.renderOutline(x - 1, y - 1, w + 2, h + 2, 0x66000000);
     }
 
-    /** The deal status line under the header. */
     private Component stateLine() {
         if (!hasDeal()) {
             return Component.translatable("bannerbound.trade.state.fresh").withStyle(ChatFormatting.ITALIC);
@@ -386,8 +380,6 @@ public final class TradeScreen extends PolishedScreen {
         return Component.translatable(key).withStyle(ChatFormatting.ITALIC);
     }
 
-    /** Centre column: a large exchange glyph and plain-language status. No numbers — worth is
-     *  whatever the two settlements agree it is. */
     private void centreExchange(GuiGraphics g) {
         int cx = panelX + PANEL_W / 2;
         int y = topY() + QUAD_H / 2 - 16;
@@ -410,8 +402,6 @@ public final class TradeScreen extends PolishedScreen {
             status = Component.translatable("bannerbound.trade.judged_by_you");
             statusCol = TXT_OFF;
         }
-        // The centre column is narrow (~116px) — wrap and centre each line so status prose can
-        // never overflow into the offer cards (the house drawWrapped is left-aligned).
         int centreLeft = leftX() + QUAD_W + 8;
         int centreWidth = rightX() - 8 - centreLeft;
         int ty = y + 24;
@@ -430,8 +420,6 @@ public final class TradeScreen extends PolishedScreen {
         g.renderOutline(cx - half, top, half * 2, bot - top, 0x22FFFFFF);
     }
 
-    /** One quadrant card, tinted with its side's banner accent. {@code locked} dims the content
-     *  (read-only terms / pools while not composing). */
     private void card(GuiGraphics g, int x, int y, String titleKey, Map<String, Integer> rows,
                       int scroll, boolean pool, int mouseX, int mouseY, int accent, boolean locked) {
         g.fillGradient(x, y, x + QUAD_W, y + QUAD_H, CARD_TOP, CARD_BOT);
@@ -442,8 +430,6 @@ public final class TradeScreen extends PolishedScreen {
             x + 5, y + 4, blend(accent, 0xFFDDDDDD, 0.45f), false);
         drawHorizontalGradient(g, x + 4, y + 14, QUAD_W - 8, 1, accent & 0x66FFFFFF, accent & 0x08FFFFFF);
 
-        // Quiet slot grid (soft cell fills + hairline separators — the bright bevel read harsh),
-        // clipped with a pre-mapped scissor so scrolled items can never bleed past the card.
         List<String> ids = new ArrayList<>(rows.keySet());
         int cols = gridCols(), vis = gridRows();
         int gx = x + GRID_PAD, gy = y + ROWS_TOP;
@@ -452,6 +438,7 @@ public final class TradeScreen extends PolishedScreen {
         for (int c = 1; c < cols; c++) g.fill(gx + c * SLOT, gy, gx + c * SLOT + 1, gy + gh, 0x12FFFFFF);
         for (int r = 1; r < vis; r++) g.fill(gx, gy + r * SLOT, gx + gw, gy + r * SLOT + 1, 0x12FFFFFF);
         g.renderOutline(gx, gy, gw, gh, 0x22FFFFFF);
+        // Scissor must go through scissorX/scissorY (auto-fit pose); raw coords clip the wrong band.
         g.enableScissor(scissorX(gx), scissorY(gy), scissorX(gx + gw), scissorY(gy + gh));
         int start = scroll * cols;
         for (int s = 0; s < cols * vis; s++) {
@@ -475,7 +462,6 @@ public final class TradeScreen extends PolishedScreen {
                 x + QUAD_W / 2, y + QUAD_H / 2 + 4, TXT_OFF);
         }
         if (locked) {
-            // Read-only veil over the grid area — terms on the table can't be nudged by accident.
             g.fill(gx, gy, gx + gw, gy + gh, 0x50060A10);
         }
     }
@@ -498,7 +484,6 @@ public final class TradeScreen extends PolishedScreen {
         return give.getOrDefault(id, 0) + get.getOrDefault(id, 0);
     }
 
-    /** Linear blend of two ARGB colours ({@code t} toward {@code b}). */
     private static int blend(int a, int b, float t) {
         int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
         int br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
@@ -523,8 +508,6 @@ public final class TradeScreen extends PolishedScreen {
         if (id == null) id = slotAt(get, 0, rightX(), topY(), mx, my);
         return id;
     }
-
-    // ─── Geometry helpers ────────────────────────────────────────────────────────────────────────────
 
     private int leftX() { return panelX + 12; }
     private int rightX() { return panelX + PANEL_W - 12 - QUAD_W; }

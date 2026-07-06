@@ -14,14 +14,17 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Top-left HUD: big era-name banner with a smaller "year BC/AD" line underneath. Reads its
- * state from {@link ClientEraState} — server pushes new values via {@code EraStatePayload}
- * whenever a research completes or a settlement era-advances, so the line stays in sync with
- * the leading civ's progress through the tech tree.
+ * Top-left HUD: a large era-name banner with a smaller world-calendar line ("Year N / Month M /
+ * Day D") underneath. Era comes from {@link ClientEraState} (server pushes new values via
+ * {@code EraStatePayload} when a research completes or a settlement era-advances, keeping the line
+ * in sync with the leading civ); the date comes from the client sky calendar (config-driven month
+ * lengths; a year is one observer orbit). The world tells its OWN history - "Year 3" can be
+ * medieval, there is no BC/AD anchoring. Months stay "Month N" until month-naming ships (faiths
+ * and cultures will name them, see FAITH_PLAN).
  * <p>
- * Era name is drawn at 1.4× font scale to feel like a banner; year is regular-size to keep the
- * cluster compact. Both are right-shifted slightly from the screen edge to clear common
- * resource-pack overlays. Hidden when F1 (hideGui) is active.
+ * Era name is drawn at 1.4x font scale to read as a banner; the year line is regular size to keep
+ * the cluster compact. Both sit a few pixels in from the screen edge to clear common resource-pack
+ * overlays. Hidden when F1 (hideGui) is active.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -31,7 +34,6 @@ public final class EraYearHudLayer implements LayeredDraw.Layer {
     private static final float ERA_SCALE = 1.4f;
     private static final int MARGIN_X = 8;
     private static final int MARGIN_Y = 6;
-    /** Gap between the bottom of the scaled era text and the top of the year text, in pixels. */
     private static final int LINE_GAP = 3;
 
     private EraYearHudLayer() {
@@ -46,9 +48,6 @@ public final class EraYearHudLayer implements LayeredDraw.Layer {
         Font font = mc.font;
         Era era = ClientEraState.getWorldEra();
         Component eraName = era.displayName();
-        // World calendar (config-driven month lengths, year = one observer orbit).
-        // The world tells its OWN history — "Year 3" can be medieval; no BC/AD anchoring.
-        // "Month N" until month-naming ships (faiths/cultures name the months — FAITH_PLAN).
         com.bannerbound.core.celestial.WorldCalendar.CalendarDate date =
             com.bannerbound.core.client.sky.ClientSkyState.calendar().fromDayTime(
                 mc.level != null ? mc.level.getDayTime() : 0L);
@@ -75,7 +74,7 @@ public final class EraYearHudLayer implements LayeredDraw.Layer {
 
         graphics.pose().pushPose();
         graphics.pose().scale(ERA_SCALE, ERA_SCALE, 1.0f);
-        // Translate the draw position back to pixel coords by dividing by the scale factor.
+        // Draw pos divided by ERA_SCALE so the scaled matrix lands it back at MARGIN_X/MARGIN_Y.
         graphics.drawString(font, eraName,
             Math.round(MARGIN_X / ERA_SCALE),
             Math.round(MARGIN_Y / ERA_SCALE),

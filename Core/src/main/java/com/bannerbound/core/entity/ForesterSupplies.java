@@ -16,39 +16,37 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 
 /**
- * Shared sourcing helpers for the forester roles — sapling species resolution and consume-one
- * pulls from the citizen's job depot (then the settlement stockpiles). Factored out of
- * {@link ForesterWorkGoal#tryReplant} so both the gatherer's replant and the
- * {@link ForesterPlantationGoal} draw from the same supply chain (the Stocker drains the drop-off,
- * so saplings/bone meal usually end up in storage).
+ * Shared sourcing helpers for the forester roles -- sapling-species resolution and consume-one pulls
+ * from the citizen's job depot (checked first) then the settlement stockpiles. Factored out of
+ * {@link ForesterWorkGoal#tryReplant} so both the gatherer's replant and {@link ForesterPlantationGoal}
+ * draw from the same supply chain (the Stocker drains the drop-off, so saplings/bone meal usually end
+ * up in storage).
+ *
+ * <p>Species are resolved by the vanilla "*_log -> *_sapling" name substitution; the plantation-v1
+ * filter accepts any *_sapling EXCEPT dark oak (needs a 2x2 grid). Mangrove propagules and nether
+ * fungi don't end in "_sapling" so they fall out for free; modded saplings are assumed single-growable
+ * (best effort). Stems, non-"*_log" blocks, and unknown ids all resolve to {@link Items#AIR}.
  */
 @ApiStatus.Internal
 public final class ForesterSupplies {
     private ForesterSupplies() {}
 
-    /** The sapling item that matches a {@code *_log} block via the vanilla {@code _log → _sapling}
-     *  name substitution, or {@link Items#AIR} when there's no such sapling (stems, modded oddballs)
-     *  or the species isn't single-sapling growable (see {@link #isSupportedSapling}). */
     public static Item saplingForLog(@Nullable Block logBlock) {
         if (logBlock == null) return Items.AIR;
         ResourceLocation logId = BuiltInRegistries.BLOCK.getKey(logBlock);
         if (logId == null) return Items.AIR;
         String saplingPath = logId.getPath().replace("_log", "_sapling");
-        if (saplingPath.equals(logId.getPath())) return Items.AIR;   // not a *_log block
+        if (saplingPath.equals(logId.getPath())) return Items.AIR;
         ResourceLocation saplingId = ResourceLocation.fromNamespaceAndPath(logId.getNamespace(), saplingPath);
         if (!BuiltInRegistries.BLOCK.containsKey(saplingId)) return Items.AIR;
         Item item = BuiltInRegistries.BLOCK.get(saplingId).asItem();
         return isSupportedSapling(item) ? item : Items.AIR;
     }
 
-    /** The block placed when planting a sapling item ({@link Blocks#AIR}'s block for non-saplings). */
     public static Block saplingBlock(Item saplingItem) {
         return Block.byItem(saplingItem);
     }
 
-    /** Single-sapling-growable filter for v1 plantations: any {@code *_sapling} item EXCEPT dark oak
-     *  (needs a 2×2 grid). Mangrove propagules and nether fungi don't end in {@code _sapling} and are
-     *  excluded for free. Modded saplings are assumed single-growable (best effort). */
     public static boolean isSupportedSapling(Item item) {
         ResourceLocation id = BuiltInRegistries.ITEM.getKey(item);
         if (id == null) return false;
@@ -57,7 +55,6 @@ public final class ForesterSupplies {
         return !path.equals("dark_oak_sapling");
     }
 
-    /** True if at least one {@code item} can be sourced from the depot or the settlement stockpiles. */
     public static boolean hasOne(ServerLevel level, @Nullable Settlement settlement,
                                  @Nullable Container depot, Item item) {
         if (item == Items.AIR) return false;
@@ -70,8 +67,6 @@ public final class ForesterSupplies {
         return settlement != null && StockpileService.count(level, settlement, item) > 0;
     }
 
-    /** Consumes one {@code item} from the depot (first) then a stockpile. Returns false if none
-     *  was available. */
     public static boolean takeOne(ServerLevel level, @Nullable Settlement settlement,
                                   @Nullable Container depot, Item item) {
         if (item == Items.AIR) return false;
@@ -92,11 +87,6 @@ public final class ForesterSupplies {
         return false;
     }
 
-    /**
-     * Picks a sapling species to plant: the forester's preferred-log species if a matching sapling is
-     * in stock, else the first supported sapling found in the depot. Returns {@link Items#AIR} when
-     * nothing plantable is on hand.
-     */
     public static Item pickSpecies(CitizenEntity citizen, ServerLevel level,
                                    @Nullable Settlement settlement, @Nullable Container depot) {
         Item preferred = saplingForLog(citizen.getPreferredLog());

@@ -22,7 +22,7 @@ import net.neoforged.api.distmarker.OnlyIn;
  * relocated under our mod id; the paddle bones are driven by the keyframe animations in
  * {@link RaftAnimations} (the Blockbench {@code raft_animations.java} export), played from the
  * renderer based on the raft's rowing state. Extends {@link HierarchicalModel} so
- * {@code KeyframeAnimations.animate} can resolve the bones by name — same idiom as the Bloomery.
+ * {@code KeyframeAnimations.animate} can resolve the bones by name - same idiom as the Bloomery.
  * <p>
  * The visible paddle is {@code right_paddle}; {@code left_paddle} is an empty bone in the source
  * model (kept for fidelity, draws nothing).
@@ -45,8 +45,7 @@ public class RaftModel extends HierarchicalModel<Boat> {
 
     @Override
     public void setupAnim(Boat entity, float limbSwing, float limbSwingAmount, float ageInTicks, float netHeadYaw, float headPitch) {
-        // Rowing animation is driven explicitly by the renderer (which has the partial tick and a
-        // reusable temp vector), mirroring the Bloomery. Nothing to do per-frame from entity state.
+        // Intentionally empty: RaftRenderer drives the paddle keyframes itself; animating here too would double-drive the bones.
     }
 
     public static LayerDefinition createBodyLayer() {

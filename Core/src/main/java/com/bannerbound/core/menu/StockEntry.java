@@ -8,10 +8,9 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * One summed line in the Stockpile terminal: a {@code display} stack (count 1, carrying the item +
- * components for rendering and item-matching) and the {@code total} quantity across all of the
- * stockpile's enclosed containers. Counts can exceed a stack, which is exactly why the terminal
- * can't be backed by real {@code Slot}s and syncs this virtual list instead.
+ * One summed line in the Stockpile terminal: a count-1 display stack (item + components for render
+ * and matching) plus the total quantity across the stockpile's enclosed containers. Totals can
+ * exceed a stack, which is why the terminal syncs this virtual list instead of using real Slots.
  */
 @ApiStatus.Internal
 public record StockEntry(ItemStack display, int total) {

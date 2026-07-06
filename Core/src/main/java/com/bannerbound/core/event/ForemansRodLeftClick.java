@@ -26,10 +26,14 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 
 /**
- * Intercepts left-clicks on blocks while the player holds a Foreman's Rod. Always cancels so the rod
- * can't break blocks. A left-click INSIDE a herder pen removes that pen (point selections aren't caught
- * by box containment). Shift-left-click on a block contained by a box selection (digger/farmer field)
- * removes that selection (terraforming undo). Plain left-click elsewhere is a no-op.
+ * Intercepts left-clicks on blocks while the player holds a Foreman's Rod (server-side, HIGH priority
+ * so the cancel lands ahead of vanilla break logic -- the rod must never break blocks; every handled
+ * left-click is cancelled). A left-click INSIDE a herder pen removes that pen: pen markers are point
+ * selections and are NOT caught by the AABB findContaining used for box selections, so herderPenAt
+ * scans them separately (with a cheap distSqr pre-filter before the expensive enclosure scan).
+ * Shift-left-click on a block contained by a box selection (digger / farmer field) removes that
+ * selection (terraforming undo). A plain left-click elsewhere is an intentional silent no-op --
+ * right-click is what cycles the A/B corner.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -61,8 +65,6 @@ public final class ForemansRodLeftClick {
         BlockPos clicked = event.getPos();
         BlockSelectionRegistry registry = BlockSelectionRegistry.get(overworld);
 
-        // Herder pen: a left-click inside its interior removes it (point selections aren't caught by the
-        // AABB findContaining used for box selections below).
         BlockSelection pen = herderPenAt(player.serverLevel(), registry, settlement, clicked);
         if (pen != null) {
             registry.unregister(pen.rodId());
@@ -73,7 +75,6 @@ public final class ForemansRodLeftClick {
         }
 
         if (!player.isShiftKeyDown()) {
-            // Plain left-click elsewhere has no role (right-click cycles A/B). Absorb it silently.
             return;
         }
 
@@ -93,7 +94,6 @@ public final class ForemansRodLeftClick {
                 .withStyle(ChatFormatting.GREEN), true);
     }
 
-    /** A herder pen whose marker or interior contains {@code clicked}, owned by {@code settlement}, or null. */
     private static BlockSelection herderPenAt(ServerLevel level, BlockSelectionRegistry registry,
             Settlement settlement, BlockPos clicked) {
         for (BlockSelection sel : registry.getForSettlement(settlement.id())) {
@@ -102,7 +102,7 @@ public final class ForemansRodLeftClick {
                 continue;
             }
             BlockPos marker = new BlockPos(sel.minX(), sel.minY(), sel.minZ());
-            if (marker.equals(clicked)) return sel;                   // clicked the marker block itself
+            if (marker.equals(clicked)) return sel;
             if (marker.distSqr(clicked) > 64 * 64) continue;
             PenEnclosure.Result r = PenEnclosure.scan(level, marker);
             if (r.valid() && (r.interior().contains(clicked) || r.interior().contains(clicked.below()))) {

@@ -36,6 +36,22 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
+/**
+ * Full-screen cinematic crisis presentation. Staged art reveal (per-ArtLayer watercolor/liquid-reveal
+ * shader, falling back to a plain blit or a procedural backdrop when the shader or texture is missing)
+ * followed by title/body/prompt/choice text that slides in on timers all keyed off openedAtMs and
+ * scaled by PRESENTATION_SPEED. Driven by OpenCrisisScreenPayload; a picked choice is sent back via
+ * CastCrisisChoicePayload.
+ *
+ * Two viewer roles share this screen: deciders (canChoose) commit and the screen closes on click;
+ * advisers (canAdvise but not canChoose) stay open after clicking so they can change their advice and
+ * watch the tally, and pure spectators get a waiting button. Council votes render votes/required next
+ * to each choice; chiefdom advice renders a parenthesised leaning tally so the chief sees how members
+ * lean and members see their advice was counted. refresh() swaps in an updated payload WITHOUT
+ * resetting openedAtMs, so live vote/advice updates don't re-fade the cinematic art. IMAGE_INFO
+ * statically caches texture dimensions read once via NativeImage. Client-only; all rendering is on the
+ * render thread.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class CrisisScreen extends PolishedScreen {
@@ -67,8 +83,6 @@ public final class CrisisScreen extends PolishedScreen {
         return false;
     }
 
-    /** Live in-place update (vote/advice tally) of an already-open screen. Keeps the open
-     *  animation timers ({@link #openedAtMs}) so the cinematic art doesn't re-fade on every vote. */
     public void refresh(OpenCrisisScreenPayload updated) {
         if (exiting || updated == null) return;
         this.payload = updated;
@@ -99,12 +113,8 @@ public final class CrisisScreen extends PolishedScreen {
                 if (payload.councilVote()) {
                     label.append(Component.literal("  " + choice.votes() + "/" + payload.requiredVotes()));
                 } else if (choice.votes() > 0) {
-                    // Advisory tally (chiefdom): shows the chief how members are leaning, and shows
-                    // members their own advice was counted.
                     label.append(Component.literal("  (" + choice.votes() + ")").withStyle(ChatFormatting.GRAY));
                 }
-                // Advisers stay on the screen after clicking (they may change their advice and
-                // watch the tally); deciders close on commit.
                 final boolean advise = !payload.canChoose() && payload.canAdvise();
                 Button button = PolishButton.polished(label, b -> {
                     PacketDistributor.sendToServer(new CastCrisisChoicePayload(choice.id()));

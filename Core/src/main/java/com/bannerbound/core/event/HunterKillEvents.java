@@ -22,13 +22,16 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.living.LivingDropsEvent;
 
 /**
- * Routes hunter/herder animal kills straight into job storage: when prey dies to a {@link CitizenEntity}
- * holding the hunter job (melee blow, or an arrow/spear it owns) or herder job, the death drops are inserted
- * into the citizen's drop-off container instead of scattering at the kill site — the hunter never
- * hauls meat home by hand. Anything that doesn't fit stays on the ground where the animal fell.
+ * Routes hunter/herder animal kills straight into job storage: when prey dies to a CitizenEntity
+ * holding the hunter job (melee blow, or an arrow/spear it owns) or the herder job, the death
+ * drops are inserted into the citizen's drop-off container instead of scattering at the kill site,
+ * so the hunter never hauls meat home by hand. Anything that doesn't fit stays on the ground where
+ * the animal fell. Hunter meat is also tallied into the settlement's "hunting" food-production
+ * stat (food the citizens later eat from storage); herder kills additionally roll a per-species
+ * hide via HerderHooks, subject to never_drop datapack overrides.
  *
- * <p>Runs at {@link EventPriority#LOWEST} — after {@link DropGatingEvents} (LOW) has stripped
- * unknown items against the settlement's known-set, so only recognized drops reach the chest.
+ * Runs at EventPriority.LOWEST -- after DropGatingEvents (LOW) has stripped items the settlement
+ * doesn't know against its known-set, so only recognized drops reach the chest.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -53,7 +56,7 @@ public final class HunterKillEvents {
         }
         Container depot = DropOffContainers.resolveJobDepot(citizen);
         if (depot == null) {
-            return;   // no drop-off resolves right now → vanilla ground drops
+            return;
         }
         if (herder && event.getEntity() instanceof Animal victim) {
             ItemStack hide = com.bannerbound.core.api.herder.HerderHooks.get().herdHide(victim,
@@ -69,8 +72,6 @@ public final class HunterKillEvents {
         Iterator<ItemEntity> it = event.getDrops().iterator();
         while (it.hasNext()) {
             ItemEntity drop = it.next();
-            // The meat deposited here is food the citizens eat from storage (per-citizen food). We
-            // route the drop into storage and tally the food for the town-hall production stat.
             ItemStack original = drop.getItem().copy();
             ItemStack remainder = DropOffContainers.insert(depot, drop.getItem());
             if (hunter && citizen.getSettlement() != null
@@ -80,13 +81,12 @@ public final class HunterKillEvents {
             if (remainder.isEmpty()) {
                 it.remove();
             } else {
-                drop.setItem(remainder);   // depot full — the rest falls at the kill site
+                drop.setItem(remainder);
             }
         }
         if (foodStored > 0) citizen.getSettlement().addFoodProduced("hunting", foodStored);
     }
 
-    /** True when a {@code never_drop} datapack override blocks {@code stack} from this source. */
     private static boolean isSuppressedDrop(ItemStack stack, String sourceId) {
         if (stack.isEmpty()) return false;
         net.minecraft.resources.ResourceLocation id =

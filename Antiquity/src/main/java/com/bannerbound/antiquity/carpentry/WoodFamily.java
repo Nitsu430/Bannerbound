@@ -12,15 +12,17 @@ import net.minecraft.world.item.ItemStack;
 
 /**
  * Resolves a wood "family" from a log item and looks up that family's plank-derived variants by
- * suffix — so carpentry recipes are written ONCE per variant ({@code stairs}, {@code slab}, …) and
- * resolved per wood at runtime instead of hand-authoring a recipe for every wood × variant.
- *
- * <p>A family is keyed by {@code <namespace>:<base>} (e.g. {@code minecraft:oak},
- * {@code minecraft:crimson}). The base is the log path stripped of the {@code stripped_} prefix and
- * the {@code _log}/{@code _wood}/{@code _stem}/{@code _hyphae}/{@code _block} suffix. A would-be
- * family is only valid if {@code <namespace>:<base>_planks} exists in the item registry — that's the
- * single membership test, so any modded wood that follows the vanilla naming convention works for
- * free.
+ * suffix, so carpentry recipes are written ONCE per variant (stairs, slab, ...) and resolved per wood
+ * at runtime instead of hand-authoring a recipe for every wood x variant. A family is keyed by
+ * {@code <namespace>:<base>} (e.g. minecraft:oak, minecraft:crimson) -- the stable form used for NBT
+ * and the budget map, round-tripped via key()/fromKey(). The base is the log path stripped of the
+ * stripped_ prefix and the _log/_wood/_stem/_hyphae/_block suffix. A would-be family is only valid if
+ * {@code <namespace>:<base>_planks} exists in the item registry; that single membership test (also
+ * behind isBudgetLog, which additionally requires the minecraft:logs tag) means any modded wood
+ * following the vanilla naming convention works for free. variant("planks") returns the planks item;
+ * any other suffix resolves {@code <namespace>:<base>_<suffix>} or null. representativeLog() prefers
+ * _log, then _stem/_block/_wood, falling back to planks, for drawing on the table during the saw
+ * minigame.
  */
 @ApiStatus.Internal
 public final class WoodFamily {
@@ -34,12 +36,10 @@ public final class WoodFamily {
         this.planks = planks;
     }
 
-    /** A budget item must be a log (in {@code minecraft:logs}) whose family resolves a planks item. */
     public static boolean isBudgetLog(ItemStack stack) {
         return !stack.isEmpty() && stack.is(ItemTags.LOGS) && fromLog(stack.getItem()) != null;
     }
 
-    /** The family a log belongs to, or {@code null} if it doesn't follow the {@code _planks} convention. */
     @Nullable
     public static WoodFamily fromLog(Item log) {
         ResourceLocation id = BuiltInRegistries.ITEM.getKey(log);
@@ -55,7 +55,6 @@ public final class WoodFamily {
         return build(id.getNamespace(), base);
     }
 
-    /** Rebuilds a family from its {@link #key()} (NBT round-trip), or {@code null} if it no longer resolves. */
     @Nullable
     public static WoodFamily fromKey(String key) {
         int colon = key.indexOf(':');
@@ -70,18 +69,14 @@ public final class WoodFamily {
         return new WoodFamily(namespace, base, BuiltInRegistries.ITEM.get(planksId));
     }
 
-    /** Stable key for NBT + budget map: {@code <namespace>:<base>}. */
     public String key() {
         return namespace + ":" + base;
     }
 
-    /** The family's planks item (its {@code planks} variant). */
     public Item planks() {
         return planks;
     }
 
-    /** A representative log item to draw on the table during the saw minigame: {@code _log}, then
-     *  {@code _stem}/{@code _block}, falling back to the planks. */
     public Item representativeLog() {
         for (String suffix : new String[] {"_log", "_stem", "_block", "_wood"}) {
             Item it = lookup(base + suffix);
@@ -90,8 +85,6 @@ public final class WoodFamily {
         return planks;
     }
 
-    /** Resolves this family's variant by suffix — {@code "planks"} returns the planks item, anything
-     *  else resolves {@code <namespace>:<base>_<suffix>} from the registry (null if it doesn't exist). */
     @Nullable
     public Item variant(String suffix) {
         if ("planks".equals(suffix)) return planks;

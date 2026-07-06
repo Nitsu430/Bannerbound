@@ -38,14 +38,21 @@ import net.neoforged.neoforge.event.level.ExplosionEvent;
 import net.neoforged.neoforge.event.level.PistonEvent;
 
 /**
- * Claim protection for the vanilla mechanics {@code FactionEvents} doesn't cover: explosions,
+ * Claim protection for the vanilla mechanics FactionEvents doesn't cover: explosions,
  * container/redstone/door interaction, farmland trampling, piston pushes across claim borders,
- * and fluid flow into claims. Same conventions as {@code FactionEvents}: overworld-keyed
+ * and fluid flow into claims. Same conventions as FactionEvents: overworld-keyed
  * {@link SettlementData}, foreignness via {@link ChunkProtection#isProtected}, op bypass via
  * {@link ChunkProtection#shouldBypass}, red denial messages.
- * <p>
- * Doors/trapdoors/fence gates are gated in {@link #isGatedDoor} — kept separate from containers
- * and redstone controls so it's easy to relax for visiting traders/allies without touching the
+ *
+ * Per-hook rules: explosions strip affected block positions inside foreign claims from the block
+ * list but still damage entities (walls protected, defenders not); sourceless blasts spare every
+ * claimed chunk. Containers, redstone controls, and gated doors are members-only inside a claim.
+ * Pistons may not move blocks across a claim border - base, moved, destination, and destroyed
+ * positions must all share one chunk owner (chunk-owner lookups only, no membership resolution or
+ * block scans). Fluids may not flow-place into a claim from land the owner doesn't hold.
+ *
+ * Doors/trapdoors/fence gates are gated in {@link #isGatedDoor}, kept separate from containers and
+ * redstone controls so it stays easy to relax for visiting traders/allies without touching the
  * priority protections.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
@@ -63,12 +70,6 @@ public final class ClaimProtectionEvents {
         return owner == null ? null : owner.id();
     }
 
-    /**
-     * Explosions (TNT, end crystals, respawn anchors, beds…) must not crater foreign claims:
-     * affected block positions inside a claim the source player may not act in are stripped
-     * from the block list. Entities in the blast still take damage — walls are protected,
-     * defenders are not. Sourceless blasts (dispenser-lit TNT etc.) spare every claimed chunk.
-     */
     @SubscribeEvent
     public static void onExplosionDetonate(ExplosionEvent.Detonate event) {
         if (!(event.getLevel() instanceof ServerLevel level)) {
@@ -107,7 +108,6 @@ public final class ClaimProtectionEvents {
             || block instanceof FenceGateBlock;
     }
 
-    /** Containers, redstone controls, and doors are members-only inside a claim. */
     @SubscribeEvent
     public static void onRightClickBlock(PlayerInteractEvent.RightClickBlock event) {
         Level level = event.getLevel();
@@ -158,11 +158,6 @@ public final class ClaimProtectionEvents {
         }
     }
 
-    /**
-     * Pistons may not move blocks across a claim border: if the piston base and any moved,
-     * destroyed, or destination position resolve to different chunk owners, the push/pull is
-     * cancelled. Chunk-owner lookups only — no membership resolution, no block scans.
-     */
     @SubscribeEvent
     public static void onPistonPre(PistonEvent.Pre event) {
         if (!(event.getLevel() instanceof ServerLevel level)) {
@@ -190,7 +185,6 @@ public final class ClaimProtectionEvents {
         }
     }
 
-    /** Fluids may not flow-place into a claim from land the claim's owner doesn't hold. */
     @SubscribeEvent
     public static void onFluidPlaceBlock(BlockEvent.FluidPlaceBlockEvent event) {
         if (!(event.getLevel() instanceof ServerLevel level)) {

@@ -12,8 +12,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server. The player's chosen "keep how many adults alive" threshold for a pen (from
- * {@code PenKeepScreen}). Carries the pen marker pos and the keep count (0 = auto/full capacity); the
+ * Client -> server. The player's chosen "keep how many adults alive" threshold for a pen (from
+ * PenKeepScreen). Carries the pen marker pos and the keep count (0 = auto/full capacity); the
  * server re-validates and writes it into the pen marker's packed seedItemId.
  */
 @ApiStatus.Internal

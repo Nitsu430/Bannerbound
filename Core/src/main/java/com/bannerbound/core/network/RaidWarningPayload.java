@@ -11,9 +11,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: a settlement-wide RAID alert broadcast to every member, driving a red top-of-screen banner
- * (see {@code RaidWarningHudLayer}) — the raid analogue of the food-starving banner. {@code active} is
- * true while a raid is in progress against the player's settlement, false when it ends.
+ * S->C: a settlement-wide RAID alert broadcast to every member, driving a red top-of-screen banner
+ * (RaidWarningHudLayer) -- the raid analogue of the food-starving banner. active is true while a
+ * raid is in progress against the player's settlement, false when it ends.
  */
 @ApiStatus.Internal
 public record RaidWarningPayload(boolean active) implements CustomPacketPayload {

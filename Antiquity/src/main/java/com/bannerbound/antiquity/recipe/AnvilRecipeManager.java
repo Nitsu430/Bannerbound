@@ -24,7 +24,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Datapack loader for Stone Anvil recipes — reads every JSON under {@code data/<namespace>/anvil_recipes/}.
+ * Datapack loader for Stone Anvil recipes - reads every JSON under {@code data/<namespace>/anvil_recipes/}.
  * A clone of the Fletching/Crafting-Stone pile-recipe loader: server-side reload listener (registered
  * in {@code AntiquityEvents}); recipes keyed by file id so the cold-hammer minigame can resolve the
  * matched recipe across the client round trip. Also jar-loaded on remote clients via

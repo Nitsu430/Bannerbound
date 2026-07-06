@@ -25,11 +25,21 @@ import net.neoforged.neoforge.event.entity.living.LivingEntityUseItemEvent;
 import net.neoforged.neoforge.event.tick.EntityTickEvent;
 
 /**
- * Drives the food-freshness layer server-side: once a second it stamps perishables as fresh and rolls
- * their chance to degrade a level (and finally to spoiled food). This covers what players carry and
- * food dropped on the ground; Core's stored-food scan calls {@link Spoilage#tick} on the same cadence
- * for claimed storage. It also halves what the player gains from eating <b>bland</b> food, the eater
- * side of {@link FoodSpoilage#BLAND_FOOD_MULTIPLIER}.
+ * Drives the food-freshness layer server-side: once a second it stamps perishables as fresh and
+ * rolls their chance to degrade a level (and finally to spoiled food), covering player inventories
+ * and food dropped on the ground; Core's stored-food scan calls {@code Spoilage.tick} on the same
+ * cadence for claimed storage. Dropped items are additionally stamped the instant they join the
+ * level rather than a second later, because stacking compares components: an unstamped item picked
+ * up cannot merge into an already-stamped stack in the inventory and would land in a fresh slot -
+ * stamping at spawn means fresh food shares one component before pickup and merges normally.
+ *
+ * <p>It also implements the eater side of {@link FoodSpoilage#BLAND_FOOD_MULTIPLIER}: bland food
+ * gives the player half its nourishment. Vanilla applies a food's full nutrition+saturation inside
+ * {@code finishUsingItem} BEFORE the Finish event fires, so this snapshots the player's
+ * hunger/saturation when they START eating a bland food and, on Finish, rolls back half of whatever
+ * was actually gained - halving the real gain (not the rated value) respects vanilla's
+ * clamp-at-full for nearly full players. The snapshot map is keyed by UUID and cleared on Stop in
+ * case the player cancels the meal.
  */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID)
 @ApiStatus.Internal
@@ -44,9 +54,7 @@ public final class FoodSpoilageEvents {
         if (event.getEntity() instanceof Player player) {
             Spoilage.sweep(player.getInventory(), level);
         } else if (event.getEntity() instanceof ItemEntity item) {
-            // Don't spoil dropped food lying in a DORMANT settlement's claimed chunk: this vanilla entity
-            // tick fires whenever the chunk is loaded (chunkloaders / force-loaded claims / a nearby
-            // outsider), so it would keep rotting an offline tribe's food. Unclaimed land spoils as normal.
+            // Dormant settlement's claim: skip, or chunkloaded claims keep rotting an offline tribe's dropped food.
             if (level instanceof ServerLevel sl) {
                 Settlement owner = SettlementData.get(sl)
                     .getByChunk(new ChunkPos(item.blockPosition()).toLong());
@@ -57,13 +65,6 @@ public final class FoodSpoilageEvents {
         }
     }
 
-    /**
-     * Stamp dropped/harvested food the instant it enters the world, not a second later when the tick
-     * sweep catches it. This matters for stacking: an item picked up while still unstamped can't merge
-     * into an already-stamped stack in the player's inventory (their components differ), so it would
-     * land in a fresh slot. Stamping at spawn means fresh food shares one component before pickup and
-     * merges normally.
-     */
     @SubscribeEvent
     static void onItemSpawn(EntityJoinLevelEvent event) {
         if (event.getLevel().isClientSide) return;
@@ -73,12 +74,6 @@ public final class FoodSpoilageEvents {
         }
     }
 
-    // ── Bland food gives the eater half its nourishment ─────────────────────────────────────────
-    // Vanilla applies a food's full nutrition+saturation inside finishUsingItem (before Finish fires),
-    // so we snapshot the player's hunger/saturation when they START eating a bland food and, on Finish,
-    // roll back half of whatever they actually gained. Snapshotting handles vanilla's clamp-at-full
-    // (a player near full gains less than the food's rated value, so we halve the real gain, not the
-    // rated value). Keyed by UUID; cleared on Stop in case the player cancels the meal.
     private static final Map<UUID, float[]> PRE_EAT = new HashMap<>();
 
     @SubscribeEvent

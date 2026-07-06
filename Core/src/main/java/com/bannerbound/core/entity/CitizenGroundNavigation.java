@@ -8,19 +8,17 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.pathfinder.PathFinder;
 
 /**
- * Ground navigation for citizens. Identical to {@link GroundPathNavigation} except it uses a
- * {@link CitizenNodeEvaluator}, which makes closed fence gates routable.
+ * Ground navigation for citizens: vanilla {@link GroundPathNavigation} wired to a
+ * {@link CitizenNodeEvaluator} (with canPassDoors), which makes closed fence gates routable. The
+ * A* node budget is raised to 4x the default so long, winding land routes (e.g. a fisher forced the
+ * long way around water) resolve in ONE computation instead of a partial path to the nearest
+ * reachable tile that then re-paths from the shore and looks like it "tried to swim." The larger
+ * budget only costs more on genuinely long detours; short direct paths terminate early regardless.
  */
 @ApiStatus.Internal
 public class CitizenGroundNavigation extends GroundPathNavigation {
     public CitizenGroundNavigation(Mob mob, Level level) {
         super(mob, level);
-        // Give A* a bigger node budget so long, winding land routes resolve in ONE path computation
-        // instead of returning a partial path to the nearest reachable tile. Without this, a fisher
-        // forced around water (the direct route is blocked) would walk to the shore by the water, run
-        // out of budget there, stop, then re-path the rest — looking like it "tried to go through the
-        // water." The default multiplier is 1.0; the extra exploration only costs more on genuinely
-        // long detours, since short direct paths terminate early regardless of the cap.
         this.setMaxVisitedNodesMultiplier(4.0F);
     }
 

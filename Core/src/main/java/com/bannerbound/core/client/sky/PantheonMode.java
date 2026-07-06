@@ -16,14 +16,17 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Pantheon mode (FAITH_PLAN Part 3) — in-world star drawing, no GUI star map: the sky IS
- * the screen. Client mode singleton in the ClientBirdseyeState mould. The draft chain is
- * CLIENT-ONLY until submitted; the server's confirm transaction is the arbiter.
- * <p>
- * Controls (mode active, no screen open): crosshair-hover picks the nearest star within
- * ~2.5°; LMB connects it (clicking an earlier chain star truncates back to it — the
- * branch gesture); R or RMB removes the last segment; ENTER opens the naming prompt at
- * 3+ stars; ESC leaves the mode.
+ * Pantheon mode (FAITH_PLAN Part 3) -- in-world star drawing, no GUI star map: the sky IS the
+ * screen. Client mode singleton in the ClientBirdseyeState mould. The draft chain is CLIENT-ONLY
+ * until submitted; the server's confirm transaction is the arbiter.
+ *
+ * Entry (see enter) requires astrology faith + the Star Charts node researched + night + clear
+ * weather + open sky above the player; each failure messages the player and aborts.
+ *
+ * Controls (mode active, no screen open): crosshair-hover picks the nearest star within ~2.5 deg;
+ * LMB connects it, or -- if you click a star already in the chain -- truncates back to it (the
+ * branch gesture); R or RMB removes the last segment; ENTER opens the naming prompt at 3+ stars;
+ * ESC leaves the mode.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -59,16 +62,12 @@ public final class PantheonMode {
         return hoveredStarId;
     }
 
-    /** Set each frame by the sky renderer's pick pass. */
     public static void setHovered(int starId) {
         hoveredStarId = starId;
     }
 
-    /** Faith-tree node that unlocks Pantheon mode — you chart the stars before you bind them. */
     public static final String STAR_CHARTS_NODE = "bannerboundantiquity:star_charts";
 
-    /** Entry checks (FAITH_PLAN: night + open sky + clear weather + astrology faith
-     *  + Star Charts researched). */
     public static boolean enter(Minecraft mc) {
         if (mc.player == null || mc.level == null) return false;
         if (!ClientFaithState.hasFaith()
@@ -105,12 +104,10 @@ public final class PantheonMode {
         hoveredStarId = -1;
     }
 
-    /** LMB: connect the hovered star — or branch by truncating back to an earlier one. */
     public static void clickPrimary() {
         if (hoveredStarId < 0) return;
         int existing = chain.indexOf(hoveredStarId);
         if (existing >= 0) {
-            // Branch gesture: keep the chain up to and including this star.
             while (chain.size() > existing + 1) {
                 chain.remove(chain.size() - 1);
             }

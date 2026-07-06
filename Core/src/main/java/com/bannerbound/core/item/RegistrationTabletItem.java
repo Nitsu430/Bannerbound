@@ -16,6 +16,13 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.level.Level;
 
+/**
+ * Registration Tablet - a joinable invite to a settlement. The tablet carries the target
+ * settlement name (SETTLEMENT_REF) plus a charge count (TABLET_CHARGES / TABLET_MAX_CHARGES);
+ * right-clicking runs SettlementManager.tryJoin server-side and, on OK, spends one charge (the
+ * stack shrinks when the last charge is used). A blank tablet or a vanished settlement just
+ * reports an error. The tooltip surfaces the bound settlement and remaining charges.
+ */
 public class RegistrationTabletItem extends Item {
     public RegistrationTabletItem(Properties properties) {
         super(properties);

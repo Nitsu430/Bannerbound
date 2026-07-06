@@ -10,8 +10,10 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * Custom {@link RenderType}s for hunting visuals. Subclassing {@code RenderType} is the standard
  * modder trick to reach its {@code protected} {@code create(...)} factory and the inherited
- * {@link net.minecraft.client.renderer.RenderStateShard} constants — the class is never actually
- * instantiated.
+ * {@link net.minecraft.client.renderer.RenderStateShard} constants - the class is never actually
+ * instantiated. {@link #BLOOD_CONE} is flat, translucent, full-bright position+color geometry that
+ * writes color but not depth - for the blood-trail direction cone laid on the ground; it is
+ * untextured, so it needs no art asset.
  */
 @OnlyIn(Dist.CLIENT)
 public final class HuntingRenderTypes extends RenderType {
@@ -19,10 +21,6 @@ public final class HuntingRenderTypes extends RenderType {
         super(null, null, null, 0, false, false, null, null);
     }
 
-    /**
-     * Flat, translucent, full-bright position+color geometry that writes colour but not depth — for
-     * the blood-trail direction cone laid on the ground. No texture, so it needs no art asset.
-     */
     public static final RenderType BLOOD_CONE = create(
         "bannerbound_blood_cone",
         DefaultVertexFormat.POSITION_COLOR,

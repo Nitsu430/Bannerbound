@@ -28,21 +28,24 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * The Stone Anvil — a Crafting-Stone-style pile station (place blade + stick, ghost-preview the
- * result, cold-hammer it into a quality tool) that ALSO doubles as the casting bench: place a fired
- * mold instead and pour a molten crucible into it (METALWORKING_PLAN.md). The two modes are mutually
- * exclusive — a placed mold disables the pile and vice-versa.
- *
- * <p>The pile + ghost-picker logic is the Fletching Station's, generic over {@link
- * GhostRecipeWorkstation}; the mold half is the casting state (shape + molten fill + cooling).
+ * The Stone Anvil block entity: a Crafting-Stone-style pile station that ALSO doubles as the casting
+ * bench (METALWORKING_PLAN.md). Mode 1 (pile + ghost): place ingredients, ghost-preview the matched
+ * {@link AnvilRecipe}, cold-hammer the pile into a quality tool; the pile/ghost-picker logic is the
+ * Fletching Station's, generic over {@link GhostRecipeWorkstation}, and every candidate result is
+ * research-gated through CraftGating.canProduceAt. Mode 2 (mold casting): place a fired mold instead
+ * (only when the pile is empty) and pour molten crucible metal toward requiredMb - pour() takes a
+ * whole charge, pourInto() is the hold-to-pour gradual rise; the charge stays molten for COOL_TICKS
+ * (100 = ~5s) then solidifies: full = extractable casting, under-filled = a dud. The two modes are
+ * mutually exclusive: a placed mold disables the pile and vice versa. The forge* fields are a
+ * transient render state (the glowing workpiece shown during the cold-hammer minigame; forgeHeat()
+ * fades 1->0 toward the metal tint as strikes land, and client ticks spawn ember/smoke shimmer).
+ * setChanged() doubles as the client sync point (sendBlockUpdated + full-state update tag).
  */
 public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWorkstation {
     public static final int MAX_ITEMS = 9;
     public static final int SLIDE_TICKS = 6;
-    /** Ticks a freshly-poured charge stays molten before it solidifies (≈5s). */
     public static final int COOL_TICKS = 100;
 
-    // ── Pile + ghost (Fletching-station clone) ──────────────────────────────────────────────────
     private final List<ItemStack> contents = new ArrayList<>();
     private ItemStack cachedResult = ItemStack.EMPTY;
     private List<ItemStack> ghostIngredients = List.of();
@@ -54,7 +57,6 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
     private Direction insertDir = Direction.NORTH;
     private int lastSlideCell = -1;
 
-    // ── Mold casting mode ───────────────────────────────────────────────────────────────────────
     private String moldShape = "";
     private int fillMb = 0;
     private String metalId = "";
@@ -62,7 +64,6 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
     private boolean molten = false;
     private int coolTicks = 0;
 
-    // ── Forging (transient: the glowing workpiece on the anvil during the cold-hammer minigame) ────
     private ItemStack forgeItem = ItemStack.EMPTY;
     private int forgeStrikesDone = 0;
     private int forgeStrikesTotal = 0;
@@ -73,7 +74,6 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
         super(BannerboundAntiquity.STONE_ANVIL_BE.get(), pos, state);
     }
 
-    // ── Pile ────────────────────────────────────────────────────────────────────────────────────
     public List<ItemStack> getContents() { return contents; }
     @Override public ItemStack getResult() { return cachedResult; }
     @Override public List<ItemStack> getGhostIngredients() { return ghostIngredients; }
@@ -85,7 +85,6 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
     public int getLastSlideCell() { return lastSlideCell; }
     public boolean pileEmpty() { return contents.isEmpty(); }
 
-    /** The recipe currently matched by the pile (null if none / output not researched). */
     public AnvilRecipe matchedRecipe() {
         AnvilRecipe recipe = AnvilRecipeManager.find(contents);
         if (recipe == null) return null;
@@ -136,7 +135,6 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
         return out;
     }
 
-    /** Consumes the whole pile (the cold-hammer commit point). */
     public void consumePile() {
         contents.clear();
         cachedResult = ItemStack.EMPTY;
@@ -230,7 +228,6 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
         ghostResult = candidate.result().copy();
     }
 
-    // ── Mold casting mode ───────────────────────────────────────────────────────────────────────
     public boolean hasMold() { return !moldShape.isEmpty(); }
     public String moldShape() { return moldShape; }
     public int fillMb() { return fillMb; }
@@ -247,7 +244,6 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
     public boolean isCastReady() { return hasMold() && !molten && fillMb >= requiredMb(); }
     public boolean isDud() { return hasMold() && !molten && fillMb > 0 && fillMb < requiredMb(); }
 
-    /** Put an (empty) fired mold of {@code shape} on the anvil (only when the pile is empty). */
     public void placeMold(String shape) {
         this.moldShape = shape;
         this.fillMb = 0;
@@ -272,8 +268,6 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
         return moved;
     }
 
-    /** Pour up to {@code maxMb} of {@code metalId} into the mold (capped at what it still needs);
-     *  returns the mB actually added. Used by the hold-to-pour crucible for a gradual rise. */
     public int pourInto(String metal, int tint, int maxMb) {
         if (!hasMold()) return 0;
         int need = requiredMb() - fillMb;
@@ -295,7 +289,6 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
         return out;
     }
 
-    /** Return the placed fired mold itself (when empty / before pouring). */
     public ItemStack takeMold() {
         if (!hasMold() || fillMb > 0) return ItemStack.EMPTY;
         var item = MetalworkingItems.MOLDS.get("fired_clay_mold_" + moldShape);
@@ -312,19 +305,16 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
         sync();
     }
 
-    // ── Forging (glowing workpiece) ───────────────────────────────────────────────────────────────
     public boolean isForging() { return !forgeItem.isEmpty(); }
     public ItemStack forgeItem() { return forgeItem; }
     public int forgeMetalColor() { return forgeMetalColor; }
     public long lastStruckGameTime() { return lastStruckGameTime; }
 
-    /** Heat 1..0 — white-hot when fresh, cooling toward the metal tint as strikes land. */
     public float forgeHeat() {
         if (forgeStrikesTotal <= 0) return 1f;
         return Math.max(0f, 1f - (forgeStrikesDone / (float) forgeStrikesTotal) * 0.85f);
     }
 
-    /** Begin showing the glowing workpiece (on the cold-hammer commit). */
     public void beginForging(ItemStack workpiece, int strikesTotal, int metalColor) {
         this.forgeItem = workpiece.copyWithCount(1);
         this.forgeStrikesDone = 0;
@@ -334,7 +324,6 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
         sync();
     }
 
-    /** Register a landed strike (advances cooling + the recoil-bob timestamp). */
     public void forgeStrike() {
         if (!isForging()) return;
         forgeStrikesDone++;
@@ -349,7 +338,6 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
         sync();
     }
 
-    // ── Ticking ─────────────────────────────────────────────────────────────────────────────────
     public static void tick(Level level, BlockPos pos, BlockState state, StoneAnvilBlockEntity be) {
         if (be.insertAnimTicks > 0) be.insertAnimTicks--;
         if (level.isClientSide) {
@@ -360,22 +348,20 @@ public class StoneAnvilBlockEntity extends BlockEntity implements GhostRecipeWor
             if (be.coolTicks > 0) {
                 be.coolTicks--;
             } else {
-                be.molten = false; // solidified — castable (or a dud if under-filled)
+                be.molten = false;
                 be.sync();
             }
         }
     }
 
-    /** Lazy heat shimmer rising off the hot workpiece while it's being forged (client only). */
     private static void spawnForgeEmbers(Level level, BlockPos pos, StoneAnvilBlockEntity be) {
         long t = level.getGameTime();
-        if ((t & 3L) != 0L) return; // every 4th tick
+        if ((t & 3L) != 0L) return;
         float heat = be.forgeHeat();
         var rand = level.random;
         double x = pos.getX() + 0.5 + (rand.nextDouble() - 0.5) * 0.25;
         double y = pos.getY() + 0.9;
         double z = pos.getZ() + 0.5 + (rand.nextDouble() - 0.5) * 0.25;
-        // A rising ember plus a wisp of heat-haze smoke; embers thin out as the piece cools.
         if (rand.nextFloat() < 0.4f + heat * 0.5f) {
             level.addParticle(net.minecraft.core.particles.ParticleTypes.LAVA, x, y, z, 0.0, 0.02, 0.0);
         }

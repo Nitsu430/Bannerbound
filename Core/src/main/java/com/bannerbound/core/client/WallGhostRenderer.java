@@ -22,36 +22,37 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
 /**
- * Renders the wall blueprint in-world while one exists (WALLS_PLAN.md §E): translucent ghost
- * blocks where the blueprint expects a block and the world has air/replaceables, and a red
- * overlay where the world has the WRONG block (obstruction or wrong placement). Hand-building
- * needs no special placement API — placing the right block satisfies the diff and the ghost
- * simply stops drawing.
+ * Renders the wall blueprint in-world while one exists (WALLS_PLAN.md section E): translucent
+ * ghost blocks where the blueprint expects a block and the world has air/replaceables, and a
+ * red overlay where the world has the WRONG block (obstruction or wrong placement). Hand-
+ * building needs no special placement API -- placing the right block satisfies the diff and the
+ * ghost simply stops drawing. Client-side @EventBusSubscriber hooking RenderLevelStageEvent at
+ * the AFTER_TRANSLUCENT_BLOCKS stage.
  *
  * <p>Technique: the ghost recipe preview's alpha-wrapping vertex consumer pattern, generalized
- * to block models — {@code renderSingleBlock} through a buffer source that reroutes every
- * render type to the translucent block sheet and scales vertex alpha. Per-frame iteration over
- * the blueprint map with a radius cull; entries are a few thousand longs at most, and drawn
- * ghosts are capped. Section-level geometry caching is the planned optimization if profiling
- * ever demands it.
+ * to block models -- renderSingleBlock through a buffer source that reroutes every render type
+ * to the translucent block sheet and scales vertex alpha (GHOST_ALPHA/255, ~39%, matching the
+ * workstation ghost recipe silhouettes). Per-frame iteration over the blueprint map with a
+ * radius cull; entries are a few thousand longs at most and drawn ghosts are capped
+ * (MAX_GHOSTS_PER_FRAME). Section-level geometry caching is the planned optimization if
+ * profiling ever demands it.
+ *
+ * <p>No client-side connection simulation: the server BAKES the design's connections into the
+ * blueprint (WallConnectivity.bake) before syncing, so the synced states ARE the exact final
+ * wall states. Draw order matters -- candidates are collected then drawn NEAREST-FIRST, since
+ * map order spent the frame budget on far entries and made nearby ghosts vanish (playtest
+ * 2026-06-12).
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
 public final class WallGhostRenderer {
 
-    /** Ghosts draw within this distance of the camera (squared blocks below). */
     private static final double RADIUS_SQ = 48.0 * 48.0;
-    /** Hard cap on ghost blocks drawn per frame — keeps megabase walls cheap. */
     private static final int MAX_GHOSTS_PER_FRAME = 600;
-    /** Ghost opacity (~39%, matching the workstation ghost recipe silhouettes). */
     private static final int GHOST_ALPHA = 100;
 
     private WallGhostRenderer() {
     }
-
-    // NOTE: no client-side connection simulation anymore — the server BAKES the design's
-    // connections into the blueprint (WallConnectivity.bake) before syncing, so the synced
-    // states ARE the exact final wall states (playtest 2026-06-12).
 
     @SubscribeEvent
     public static void onRenderLevelStage(RenderLevelStageEvent event) {
@@ -66,9 +67,6 @@ public final class WallGhostRenderer {
         MultiBufferSource.BufferSource buffer = mc.renderBuffers().bufferSource();
         GhostBufferSource ghostBuffer = new GhostBufferSource(buffer);
 
-        // Collect in-radius unsatisfied positions, then draw NEAREST-FIRST — drawing in map
-        // order spent the frame budget on far entries and made ghosts vanish right next to
-        // the player ("proximity rendering flipped", playtest 2026-06-12).
         java.util.List<long[]> candidates = new java.util.ArrayList<>();
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
         for (Long2ObjectMap.Entry<BlockState> entry : ClientWallBlueprint.view().long2ObjectEntrySet()) {
@@ -80,6 +78,7 @@ public final class WallGhostRenderer {
             if (distSq > RADIUS_SQ) continue;
             candidates.add(new long[]{packed, (long) (distSq * 16.0)});
         }
+        // nearest-first: far-first drawing burned the frame budget on distant ghosts.
         candidates.sort(java.util.Comparator.comparingLong(c -> c[1]));
 
         int drawn = 0;
@@ -89,7 +88,7 @@ public final class WallGhostRenderer {
             cursor.set(BlockPos.getX(packed), BlockPos.getY(packed), BlockPos.getZ(packed));
             BlockState expected = ClientWallBlueprint.view().get(packed);
             BlockState actual = mc.level.getBlockState(cursor);
-            if (expected == null || actual.is(expected.getBlock())) continue; // satisfied
+            if (expected == null || actual.is(expected.getBlock())) continue;
 
             if (actual.isAir() || actual.canBeReplaced()) {
                 drawn++;
@@ -99,7 +98,6 @@ public final class WallGhostRenderer {
                     LightTexture.FULL_BRIGHT, net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY);
                 pose.popPose();
             } else {
-                // Wrong block in the wall's footprint — obstruction or misplacement. Red box.
                 drawn++;
                 DebugRenderer.renderFilledBox(pose, buffer, cursor, cursor, 1.0f, 0.15f, 0.15f, 0.35f);
             }
@@ -109,7 +107,6 @@ public final class WallGhostRenderer {
         buffer.endBatch(RenderType.debugFilledBox());
     }
 
-    /** Reroutes every requested render type to the translucent block sheet with scaled alpha. */
     private record GhostBufferSource(MultiBufferSource delegate) implements MultiBufferSource {
         @Override
         public VertexConsumer getBuffer(RenderType type) {
@@ -117,7 +114,6 @@ public final class WallGhostRenderer {
         }
     }
 
-    /** Scales every vertex's alpha to {@link #GHOST_ALPHA}/255 — the ghost-silhouette look. */
     private record GhostVertexConsumer(VertexConsumer delegate) implements VertexConsumer {
         @Override
         public VertexConsumer addVertex(float x, float y, float z) {

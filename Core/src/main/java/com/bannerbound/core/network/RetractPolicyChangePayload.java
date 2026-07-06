@@ -10,9 +10,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: cancel the settlement's pending policy change + its confirm votes. Sent by the original
- * proposer (or, in a Chiefdom, the chief) clicking Cancel on the pending slot. No fields — the
- * server clears whatever change is currently pending.
+ * C->S request to cancel the settlement's pending policy change and its confirm votes, sent by the
+ * original proposer (or, in a Chiefdom, the chief) clicking Cancel on the pending slot. Fieldless
+ * (unit codec, shared INSTANCE); the server clears whatever policy change is currently pending.
  */
 @ApiStatus.Internal
 public record RetractPolicyChangePayload() implements CustomPacketPayload {

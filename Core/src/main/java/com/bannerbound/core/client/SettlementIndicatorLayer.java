@@ -14,6 +14,13 @@ import net.minecraft.world.level.ChunkPos;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
+/**
+ * Top-left HUD label naming the settlement whose claim the player currently stands in ("Currently
+ * in <name>", the name tinted with that settlement's primary banner colour). Reads the claim under
+ * the player's chunk from ClientClaimState and draws nothing on unclaimed ground. Positioned at
+ * y=36, tucked just below the era/year banner (EraYearHudLayer ends ~y=32) so the two read as one
+ * stacked cluster and neither sits in the centre sightline.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class SettlementIndicatorLayer implements LayeredDraw.Layer {
@@ -44,8 +51,6 @@ public final class SettlementIndicatorLayer implements LayeredDraw.Layer {
             .withColor(ClientIdentityState.primaryRgb(entry.colorIndex()));
         Component combined = Component.empty().append(label).append(" ").append(name);
 
-        // Top-LEFT, tucked directly BELOW the era/year banner (EraYearHudLayer ends ~y=32) so the
-        // two read as one stacked cluster and neither sits in the center sightline.
         int textWidth = mc.font.width(combined);
         int x = 8;
         int y = 36;

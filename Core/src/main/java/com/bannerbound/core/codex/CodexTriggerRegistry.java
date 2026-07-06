@@ -7,7 +7,13 @@ import com.bannerbound.core.api.settlement.Settlement;
 
 import net.minecraft.server.level.ServerPlayer;
 
-/** Extension point for mods that need Chronicle unlock conditions beyond Core's built-ins. */
+/**
+ * Extension point for mods that need Chronicle unlock conditions beyond Core's built-ins.
+ * Register a ConditionHandler under a condition type string (thread-safe map); CodexCondition
+ * dispatches to it. Handlers default to event-only matching (type equals the event's type) and
+ * report themselves not state-based, so reconcile only re-checks them on a live event unless the
+ * handler overrides isStateBased.
+ */
 public final class CodexTriggerRegistry {
     private static final Map<String, ConditionHandler> HANDLERS = new ConcurrentHashMap<>();
 

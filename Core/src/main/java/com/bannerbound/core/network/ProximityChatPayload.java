@@ -13,13 +13,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: a proximity chat line. Sent (instead of a normal broadcast) once per in-range
- * listener when the {@code globalChat} game rule is off, carrying the fully-formatted chat / whisper
- * component and an {@code alpha} (0–1) audibility factor derived from the listener's distance to the
- * speaker. The client adds it to chat at that transparency via the chat render mixin.
- *
- * @see com.bannerbound.core.event.ChatEvents
- * @see com.bannerbound.core.chat.ProximityChat
+ * Server -> client: a proximity chat line. Sent (instead of a normal broadcast) once per in-range
+ * listener when the globalChat game rule is off, carrying the fully-formatted chat / whisper
+ * component and an alpha (0-1) audibility factor derived from the listener's distance to the
+ * speaker. The client adds it to chat at that transparency via the chat render mixin. Built by
+ * ChatEvents from ProximityChat.
  */
 @ApiStatus.Internal
 public record ProximityChatPayload(Component message, float alpha) implements CustomPacketPayload {

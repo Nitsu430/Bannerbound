@@ -31,37 +31,49 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Shared rope-tie logic for everything that hosts ropes ({@link RopeTieHost}: posts and gates). Owns
- * the in-progress tie state, the link/break operations, the invisible collision fillers along a span,
- * and the per-anchor "roped" model flag — so posts and gates behave identically and can rope to each
- * other (post↔post, post↔gate, gate↔gate) through one code path.
+ * Shared rope-tie logic for everything that hosts ropes ({@link RopeTieHost}: posts and gates), so
+ * post-post, post-gate and gate-gate ropes all go through one code path. Owns the server-side pending
+ * tie per player (transient, never persisted): the first click selects an anchor, a second different
+ * tie point links, re-clicking the same point is a no-op, and handleTieServer returns true only when a
+ * rope is actually created so the caller can spend a fiber rope. Deliberately no action-bar text during
+ * a tie -- the knot sound, coil model and live preview rope are the feedback. Rope length is capped
+ * (MAX_ROPE_HORIZONTAL keeps a handful of posts from fencing a whole village off; the vertical cap is
+ * generous for terraced ground). The "roped" coil models are server-authoritative blockstate flags,
+ * which the client also flips via setRopedModel to preview the coil on an aimed-at post (reverted with
+ * refreshRoped). HOST_CHUNKS counts tie hosts per chunk per dimension as RopeFenceEvents' cheap
+ * "is a rope nearby" collision gate -- markers can have coverage gaps, host chunks always cover the
+ * whole rope span.
+ *
+ * <p>Collision fillers: invisible RopeCollisionBlock cells placed along each span, owned by the rope's
+ * LOWER anchor (getFillers/putFillers). For every column the rope crosses, gapCells yields the FULL
+ * vertical band the analytical wall blocks (ropeY - TIE_Y up WALL_HEIGHT), not just the cell the rope
+ * line passes through: line-only sampling left A*-walkable holes wherever terrain rose or dipped
+ * mid-span or the line cell was occupied (crop/torch/water), so pathfinders routed "through" the rope
+ * and the clamp ground mobs against the invisible wall forever -- the classic citizen-stuck-at-the-pen
+ * bug. Fillers replace air and replaceable plants (grass, flowers, snow) but never fluids, and carry
+ * ROTATION/OFFSET blockstate so each marker hugs where the rope crosses its cell. refreshFillersOnce
+ * re-places a host's owned fillers once per session to heal spans saved by older line-only versions.
+ * renderBounds inflates a host's render box over all its connections so a rope is not frustum-culled
+ * when only its far end is on screen.
  */
 @ApiStatus.Internal
 public final class RopeTies {
-    /** Longest HORIZONTAL span (blocks) a single rope may bridge — keeps you from fencing a whole
-     *  village off a handful of posts. */
     public static final double MAX_ROPE_HORIZONTAL = 4.0;
-    /** Largest VERTICAL drop/rise (blocks) a single rope may bridge — generous enough for terraced ground. */
     public static final double MAX_ROPE_VERTICAL = 5.0;
 
-    /** Server-side only: each player's loose end mid-tie. Transient — not worth persisting. */
     private static final Map<UUID, Pending> PENDING = new HashMap<>();
 
-    /** Per-dimension count of rope tie hosts per chunk — a cheap, reliable "is a rope nearby" gate for
-     *  the collision (markers can have coverage gaps; tie hosts always cover their whole rope span). */
     private static final Map<ResourceKey<Level>, Map<Long, Integer>> HOST_CHUNKS = new HashMap<>();
 
     private record Pending(RopeAnchor anchor, ResourceKey<Level> dimension) {}
 
     private RopeTies() {}
 
-    /** A rope tie host BE entered the world (placement or chunk load) — register its chunk. */
     public static void onHostLoad(Level level, ChunkPos chunk) {
         HOST_CHUNKS.computeIfAbsent(level.dimension(), k -> new HashMap<>())
             .merge(chunk.toLong(), 1, Integer::sum);
     }
 
-    /** A rope tie host BE left the world (break or chunk unload) — deregister its chunk. */
     public static void onHostUnload(Level level, ChunkPos chunk) {
         Map<Long, Integer> m = HOST_CHUNKS.get(level.dimension());
         if (m == null) {
@@ -77,7 +89,6 @@ public final class RopeTies {
         }
     }
 
-    /** Is there a rope tie host in the 3×3 chunks around ({@code chunkX},{@code chunkZ})? */
     public static boolean hostChunkNear(Level level, int chunkX, int chunkZ) {
         Map<Long, Integer> m = HOST_CHUNKS.get(level.dimension());
         if (m == null || m.isEmpty()) {
@@ -93,14 +104,11 @@ public final class RopeTies {
         return false;
     }
 
-    // ── Tie host lookup ─────────────────────────────────────────────────────────────────────
-
     @Nullable
     public static RopeTieHost hostAt(Level level, BlockPos pos) {
         return level.getBlockEntity(pos) instanceof RopeTieHost host ? host : null;
     }
 
-    /** Which tie slot a click at {@code hit} targets — for a gate, the nearer upright; else slot 0. */
     public static int slotForHit(Level level, BlockPos pos, Vec3 hit) {
         if (!(level.getBlockState(pos).getBlock() instanceof RopeFenceGateBlock)) {
             return 0;
@@ -113,21 +121,15 @@ public final class RopeTies {
         return hit.distanceToSqr(left) <= hit.distanceToSqr(right) ? 0 : 1;
     }
 
-    // ── Tie interaction (right-click with rope) ─────────────────────────────────────────────
-
-    /** Client-side: track the local player's anchor for the preview line (idempotent, no toggle). */
     public static void handleTieClient(Level level, RopeAnchor anchor) {
         if (RopeTieState.get() == null) {
             RopeTieState.set(anchor.immutable(), level.dimension());
         } else if (!RopeTieState.isAt(anchor, level.dimension())) {
-            // Second tie point → link ends the preview; record the new rope so it animates zipping taut.
             RopeTieState.recordZip(RopeTieState.get(), anchor, level.getGameTime());
             RopeTieState.clear();
         }
     }
 
-    /** Server-side: first click selects, a second (different) tie point links, re-clicking is a no-op.
-     *  Returns true if a rope was actually created (so the caller can spend a fiber rope). */
     public static boolean handleTieServer(Level level, Player player, RopeAnchor anchor) {
         UUID id = player.getUUID();
         Pending pending = PENDING.get(id);
@@ -136,7 +138,7 @@ public final class RopeTies {
             return false;
         }
         if (pending.dimension().equals(level.dimension()) && pending.anchor().equals(anchor)) {
-            return false; // re-clicking the same tie point: keep tying (no toggle)
+            return false;
         }
         PENDING.remove(id);
         if (!pending.dimension().equals(level.dimension())) {
@@ -147,7 +149,7 @@ public final class RopeTies {
         Vec3 from = RopeAnchor.worldTie(level, pending.anchor());
         Vec3 to = RopeAnchor.worldTie(level, anchor);
         if (from == null || to == null) {
-            return false; // a tie host is gone
+            return false;
         }
         double horizontal = Math.sqrt((to.x - from.x) * (to.x - from.x) + (to.z - from.z) * (to.z - from.z));
         if (horizontal > MAX_ROPE_HORIZONTAL || Math.abs(to.y - from.y) > MAX_ROPE_VERTICAL) {
@@ -159,7 +161,7 @@ public final class RopeTies {
         RopeTieHost a = hostAt(level, pending.anchor().pos());
         RopeTieHost b = hostAt(level, anchor.pos());
         if (a == null || b == null || a.connections(pending.anchor().slot()).contains(anchor)) {
-            refreshRoped(level, pending.anchor()); // already roped (or host gone): no-op, no action-bar text
+            refreshRoped(level, pending.anchor());
             return false;
         }
         link(level, pending.anchor(), anchor);
@@ -169,8 +171,7 @@ public final class RopeTies {
 
     private static void startTie(Player player, Level level, RopeAnchor anchor) {
         PENDING.put(player.getUUID(), new Pending(anchor.immutable(), level.dimension()));
-        setRopedModel(level, anchor, true); // show its coil while tying (server-authoritative)
-        // No action-bar text — the knot sound + the coil model + the live preview rope are feedback enough.
+        setRopedModel(level, anchor, true);
         level.playSound(null, anchor.pos(), SoundEvents.LEASH_KNOT_PLACE, SoundSource.BLOCKS, 1.0F, 1.0F);
     }
 
@@ -179,7 +180,6 @@ public final class RopeTies {
         return p != null && p.anchor().pos().equals(pos) && p.dimension().equals(player.level().dimension());
     }
 
-    /** Cancel a player's in-progress tie and restore the anchor's model. */
     public static void clearPending(Player player) {
         Pending p = PENDING.remove(player.getUUID());
         if (p != null) {
@@ -196,8 +196,6 @@ public final class RopeTies {
         }
     }
 
-    // ── Link / break ────────────────────────────────────────────────────────────────────────
-
     public static void link(Level level, RopeAnchor a, RopeAnchor b) {
         RopeTieHost ha = hostAt(level, a.pos());
         RopeTieHost hb = hostAt(level, b.pos());
@@ -211,7 +209,6 @@ public final class RopeTies {
         placeFillers(level, a, b);
     }
 
-    /** Remove the rope between {@code a} and {@code b}: both endpoints, the fillers, the model flags. */
     public static void removeLink(Level level, RopeAnchor a, RopeAnchor b) {
         RopeTieHost ha = hostAt(level, a.pos());
         RopeTieHost hb = hostAt(level, b.pos());
@@ -232,12 +229,11 @@ public final class RopeTies {
         }
     }
 
-    /** Break the most recent rope on {@code host} (any slot) and drop the rope. For the left-click QOL. */
     public static boolean breakOne(Level level, BlockPos pos, RopeTieHost host) {
         for (int slot = host.slotCount() - 1; slot >= 0; slot--) {
             RopeAnchor other = null;
             for (RopeAnchor c : host.connections(slot)) {
-                other = c; // insertion-ordered → last is most recent
+                other = c; // insertion-ordered -> last connection is the most recent
             }
             if (other != null) {
                 removeLink(level, new RopeAnchor(pos, slot), other);
@@ -249,7 +245,6 @@ public final class RopeTies {
         return false;
     }
 
-    /** On block removal: cut every rope on this host, drop them all, clear all fillers. */
     public static void breakAllAndDrop(Level level, BlockPos pos, RopeTieHost host) {
         int dropped = 0;
         for (int slot = 0; slot < host.slotCount(); slot++) {
@@ -272,16 +267,11 @@ public final class RopeTies {
         return false;
     }
 
-    // ── "Roped" model flag ──────────────────────────────────────────────────────────────────
-
-    /** Set the post's ROPED / the gate slot's ROPED_LEFT|RIGHT to match its real connection state. */
     public static void refreshRoped(Level level, RopeAnchor anchor) {
         RopeTieHost host = hostAt(level, anchor.pos());
         setRopedModel(level, anchor, host != null && host.isConnected(anchor.slot()));
     }
 
-    /** Force the post/gate-slot roped model on or off. Server uses it during a tie; the client also uses
-     *  it to PREVIEW the coil on a post you're aiming at (reverted via {@link #refreshRoped}). */
     public static void setRopedModel(Level level, RopeAnchor anchor, boolean roped) {
         BlockState st = level.getBlockState(anchor.pos());
         if (st.getBlock() instanceof RopeFencePostBlock) {
@@ -296,8 +286,6 @@ public final class RopeTies {
         }
     }
 
-    // ── Collision fillers along the span ──────────────────────────────────────────────────────
-
     private static void placeFillers(Level level, RopeAnchor a, RopeAnchor b) {
         Vec3 from = RopeAnchor.worldTie(level, a);
         Vec3 to = RopeAnchor.worldTie(level, b);
@@ -310,7 +298,6 @@ public final class RopeTies {
         if (ownerHost == null) {
             return;
         }
-        // Orient each filler band along the rope and offset it to where the rope crosses that cell.
         double dx = to.x - from.x, dz = to.z - from.z;
         double len = Math.sqrt(dx * dx + dz * dz);
         double ux = len == 0 ? 1.0 : dx / len, uz = len == 0 ? 0.0 : dz / len;
@@ -322,8 +309,6 @@ public final class RopeTies {
         List<BlockPos> placed = new ArrayList<>();
         for (BlockPos cell : gapCells(from, to, a.pos(), b.pos())) {
             BlockState cellState = level.getBlockState(cell);
-            // Fill air AND replaceable plants (grass, ferns, flowers, snow) — but never fluids — so the
-            // rope blocks (and mobs path around) even where it crosses vegetation.
             if (cellState.getFluidState().isEmpty() && cellState.canBeReplaced()) {
                 double cx = cell.getX() + 0.5, cz = cell.getZ() + 0.5;
                 double proj = (cx - from.x) * ux + (cz - from.z) * uz;
@@ -346,14 +331,8 @@ public final class RopeTies {
         }
     }
 
-    /** Owner hosts whose fillers were already re-validated this session (see {@link #refreshFillersOnce}). */
     private static final Map<ResourceKey<Level>, Set<Long>> FILLERS_REFRESHED = new HashMap<>();
 
-    /** One-time (per session) filler re-placement for every rope OWNED by {@code host} — heals spans saved
-     *  by older versions whose markers only covered the rope line's own cells, leaving A*-walkable holes
-     *  over mid-span rises/dips and occupied cells. Called from the collision segment gather, so it only
-     *  runs server-side while an entity moves nearby — both ends' chunks are then already loaded and
-     *  setBlock is safe (never during chunk load, which could force-generate neighbours). Idempotent. */
     public static void refreshFillersOnce(Level level, BlockPos hostPos, RopeTieHost host) {
         if (level.isClientSide) {
             return;
@@ -366,10 +345,11 @@ public final class RopeTies {
             RopeAnchor local = new RopeAnchor(hostPos, slot);
             for (RopeAnchor other : new ArrayList<>(host.connections(slot))) {
                 if (local.compareTo(other) > 0) {
-                    continue; // the other end owns this rope's fillers and refreshes them itself
+                    continue;
                 }
+                // Never setBlock during chunk load (force-gen cascade): if the far end is unloaded, undo and retry later.
                 if (level.getChunkSource().getChunkNow(other.pos().getX() >> 4, other.pos().getZ() >> 4) == null) {
-                    done.remove(hostPos.asLong()); // far end not loaded — retry on a later gather
+                    done.remove(hostPos.asLong());
                     return;
                 }
                 removeFillerCells(level, host.getFillers(other));
@@ -378,38 +358,24 @@ public final class RopeTies {
         }
     }
 
-    /** Height of the analytical rope wall — MUST match {@code RopeFenceCollision.FENCE_HEIGHT}, so the
-     *  marker band covers exactly the cells the wall physically blocks. */
+    // MUST match RopeFenceEvents.FENCE_HEIGHT so the marker band covers exactly the cells the wall blocks.
     private static final double WALL_HEIGHT = 2.0;
 
-    /** Marker cells for the span between the two tie points, minus the end blocks. For every COLUMN the
-     *  rope crosses, this yields the full vertical band the analytical wall blocks in that column
-     *  ({@code ropeY - TIE_Y} up {@link #WALL_HEIGHT}) — not just the single cell the rope line passes
-     *  through. Sampling only the line left A*-walkable holes wherever terrain rose or dipped mid-span
-     *  (a 1-block rise put the line cell inside the ground, and the walk cell on TOP of the rise had no
-     *  marker) or the line cell held a crop/torch/water: the pathfinder then routed straight "through"
-     *  the rope and the clamp ground the mob against the invisible wall forever — the classic
-     *  citizen-stuck-at-the-pen bug. Banding also covers the head cell, so a mob whose feet are below
-     *  the wall (1-deep dip) but whose body the wall still blocks sees a FENCE node too. */
     private static List<BlockPos> gapCells(Vec3 from, Vec3 to, BlockPos endA, BlockPos endB) {
         List<BlockPos> out = new ArrayList<>();
         double dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
         double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
         int steps = Math.max(1, Mth.ceil(dist * 3.0));
         Set<Long> seen = new HashSet<>();
-        int bandCells = Mth.ceil(WALL_HEIGHT); // [wallBottom, wallBottom + WALL_HEIGHT) exclusive top plane
+        int bandCells = Mth.ceil(WALL_HEIGHT);
         for (int i = 0; i <= steps; i++) {
             double t = (double) i / steps;
             int x = Mth.floor(from.x + dx * t);
             int z = Mth.floor(from.z + dz * t);
-            // Skip the tie hosts' WHOLE columns, not just their own cells: the post/gate block already
-            // blocks its cell, and a head-height marker ABOVE an open GATE would read as a FENCE inside
-            // the bounding box of any mob pathing through it (the node evaluator merges path types over
-            // the full mob BB) — silently re-sealing the one legal way into the pen.
+            // Skip the hosts' WHOLE columns: a marker above an open gate reads as FENCE across a mob's full BB and re-seals it.
             if ((x == endA.getX() && z == endA.getZ()) || (x == endB.getX() && z == endB.getZ())) {
                 continue;
             }
-            // Bottom of the analytical wall in this column (the rope ties TIE_Y above the post base).
             int yBase = Mth.floor(from.y + dy * t - RopeAnchor.TIE_Y);
             for (int y = yBase; y < yBase + bandCells; y++) {
                 if (seen.add(BlockPos.asLong(x, y, z))) {
@@ -420,9 +386,6 @@ public final class RopeTies {
         return out;
     }
 
-    // ── Rendering ───────────────────────────────────────────────────────────────────────────
-
-    /** Width of the AABB padding so a rope isn't frustum-culled when only the far end is on screen. */
     public static net.minecraft.world.phys.AABB renderBounds(BlockPos pos, RopeTieHost host) {
         double minX = pos.getX(), minY = pos.getY(), minZ = pos.getZ();
         double maxX = minX + 1, maxY = minY + 1, maxZ = minZ + 1;

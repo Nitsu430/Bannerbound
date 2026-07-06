@@ -15,7 +15,7 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * THE house tab style: a file-folder / bookmark tab protruding above a panel's top edge
  * (born on the Town Hall, extracted so every tabbed screen shares one look). The selected tab
- * is full-height, panel-coloured, carries a settlement-identity ribbon (primary→secondary
+ * is full-height, panel-coloured, carries a settlement-identity ribbon (primary->secondary
  * sweep) along its top, and opens its bottom border into the panel so the two read as one
  * piece. Unselected tabs sit 3px lower, darker, with a closed bottom border resting on the
  * panel edge, and glide 2px toward it on hover (instant when {@link Config#UI_ANIMATIONS} off).
@@ -23,13 +23,12 @@ import net.neoforged.api.distmarker.OnlyIn;
  * <p>Tabs are NOT buttons: don't build tab strips out of PolishButtons with the active one
  * disabled. Use {@link #addRow} for the standard evenly-split strip, or the constructor
  * directly for bespoke layouts. Remember to shift the panel down by {@link #HEIGHT} (center
- * panel + strip as one block) so the protruding tabs stay on-screen — see TownHallScreen's
+ * panel + strip as one block) so the protruding tabs stay on-screen -- see TownHallScreen's
  * {@code panelY} math.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class BookmarkTab extends Button {
-    /** Standard strip height. Panels with a tab row shift down by this much. */
     public static final int HEIGHT = 16;
     private static final int EDGE_PAD = 6;
     private static final int GAP = 3;
@@ -38,7 +37,6 @@ public final class BookmarkTab extends Button {
     private final int accent;
     private final int accent2;
     private final int panelTopY;
-    /** 0→1 hover ease — per-frame exponential approach (see class doc). */
     private float hoverEase = 0f;
 
     public BookmarkTab(int x, int y, int w, int h, int panelTopY, Component label,
@@ -50,11 +48,6 @@ public final class BookmarkTab extends Button {
         this.panelTopY = panelTopY;
     }
 
-    /** Standard strip: {@code labels} split evenly across the panel's top edge (the last tab
-     *  absorbs integer-division rounding), each wired to {@code onSelect(index)}. Accents come
-     *  from the screen's identity list ({@code primaryAccent()} / second color, or pass the
-     *  same value twice for a flat ribbon). Feed each created tab to {@code add}
-     *  (normally {@code this::addRenderableWidget}). */
     public static void addRow(java.util.function.Consumer<BookmarkTab> add,
                               int panelX, int panelWidth, int panelY,
                               java.util.List<Component> labels, int activeIndex,
@@ -89,19 +82,13 @@ public final class BookmarkTab extends Button {
 
         int fill = selected ? GuiPalette.PANEL_BG : (hovered ? 0xFF262626 : GuiPalette.WELL_BG);
         g.fill(x, top, x + w, bottom, fill);
-        // Top + side borders.
         g.fill(x, top, x + w, top + 1, border);
         g.fill(x, top, x + 1, bottom, border);
         g.fill(x + w - 1, top, x + w, bottom, border);
         if (selected) {
-            // Identity ribbon under the top border — the "bookmark" — sweeping
-            // primary→secondary across its width.
             PolishedScreen.drawHorizontalGradient(g, x + 1, top + 1, w - 2, 1, accent, accent2);
-            // Open the bottom: paint over the panel's top border beneath this tab so the tab
-            // and body read as one continuous piece.
             g.fill(x + 1, bottom, x + w - 1, bottom + 1, GuiPalette.PANEL_BG);
         } else {
-            // Closed bottom border, resting on the panel's top edge.
             g.fill(x, bottom - 1, x + w, bottom, border);
         }
         Font font = Minecraft.getInstance().font;
@@ -110,7 +97,6 @@ public final class BookmarkTab extends Button {
         g.drawCenteredString(font, clip(font, getMessage(), w - 6), x + w / 2, textY, textColor);
     }
 
-    /** Ellipsis-clips a label to {@code maxWidth} so long words can't spill out of the tab. */
     static Component clip(Font font, Component c, int maxWidth) {
         String s = c.getString();
         if (font.width(s) <= maxWidth) return c;

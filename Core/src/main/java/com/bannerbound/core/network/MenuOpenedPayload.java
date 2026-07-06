@@ -11,9 +11,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client -> server: the player opened one of the mod's menus (the {@code menuId} names which, e.g.
- * {@code "chronicle"}). Fires a {@code menu_opened} Chronicle trigger so tutorial objectives like
- * "open the Chronicle" can complete just from opening the screen — no entry has to be read.
+ * Client -> server: the player opened one of the mod's menus (menuId names which, e.g. "chronicle").
+ * Fires a menu_opened Chronicle trigger so tutorial objectives like "open the Chronicle" can complete
+ * just from opening the screen -- no entry has to be read.
  */
 @ApiStatus.Internal
 public record MenuOpenedPayload(String menuId) implements CustomPacketPayload {

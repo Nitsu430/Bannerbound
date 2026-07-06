@@ -16,32 +16,28 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 
 /**
- * Cheap, one-time terrain check run the moment a player opens the founding screen, so the screen
- * can warn them off obviously poor sites (a desert with no water, etc.) before they commit. Samples
- * a coarse grid of surface columns over the initial-claim footprint (3×3 chunks around the town
- * hall) and derives {@link SiteWarning}s from the mix of water vs. arable ground.
- * <p>
- * Sampling is deliberately forgiving: an unloaded column is skipped, and if the whole area is
- * unloaded (shouldn't happen — the player is standing in it) we raise no warnings rather than a
- * false alarm.
+ * Cheap, one-time terrain check run the moment a player opens the founding screen, so the screen can
+ * warn them off obviously poor sites (desert with no water, barren ground) before they commit.
+ * assess/assessMask sample a coarse grid (every STEP=4th surface column) over a 5x5-chunk footprint
+ * around the town hall -- RADIUS_CHUNKS=2 is deliberately one wider than the initial claim radius,
+ * because a settlement can expand to own more than its starting chunks, so we judge the land it could
+ * plausibly reach. Each land column is dug up to FOLIAGE_DEPTH=12 blocks past canopy/tall-grass/snow
+ * to the real ground and classified fertile (BlockTags.DIRT -- grass, dirt, podzol, coarse/rooted
+ * dirt, mycelium, moss, mud -- plus farmland and moss block); below MIN_GRASS_FRACTION=0.15
+ * fertile-of-land the site reads POOR_SOIL, and zero open-water columns reads NO_WATER. Sampling is
+ * forgiving: unloaded columns are skipped, and if the whole area is unloaded (shouldn't happen -- the
+ * player stands in it) we raise no warnings rather than a false alarm.
  */
 @ApiStatus.Internal
 public final class SettlementSiteAssessor {
-    /** Footprint sampled, in chunks out from the town-hall chunk. One wider than the initial
-     *  claim radius (1) — a settlement can expand to own more than its starting chunks, so the
-     *  assessment looks at the land it could plausibly reach, not just the chunks it claims today. */
     private static final int RADIUS_CHUNKS = 2;
-    /** Grid spacing in blocks — every 4th column, ~400 samples over the 5×5-chunk area. */
     private static final int STEP = 4;
-    /** Blocks scanned downward from the surface to find true ground beneath foliage/snow. */
     private static final int FOLIAGE_DEPTH = 12;
-    /** Below this fraction of land columns being fertile, the ground reads as barren. */
     private static final double MIN_GRASS_FRACTION = 0.15;
 
     private SettlementSiteAssessor() {
     }
 
-    /** Bitmask form of {@link #assess}, ready to drop onto the open-screen payload. */
     public static int assessMask(ServerLevel level, BlockPos center) {
         return SiteWarning.toMask(assess(level, center));
     }
@@ -68,15 +64,12 @@ public final class SettlementSiteAssessor {
                 sampled++;
                 int top = level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z);
 
-                // The topmost non-air block: water here means an open-water column.
                 cursor.set(x, top - 1, z);
                 if (level.getBlockState(cursor).getFluidState().is(FluidTags.WATER)) {
                     water++;
                     continue;
                 }
 
-                // Otherwise dig past tree canopy / tall grass / snow to the real ground block and
-                // judge whether it can grow anything.
                 for (int y = top - 1; y >= top - FOLIAGE_DEPTH && y > minY; y--) {
                     cursor.set(x, y, z);
                     BlockState s = level.getBlockState(cursor);
@@ -107,8 +100,6 @@ public final class SettlementSiteAssessor {
         return warnings;
     }
 
-    /** Ground that can support grass/crops. {@code BlockTags.DIRT} covers grass block, dirt,
-     *  podzol, coarse dirt, mycelium, rooted dirt, moss and mud. */
     private static boolean isFertile(BlockState s) {
         return s.is(BlockTags.DIRT) || s.is(Blocks.FARMLAND) || s.is(Blocks.MOSS_BLOCK);
     }

@@ -13,10 +13,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: open the home-resident picker for the home with id {@code homeId}. The server
- * responds with {@link HomeCitizenListPayload}, listing every citizen in the player's settlement
- * bucketed into (current residents · homeless · other-home residents) so the picker can render the
- * three sections in priority order.
+ * Client -> server: open the home-resident picker for the home with id homeId. The server responds
+ * with HomeCitizenListPayload, listing every citizen in the player's settlement bucketed into
+ * (current residents, homeless, other-home residents) so the picker can render the three sections
+ * in priority order.
  */
 @ApiStatus.Internal
 public record RequestHomeCitizenListPayload(UUID homeId) implements CustomPacketPayload {

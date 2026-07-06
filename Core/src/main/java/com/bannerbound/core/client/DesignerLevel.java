@@ -42,21 +42,20 @@ import net.minecraft.world.ticks.BlackholeTickAccess;
 import net.minecraft.world.ticks.LevelTickAccess;
 
 /**
- * A throwaway {@link Level} backed by the Wall Designer's edit grid — exists so the designer
+ * A throwaway {@link Level} backed by the Wall Designer's edit grid - exists so the designer
  * can run the REAL placement code path ({@code Block.getStateForPlacement} with a genuine
  * {@code BlockPlaceContext}) instead of dropping default states: torches become wall torches
  * on side faces, slabs pick halves, stairs orient, ladders attach ("make sure ALL block
  * states are supported", playtest 2026-06-12).
  *
  * <p>Only the surface placement logic touches is real: {@code getBlockState}/{@code
- * getFluidState}/{@code setBlock} hit the grid (absent/out-of-bounds = air), light is a dead
- * engine, there are no entities, ticks are black holes, and the handful of registry-ish
- * lookups defer to the real client level.
+ * getFluidState}/{@code setBlock} hit the grid (absent/out-of-bounds = air; grid cells are
+ * addressed in world coords x=l/y=h/z=d), light is a dead engine, there are no entities, ticks
+ * are black holes, and the handful of registry-ish lookups defer to the real client level.
  */
 @ApiStatus.Internal
 public final class DesignerLevel extends Level {
 
-    /** The designer's live cell store, adapted to world coords (x=l, y=h, z=d). */
     public interface Grid {
         @Nullable
         BlockState get(BlockPos pos);
@@ -77,8 +76,6 @@ public final class DesignerLevel extends Level {
         this.delegate = delegate;
         this.grid = grid;
     }
-
-    // ─── The parts placement logic actually reads/writes ────────────────────────────────────
 
     @Override
     public BlockState getBlockState(BlockPos pos) {
@@ -107,8 +104,6 @@ public final class DesignerLevel extends Level {
     public boolean isLoaded(BlockPos pos) {
         return true;
     }
-
-    // ─── Dead machinery ─────────────────────────────────────────────────────────────────────
 
     @Override
     public ChunkSource getChunkSource() {
@@ -210,8 +205,6 @@ public final class DesignerLevel extends Level {
         return 1.0f;
     }
 
-    // ─── Deferred to the real level ─────────────────────────────────────────────────────────
-
     @Override
     public net.minecraft.world.TickRateManager tickRateManager() {
         return delegate.tickRateManager();
@@ -242,8 +235,6 @@ public final class DesignerLevel extends Level {
         return delegate.potionBrewing();
     }
 
-    // ─── NeoForge day-time extension: this level has no day ─────────────────────────────────
-
     @Override
     public float getDayTimeFraction() {
         return 0f;
@@ -262,7 +253,6 @@ public final class DesignerLevel extends Level {
     public void setDayTimePerTick(float perTick) {
     }
 
-    /** No chunks, dead light — placement logic never gets this far with the grid overrides. */
     private final class DeadChunkSource extends ChunkSource {
         private final LevelLightEngine light = new LevelLightEngine(new LightChunkGetter() {
             @Override
@@ -308,7 +298,6 @@ public final class DesignerLevel extends Level {
         }
     }
 
-    /** Entity storage with nothing in it. */
     private static final class EmptyEntityGetter implements LevelEntityGetter<Entity> {
         static final EmptyEntityGetter INSTANCE = new EmptyEntityGetter();
 

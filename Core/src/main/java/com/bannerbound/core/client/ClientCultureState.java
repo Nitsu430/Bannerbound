@@ -13,9 +13,10 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Client-side mirror of the settlement's Culture-tree state. Twin of
- * {@link ClientResearchState} — separate fields so the {@code ResearchScreen}'s Culture tab
+ * {@link ClientResearchState} - separate fields so the {@code ResearchScreen}'s Culture tab
  * can render an independent board with its own active research, progress map, and queue.
- * The same {@link ResearchDefinition} record powers both trees.
+ * The same {@link ResearchDefinition} record powers both trees; culture nodes may list science
+ * prerequisites, so {@link #prereqsMet} resolves prereqs against both trees.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -79,7 +80,7 @@ public final class ClientCultureState {
 
     public static boolean prereqsMet(ResearchDefinition def) {
         for (String prereq : def.prerequisites()) {
-            // Cross-tree: a culture node may require a science node (e.g. Roads ← PAVING).
+            // Cross-tree: a culture node may require a science node (e.g. Roads needs PAVING)
             if (!completed.contains(prereq) && !ClientResearchState.isCompleted(prereq)) {
                 return false;
             }

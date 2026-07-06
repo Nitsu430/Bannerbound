@@ -3,39 +3,30 @@ package com.bannerbound.core.client;
 import org.jetbrains.annotations.ApiStatus;
 
 /**
- * Single source of truth for the tribe-vote reveal animation timing. Both the server
- * (which schedules the chief/government enactment after the reveal) and the client
- * ({@link TribeVoteScreen}, which paces the row reveals) read from here so the install
- * fires exactly when the last vote lands on screen — no drift if either side is tuned.
+ * Single source of truth for the tribe-vote reveal animation timing, shared so client and server
+ * never drift. TribeVoteScreen paces the on-screen row reveals from these constants; the server
+ * calls revealDurationMs() and passes it to schedulePendingChief / schedulePendingGovernment so
+ * the chief/government enactment lands exactly when the last vote finishes revealing.
  *
- * <p>The reveal sequence is: a per-vote delay starting at {@link #FIRST_DELAY_MS} and
- * decaying by {@link #DECAY_FACTOR} on each step, floored at {@link #MIN_DELAY_MS}.
- * {@link #revealDurationMs(int)} computes the total time the screen will spend revealing
- * {@code n} votes; the server passes this to {@code schedulePendingChief} /
- * {@code schedulePendingGovernment} so the enactment lands right after the last reveal.
+ * <p>Reveal sequence: a per-vote delay starting at FIRST_DELAY_MS (the "Waiting..." opening pause)
+ * and multiplied by DECAY_FACTOR (< 1, so reveals accelerate) each step, floored at MIN_DELAY_MS
+ * (keeps the last few from firing on one frame). revealDurationMs(n) sums those delays and adds
+ * FINAL_HOLD_MS, a trailing linger that lets the player read the result before the enactment and
+ * its chat broadcast land.
  *
- * <p>Lives in the client package because the screen reads the constants directly, but the
- * class itself is plain Java with no client-only dependencies — the server imports it for
- * the duration calculation.
+ * <p>Lives in the client package because the screen reads the constants directly, but is plain
+ * Java with no client-only dependencies so the server can import it for the duration calc.
  */
 @ApiStatus.Internal
 public final class TribeVoteTiming {
-    /** Delay before the first vote reveals — the "Waiting..." pause. */
     public static final long FIRST_DELAY_MS = 1000L;
-    /** Each subsequent delay is multiplied by this factor (< 1 → accelerating). */
     public static final double DECAY_FACTOR = 0.65;
-    /** Floor for the per-vote delay so the last few don't fire on the same frame. */
     public static final long MIN_DELAY_MS = 80L;
-    /** Linger after the last reveal — gives the player a beat to read the result before
-     *  the install enacts and the chat broadcast lands. */
     public static final long FINAL_HOLD_MS = 2000L;
 
     private TribeVoteTiming() {
     }
 
-    /** Total ms the reveal animation takes for {@code voteCount} votes, INCLUDING the
-     *  {@link #FINAL_HOLD_MS} trailing pause. Server-side code uses this to schedule the
-     *  pending chief/government enactment so it fires exactly when the animation ends. */
     public static long revealDurationMs(int voteCount) {
         if (voteCount <= 0) return FINAL_HOLD_MS;
         long total = 0L;

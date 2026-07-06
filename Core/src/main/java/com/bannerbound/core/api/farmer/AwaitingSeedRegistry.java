@@ -15,13 +15,13 @@ import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Process-wide queue of seed-picker prompts waiting to be delivered. A farmer selection that
- * finishes tilling but has no seed assigned is queued here keyed by the player who created it.
- * When that player is online, the popup pushes immediately. Otherwise it sits until login,
- * and {@code FactionEvents.onPlayerLoggedIn} drains the pending entries.
- * <p>
- * Not persisted: if the server restarts, the next tick of the work goal re-detects "tilled but
- * unseeded" selections and re-queues them.
+ * Process-wide queue of seed-picker prompts waiting to be delivered, keyed by the player who
+ * created the farmer selection. A selection that finishes tilling with no seed assigned is
+ * queued here; if the creator is online the popup pushes immediately, otherwise it waits until
+ * login and {@code FactionEvents.onPlayerLoggedIn} drains the pending entries. All methods are
+ * synchronized because the work goal (server thread) and login handler can both touch PENDING.
+ * Not persisted: after a restart the next work-goal tick re-detects "tilled but unseeded"
+ * selections and re-queues them.
  */
 public final class AwaitingSeedRegistry {
     private static final Map<UUID, Deque<UUID>> PENDING = new HashMap<>();
@@ -29,8 +29,6 @@ public final class AwaitingSeedRegistry {
     private AwaitingSeedRegistry() {
     }
 
-    /** Queue a pending seed prompt for {@code creatorId} on {@code rodId}. If the creator is
-     *  online, also push the popup right now. Idempotent: re-queuing the same rod is a no-op. */
     public static synchronized void queueAndMaybePush(MinecraftServer server, UUID creatorId,
                                                        UUID rodId,
                                                        List<String> candidateSeeds,
@@ -44,21 +42,17 @@ public final class AwaitingSeedRegistry {
         }
     }
 
-    /** Returns and removes the pending rod ids for {@code creatorId} (FIFO). Empty list if none. */
     public static synchronized List<UUID> drainFor(UUID creatorId) {
         Deque<UUID> q = PENDING.remove(creatorId);
         if (q == null || q.isEmpty()) return List.of();
         return new ArrayList<>(q);
     }
 
-    /** True if {@code rodId} is already in the queue for {@code creatorId}. */
     public static synchronized boolean isQueued(UUID creatorId, UUID rodId) {
         Deque<UUID> q = PENDING.get(creatorId);
         return q != null && q.contains(rodId);
     }
 
-    /** Remove {@code rodId} from any pending queue. Called when the seed is chosen or the
-     *  selection is deleted out from under the prompt. */
     public static synchronized void unqueue(UUID rodId) {
         for (Deque<UUID> q : PENDING.values()) {
             q.remove(rodId);

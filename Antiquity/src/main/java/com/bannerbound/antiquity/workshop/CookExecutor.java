@@ -41,36 +41,55 @@ import net.minecraft.world.phys.AABB;
  * cooking pot; the cook runs three product lines:
  *
  * <ul>
- *   <li><b>Stew</b> (standing behavior): FILL the fired clay bucket at open water, POUR it into an
- *       empty pot, ADD the best fully-stockable named stew's ingredients — the pot's own campfire
- *       timer simmers it (a walk-away wait) and citizens eat straight from the pot
- *       ({@code StewEatGoal}) while the larder draws its value down. A pot holding stew or already
- *       simmering is skipped, so one pot holds at most one batch — that pot state IS the in-flight
- *       gate, and stew never appears as an item.</li>
- *   <li><b>Roasting</b> (orders/min-stock): lay raw food on the kitchen's open campfires'
- *       vanilla roast slots (ROAST-PLACE, gated by {@code Workshops.wantsAnother} counting
- *       slots + uncollected drops as in-flight); the vanilla timer cooks and EJECTS the food to
- *       the ground, and ROAST-COLLECT (ungated, top priority) sweeps it into storage.</li>
+ *   <li><b>Stew</b> (standing behavior, not order-driven): FILL the fired clay bucket at open water
+ *       (only worth it when a fully-stockable stew can follow), POUR it into an empty pot, ADD the
+ *       best stockable named stew's ingredients - best = highest sum of per-ingredient cooking
+ *       value x count x recipe bonus, with each ingredient multiplied up toward the pot's
+ *       MAX_INGREDIENTS (evenly split across ingredient types, capped by stock) since richer pots
+ *       feed more citizens per trip. The pot's own campfire timer simmers it (a walk-away wait) and
+ *       citizens eat straight from the pot ({@code StewEatGoal}) while the larder draws its value
+ *       down. A pot holding stew or already simmering is skipped, so one pot holds at most one
+ *       batch - that pot state IS the in-flight gate, and stew never appears as an item (so the
+ *       stew line deliberately contributes nothing to {@link #possibleOutputs}/min-stock).</li>
+ *   <li><b>Roasting</b> (orders FIFO, then min-stock): lay raw food on the kitchen's open
+ *       campfires' vanilla roast slots (ROAST-PLACE, gated by {@code Workshops.wantsAnother}
+ *       counting matching raws already on fires plus matching cooked drops not yet swept as
+ *       in-flight, so a single order never double-places); the vanilla timer cooks and EJECTS the
+ *       food to the ground, and ROAST-COLLECT (ungated, top priority - the food is already cooked
+ *       and despawns if left) sweeps one drop type into storage. A swept batch fulfils one order
+ *       unit per item collected because the place step is orderless.</li>
+ *   <li><b>Drying</b> (same two passes, gated on net demand including hanging in-flight):
+ *       RACK-HANG raws onto kitchen drying racks; the rack's own timer dries them and RACK-TAKE
+ *       (ungated - a finished FOOD slot jams the spot until lifted) collects jerky/dried fish.
+ *       Only FOOD-category slots are the cook's; craft-category slots (thatch) belong to General
+ *       Crafts.</li>
  * </ul>
  *
  * <p>Steps are tagged in an identity map at {@link #chooseCraft} (ADD and ROAST-PLACE share the
  * same input/result shape, so the Tannery shape idiom alone can't discriminate here); the goal
- * holds one Craft instance through its whole lifecycle, and finish/onAbort clear the tag.
+ * holds one Craft instance through its whole lifecycle, and finish/onAbort clear the tag
+ * ({@code stepOf} falls back to the unambiguous shapes for a craft that somehow outlived its tag).
+ * onAbort needs no world rollback because no step commits anything world-side before
+ * {@code finish()}. FILL happens at the water source, ROAST steps at a kitchen fire, RACK steps at
+ * a rack, POUR/ADD at the pot ({@link #workTarget}); POUR returns the emptied bucket and FILL the
+ * filled one so the pair cycles through storage. Stocker surfaces: {@link #missingInputs} keeps a
+ * small buffer of every named stew's concrete ingredients while any pot sits idle, plus the raws
+ * behind every wanted roast/dry, and orders the kitchen's ONE conserved fired clay bucket only when
+ * neither the empty nor the filled variant is on hand (the tannery bucket rule);
+ * {@link #retainedItems} keeps the bucket pair and every stew/roast/dry input (for stew tags, every
+ * tag member) so a batch waiting its turn isn't hauled back out between crafts.
  */
 public class CookExecutor implements WorkExecutor {
     private static final int BEATS = 3;
-    private static final int FILL_TICKS = 40;      // scooping the bucket full at the water source
-    private static final int POUR_TICKS = 40;      // emptying it into the pot
-    private static final int ADD_TICKS = 60;       // dropping the ingredients in, one plop per beat
-    private static final int ROAST_HANDLE_TICKS = 30;  // laying food on / sweeping food off a fire
-    /** How far off a fire an ejected roast can land and still be swept (vanilla pops them just on top). */
-    private static final double SWEEP_RANGE = 2.0;
-    /** Most raws laid per ROAST-PLACE trip (a campfire has 4 slots; demand caps it below this). */
+    private static final int FILL_TICKS = 40;
+    private static final int POUR_TICKS = 40;
+    private static final int ADD_TICKS = 60;
+    private static final int ROAST_HANDLE_TICKS = 30;
+    private static final double SWEEP_RANGE = 2.0; // vanilla ejects cooked items just on top of the fire
     private static final int MAX_PLACE_BATCH = 4;
 
     private enum Step { FILL, POUR, ADD, ROAST_PLACE, ROAST_COLLECT, RACK_HANG, RACK_TAKE }
 
-    /** The active step per in-flight Craft (assigned in chooseCraft, cleared in finish/onAbort). */
     private final Map<Craft, Step> steps = new IdentityHashMap<>();
 
     @Nullable
@@ -80,13 +99,10 @@ public class CookExecutor implements WorkExecutor {
             sl.getBlockEntity(workBlock) instanceof StoneCookingPotBlockEntity p ? p : null;
         if (pot == null) return null;
         List<BlockPos> fires = CookingWorkshopRules.roastingFires(sl, settlement, workshop);
-        // ROAST-COLLECT — ungated: the food is already cooked and despawns if left on the ground.
         ItemStack sweep = sweepableRoast(sl, fires);
         if (!sweep.isEmpty()) {
             return tag(new Craft(List.of(), sweep, ROAST_HANDLE_TICKS, 1), Step.ROAST_COLLECT);
         }
-        // RACK-TAKE — ungated: a finished FOOD slot on a kitchen rack (jerky, dried fish) jams the
-        // spot until lifted. Craft-category slots (thatch) belong to General Crafts, not the cook.
         List<BlockPos> racks = RackTending.racks(sl, workshop);
         BlockPos dryRack = RackTending.rackWithDry(sl, racks,
             com.bannerbound.antiquity.recipe.DryingRackRecipe.FOOD);
@@ -97,17 +113,14 @@ public class CookExecutor implements WorkExecutor {
                 return tag(new Craft(List.of(), dried, ROAST_HANDLE_TICKS, 1), Step.RACK_TAKE);
             }
         }
-        // Stew line — a pot holding stew (citizens eat it down) or already simmering needs nothing.
         if (!pot.hasStew() && !pot.isCooking()) {
             if (!pot.hasWater()) {
-                // POUR: a filled bucket is on hand → empty it into the pot; the empty one cycles back.
                 if (WorkshopStorage.count(sl, workshop, BannerboundAntiquity.CLAY_FIRED_WATER_BUCKET.get()) > 0) {
                     return tag(new Craft(
                         List.of(new ItemStack(BannerboundAntiquity.CLAY_FIRED_WATER_BUCKET.get())),
                         new ItemStack(BannerboundAntiquity.CLAY_FIRED_BUCKET.get()), POUR_TICKS, BEATS),
                         Step.POUR);
                 }
-                // FILL: carry the empty bucket to open water — only worth it when a stew can follow.
                 if (WorkshopStorage.count(sl, workshop, BannerboundAntiquity.CLAY_FIRED_BUCKET.get()) > 0
                         && CookingWorkshopRules.findWaterSource(sl, workBlock) != null
                         && bestStockedStew(sl, workshop) != null) {
@@ -117,22 +130,18 @@ public class CookExecutor implements WorkExecutor {
                         Step.FILL);
                 }
             } else if (pot.ingredientCount() == 0 && pot.isHeated()) {
-                // ADD-INGREDIENTS: watered, empty and on a live fire → load the best stockable stew;
-                // the pot cooks it on its own timer while the cook walks off.
                 List<ItemStack> inputs = ingredientsFor(sl, workshop, bestStockedStew(sl, workshop));
                 if (!inputs.isEmpty()) {
                     return tag(new Craft(inputs, ItemStack.EMPTY, ADD_TICKS, BEATS), Step.ADD);
                 }
             }
         }
-        // ROAST-PLACE — orders FIFO, then min-stock (the standard two passes).
         if (!fires.isEmpty()) {
             Craft roast = tryRoastPlace(sl, settlement, workshop, workBlock, fires, true);
             if (roast != null) return roast;
             roast = tryRoastPlace(sl, settlement, workshop, workBlock, fires, false);
             if (roast != null) return roast;
         }
-        // RACK-HANG — food drying (same two passes, gated on net demand incl. hanging in-flight).
         if (!racks.isEmpty() && RackTending.rackWithRoom(sl, racks) != null) {
             Craft hang = tryRackHang(sl, settlement, workshop, workBlock, racks, true);
             if (hang != null) return hang;
@@ -168,16 +177,12 @@ public class CookExecutor implements WorkExecutor {
     private Step stepOf(Craft craft) {
         Step step = steps.get(craft);
         if (step != null) return step;
-        // Shape fallback (a craft that somehow outlived its tag): the unambiguous shapes.
         if (craft.result().is(BannerboundAntiquity.CLAY_FIRED_WATER_BUCKET.get())) return Step.FILL;
         if (craft.result().is(BannerboundAntiquity.CLAY_FIRED_BUCKET.get())) return Step.POUR;
         if (!craft.result().isEmpty() && craft.inputs().isEmpty()) return Step.ROAST_COLLECT;
         return Step.ADD;
     }
 
-    // ── Roasting line ───────────────────────────────────────────────────────────────────────────
-
-    /** One cooked-food drop type waiting near the kitchen's fires (item + total count), or EMPTY. */
     private static ItemStack sweepableRoast(ServerLevel sl, List<BlockPos> fires) {
         Item found = null;
         int count = 0;
@@ -218,8 +223,6 @@ public class CookExecutor implements WorkExecutor {
             CampfireCookingRecipe recipe = holder.value();
             ItemStack cooked = recipe.getResultItem(sl.registryAccess());
             if (cooked.isEmpty() || !CraftGating.canProduceAt(sl, workBlock, cooked.getItem())) continue;
-            // Demand check with the waiting-stage in-flight count: matching raws already on fires
-            // plus matching cooked drops not yet swept — a single order never double-places.
             int inFlight = roastsInFlight(sl, fires, recipe, cooked);
             boolean wanted = ordersOnly
                 ? Workshops.orderedCraftCount(workshop, cooked.getItem()) - inFlight > 0
@@ -244,7 +247,6 @@ public class CookExecutor implements WorkExecutor {
         return free;
     }
 
-    /** Raws of this recipe cooking on the fires + its cooked results lying uncollected beside them. */
     private static int roastsInFlight(ServerLevel sl, List<BlockPos> fires,
                                       CampfireCookingRecipe recipe, ItemStack cooked) {
         int count = 0;
@@ -261,7 +263,6 @@ public class CookExecutor implements WorkExecutor {
         return count;
     }
 
-    /** A stocked item this campfire recipe accepts, or {@code null}. */
     @Nullable
     private static Item stockedRaw(ServerLevel sl, Workshop workshop, CampfireCookingRecipe recipe) {
         if (recipe.getIngredients().isEmpty()) return null;
@@ -271,10 +272,6 @@ public class CookExecutor implements WorkExecutor {
         return null;
     }
 
-    // ── Stew line helpers ───────────────────────────────────────────────────────────────────────
-
-    /** The stockable named stew worth the most cooked value right now, or {@code null}. Value =
-     *  Σ(each planned ingredient's cooking value × count) × the recipe's bonus. */
     @Nullable
     private static StewRecipe bestStockedStew(ServerLevel sl, Workshop workshop) {
         StewRecipe best = null;
@@ -299,10 +296,6 @@ public class CookExecutor implements WorkExecutor {
         return recipe == null ? List.of() : planIngredients(sl, workshop, recipe);
     }
 
-    /** The stacks to withdraw for one pot-load of {@code recipe}: one stocked item per ingredient,
-     *  multiplied up toward {@link StoneCookingPotBlockEntity#MAX_INGREDIENTS} (evenly split across
-     *  the ingredient types, capped by stock) — richer pots feed more citizens per trip. Empty when
-     *  any ingredient has no stocked match (the recipe isn't fully stockable). */
     private static List<ItemStack> planIngredients(ServerLevel sl, Workshop workshop, StewRecipe recipe) {
         int types = recipe.ingredients().size();
         if (types == 0 || types > StoneCookingPotBlockEntity.MAX_INGREDIENTS) return List.of();
@@ -317,7 +310,6 @@ public class CookExecutor implements WorkExecutor {
         return plan;
     }
 
-    /** A stocked item satisfying this ingredient (exact item, or any stocked member of its tag). */
     @Nullable
     private static Item stockedMatch(ServerLevel sl, Workshop workshop, StewRecipe.Ing ing) {
         if (ing.item().isPresent()) {
@@ -332,15 +324,11 @@ public class CookExecutor implements WorkExecutor {
         return null;
     }
 
-    /** An ingredient's cooking value: the recipe's per-ingredient override, else its food value. */
     private static double ingredientValue(StewRecipe recipe, Item item) {
         double v = recipe.valueFor(item);
         return v >= 0.0 ? v : FoodValueLoader.base(item);
     }
 
-    // ── Work placement & lifecycle ──────────────────────────────────────────────────────────────
-
-    /** FILL happens at the water source; ROAST steps at a kitchen fire; POUR/ADD at the pot. */
     @Override
     public BlockPos workTarget(ServerLevel sl, Settlement settlement, Workshop workshop,
                                BlockPos workBlock, Craft craft) {
@@ -376,13 +364,13 @@ public class CookExecutor implements WorkExecutor {
                         && !pot.hasStew()) {
                     pot.setWater(true);
                 }
-                return craft.result().copy();   // the emptied bucket cycles back to storage
+                return craft.result().copy();
             }
             case ADD -> {
                 if (sl.getBlockEntity(workBlock) instanceof StoneCookingPotBlockEntity pot) {
                     for (ItemStack input : craft.inputs()) {
                         for (int i = 0; i < input.getCount(); i++) {
-                            if (!pot.addIngredient(input)) break;   // pot full / raced — stop plopping
+                            if (!pot.addIngredient(input)) break;
                         }
                     }
                 }
@@ -397,10 +385,10 @@ public class CookExecutor implements WorkExecutor {
                     if (!(sl.getBlockEntity(fire) instanceof CampfireBlockEntity be)) continue;
                     while (!raws.isEmpty() && recipe != null
                             && be.placeFood(citizen, raws, recipe.getCookingTime())) {
-                        // placeFood split one off; keep loading this fire's free slots.
+                        // placeFood split one item off raws; keep filling this fire's free slots
                     }
                 }
-                return raws;   // any un-placed remainder goes back to storage, not into the void
+                return raws; // un-placed remainder goes back to storage, never voided
             }
             case ROAST_COLLECT -> {
                 if (workshop == null) return ItemStack.EMPTY;
@@ -431,12 +419,12 @@ public class CookExecutor implements WorkExecutor {
                 if (rack != null && sl.getBlockEntity(rack)
                         instanceof com.bannerbound.antiquity.block.entity.DryingRackBlockEntity be
                         && be.hang(craft.inputs().get(0))) {
-                    return ItemStack.EMPTY;   // the rack's own timer dries it; RACK-TAKE collects
+                    return ItemStack.EMPTY;
                 }
-                return craft.inputs().get(0).copy();   // raced full — hand the input back
+                return craft.inputs().get(0).copy(); // rack raced full; hand the input back
             }
             default -> {
-                return craft.result().copy();   // FILL: the now-filled bucket back to storage
+                return craft.result().copy();
             }
         }
     }
@@ -453,7 +441,6 @@ public class CookExecutor implements WorkExecutor {
         return null;
     }
 
-    /** A swept roast batch fulfils one queued unit per item collected (the place step is orderless). */
     @Override
     public int fulfilledOrderUnits(ServerLevel sl, BlockPos workBlock, Craft craft, ItemStack output) {
         return Math.max(1, output.getCount());
@@ -461,7 +448,7 @@ public class CookExecutor implements WorkExecutor {
 
     @Override
     public void onAbort(ServerLevel sl, CitizenEntity citizen, BlockPos workBlock, Craft craft) {
-        steps.remove(craft);   // nothing world-side is committed before finish() on any step
+        steps.remove(craft);
     }
 
     @Override
@@ -481,8 +468,6 @@ public class CookExecutor implements WorkExecutor {
             case RACK_HANG, RACK_TAKE ->
                 sl.playSound(null, at, SoundEvents.LEASH_KNOT_PLACE, SoundSource.BLOCKS, 0.5F, 1.0F);
             default ->
-                // Prepping ingredients over the pot — chopping-board knocks; the plops themselves
-                // play when finish() drops each ingredient in (the pot's own addIngredient splash).
                 sl.playSound(null, workBlock, SoundEvents.WOOD_HIT, SoundSource.BLOCKS, 0.5F, 1.2F);
         }
     }
@@ -492,10 +477,6 @@ public class CookExecutor implements WorkExecutor {
             citizen.getX(), citizen.getY() + 0.8, citizen.getZ(), count, 0.25, 0.1, 0.25, 0.0);
     }
 
-    // ── Stocker surfaces ────────────────────────────────────────────────────────────────────────
-
-    /** Min-stock rows: every campfire-roastable result + every food drying result. Stew never
-     *  leaves the pot as an item, so the stew line deliberately contributes nothing here. */
     @Override
     public List<ItemStack> possibleOutputs(ServerLevel sl, BlockPos workBlock) {
         List<ItemStack> out = new ArrayList<>();
@@ -515,10 +496,6 @@ public class CookExecutor implements WorkExecutor {
         return out;
     }
 
-    /** Stocker SUPPLY: while any pot sits idle, the concrete ingredients of every named stew (small
-     *  buffer each) plus the kitchen's one conserved fired clay bucket (the tannery bucket rule:
-     *  a filled bucket still counts — only order when neither variant is on hand); plus the raws
-     *  behind every wanted roast. */
     @Override
     public List<ItemStack> missingInputs(ServerLevel sl, Settlement settlement, Workshop workshop,
                                          BlockPos workBlock) {
@@ -531,7 +508,7 @@ public class CookExecutor implements WorkExecutor {
             }
             for (StewRecipe recipe : StewRecipeManager.all()) {
                 for (StewRecipe.Ing ing : recipe.ingredients()) {
-                    if (ing.item().isEmpty()) continue;   // tag ingredients: cook uses what's stocked
+                    if (ing.item().isEmpty()) continue;
                     addDeficit(out, sl, workshop, ing.item().get(), 2);
                 }
             }
@@ -545,7 +522,7 @@ public class CookExecutor implements WorkExecutor {
                     && !Workshops.wantedByMinStock(sl, settlement, workshop, cooked)) continue;
             for (ItemStack option : recipe.getIngredients().get(0).getItems()) {
                 addDeficit(out, sl, workshop, option.getItem(), 4);
-                break;   // one representative raw per recipe is enough to keep the fires fed
+                break; // one representative raw per recipe; ordering every option over-supplies
             }
         }
         for (var recipe : RackTending.recipes(com.bannerbound.antiquity.recipe.DryingRackRecipe.FOOD)) {
@@ -563,9 +540,6 @@ public class CookExecutor implements WorkExecutor {
         if (have < buffer) out.add(new ItemStack(item, buffer - have));
     }
 
-    /** Stocker KEEP: the bucket pair, every stew ingredient (concrete items and tag members), and
-     *  every campfire-roastable raw — a pot-load or roast batch waiting its turn must not be hauled
-     *  back out between crafts. */
     @Override
     public Set<Item> retainedItems(ServerLevel sl, Settlement settlement, Workshop workshop, BlockPos workBlock) {
         Set<Item> keep = new LinkedHashSet<>();

@@ -12,7 +12,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: the faith's full pantheon — every constellation's names, domain profile and star
+ * S->C: the faith's full pantheon - every constellation's names, domain profile and star
  * id chain. Drives the believer-sky line rendering, Pantheon mode's used-star exclusions,
  * and the (Star Charts gated) domain readouts. Sent on login + every pantheon change.
  */

@@ -18,19 +18,23 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity for the Clay Tank (lives on the controller cell — the bottom of the pillar,
- * {@code PART == 0}). Stores a simple liquid: a bucket count plus one {@link LiquidType} shared by
- * the whole pillar (not a Forge fluid — the curing liquid is no registered fluid and never flows).
- * Each tank piece holds 8 buckets, so capacity = {@code 8 × pillar height}. Water is added/removed by
- * the bucket; a quicklime converts the held water into the hide-curing liquid; each hide cured
- * draws one bucket of curing liquid. State mirrors to the client for the fill renderer.
+ * Block entity for the Clay Tank (lives on the controller cell, the bottom of the pillar,
+ * PART == 0). Stores a simple liquid: a bucket count plus one LiquidType shared by the whole
+ * pillar; deliberately not a Forge fluid, since the curing liquid is no registered fluid and
+ * never flows. Each tank piece holds BUCKETS_PER_PIECE (8) buckets, so capacity = 8 x pillar
+ * height (pillarHeight counts connected tank blocks above the controller); clampBuckets shrinks
+ * the held amount when a pillar piece is destroyed. Water goes in and out by the bucket (only
+ * WATER is bucket-recoverable), quicklime converts the held water into the hide-curing liquid,
+ * and each hide cured draws one bucket of it. fillWater/fillCuring are the NPC tanner's bulk
+ * paths (pouring a fetched bucket / water + quicklime); fillWater never overwrites held curing
+ * liquid. LiquidType carries the packed ARGB tint the fill renderer uses, fillFraction (0..1 of
+ * the whole pillar) drives the rendered fill surface Y, and setChanged always re-syncs to
+ * clients for that renderer.
  */
 @ApiStatus.Internal
 public class ClayTankBlockEntity extends BlockEntity {
-    /** Buckets one tank piece holds. Capacity scales with pillar height. */
     public static final int BUCKETS_PER_PIECE = 8;
 
-    /** What a tank is holding. EMPTY shows no fill; WATER and CURING render with their tint. */
     public enum LiquidType {
         EMPTY(0x00000000),
         WATER(0xFF3F76E4),
@@ -42,7 +46,6 @@ public class ClayTankBlockEntity extends BlockEntity {
             this.color = color;
         }
 
-        /** Packed ARGB tint for the fill surface. */
         public int color() {
             return color;
         }
@@ -63,7 +66,6 @@ public class ClayTankBlockEntity extends BlockEntity {
         return liquid;
     }
 
-    /** Pillar height (this controller + connected tank blocks above it), min 1. */
     public int pillarHeight() {
         if (level == null) return 1;
         int h = 1;
@@ -79,15 +81,11 @@ public class ClayTankBlockEntity extends BlockEntity {
         return BUCKETS_PER_PIECE * pillarHeight();
     }
 
-    /** Total fill as a fraction of the whole pillar height (0..1) — drives the render surface Y. */
     public float fillFraction() {
         int max = maxBuckets();
         return max <= 0 ? 0f : (float) buckets / max;
     }
 
-    // ─── Interactions (called from ClayTankBlock) ────────────────────────────────────────────────
-
-    /** Add one bucket of water. Fails if full or already holding curing liquid. */
     public boolean addWater() {
         if (liquid == LiquidType.CURING) return false;
         if (buckets >= maxBuckets()) return false;
@@ -98,7 +96,6 @@ public class ClayTankBlockEntity extends BlockEntity {
         return true;
     }
 
-    /** Remove one bucket of water (only WATER is bucket-recoverable). */
     public boolean removeWater() {
         if (liquid != LiquidType.WATER || buckets <= 0) return false;
         buckets--;
@@ -108,7 +105,6 @@ public class ClayTankBlockEntity extends BlockEntity {
         return true;
     }
 
-    /** Convert the pillar's held water into curing liquid (a quicklime charge). */
     public boolean convertToCuring() {
         if (liquid != LiquidType.WATER || buckets <= 0) return false;
         liquid = LiquidType.CURING;
@@ -119,13 +115,10 @@ public class ClayTankBlockEntity extends BlockEntity {
         return true;
     }
 
-    /** True when at least one bucket of curing liquid is available. */
     public boolean hasCuring() {
         return liquid == LiquidType.CURING && buckets > 0;
     }
 
-    /** Fill the whole tank to full water (the NPC tanner pours a fetched bucket in). Held curing
-     *  liquid is left alone — water is only poured into an empty (or already-watered) tank. */
     public void fillWater() {
         if (liquid == LiquidType.CURING) return;
         liquid = LiquidType.WATER;
@@ -134,7 +127,6 @@ public class ClayTankBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    /** Charge the whole tank to full curing liquid (the NPC tanner: fills water + adds quicklime). */
     public void fillCuring() {
         liquid = LiquidType.CURING;
         buckets = maxBuckets();
@@ -144,7 +136,6 @@ public class ClayTankBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    /** Clamp the held liquid to a new capacity (a piece of the pillar was destroyed). */
     public void clampBuckets(int max) {
         if (buckets > Math.max(0, max)) {
             buckets = Math.max(0, max);
@@ -153,7 +144,6 @@ public class ClayTankBlockEntity extends BlockEntity {
         }
     }
 
-    /** Consume one bucket of curing liquid (one hide). */
     public boolean drawCuring() {
         if (!hasCuring()) return false;
         buckets--;
@@ -168,8 +158,6 @@ public class ClayTankBlockEntity extends BlockEntity {
             level.playSound(null, getBlockPos(), SoundEvents.BUCKET_EMPTY, SoundSource.BLOCKS, 0.6F, pitch);
         }
     }
-
-    // ─── NBT + client sync ───────────────────────────────────────────────────────────────────────
 
     @Override
     public void setChanged() {

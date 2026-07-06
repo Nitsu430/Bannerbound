@@ -40,45 +40,50 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
 /**
- * NPC driver for the Smithy workshop (the generic Crafter staffs it). The work block is the Stone
- * Anvil; the smith walks the WHOLE metal chain the player plays by hand: charge a crucible with ore
- * (bronze ratio-mixed from copper + tin), tend the bloomery at the bellows until the melt lands
- * (band-aware pumping stands in for the temperature minigame), place a fired mold, pour, let it
- * cool, extract the casting, then cold-hammer it into the finished tool — per-strike scores rolled
- * through the same XP curve every crafter NPC uses ({@link QualityMath#simulateNpcTier}), capped by
- * the best hammer in storage exactly like the player's hammer-rank gate.
+ * NPC driver for the Smithy workshop (staffed by the generic Crafter; work block = Stone Anvil).
+ * The smith walks the whole metal chain the player plays by hand: charge a crucible with ore
+ * (bronze ratio-searched from copper + tin against the data-driven alloy bands, preferring ~70%
+ * copper; a crucible holds at most 8 ore units per melt), ignite and tend the bloomery at the
+ * bellows (band-aware pumping replaces the temperature minigame: pump while below the middle of
+ * the metal's green band, coast above it, at most one pump per second), place a fired mold, pour,
+ * wait out the cool, extract the casting, then cold-hammer it into the finished tool. Hammer
+ * quality rolls per-strike scores through the shared NPC XP curve
+ * ({@link QualityMath#simulateNpcTier}) and is capped at Standard unless storage holds a hammer
+ * within one rank of the workpiece metal -- the exact rank gate the player minigame applies.
+ * Direct-cast shapes (see {@code DIRECT_SHAPES}) come out of the mold finished and skip hammering.
  *
- * <p><b>Waiting-stage contract</b> (see {@code Workshops.wantsAnother}): the melt and the mold's
- * cooling are unattended waits. EXTRACT collects ungated; every start step is gated through
- * {@link #neededCasting}, which counts a filled/cooling mold and the bloomery's charge as in-flight
- * — so one order never melts twice while its casting cools.
+ * <p>Waiting-stage contract (see {@code Workshops.wantsAnother}): the melt and the mold's cooling
+ * are unattended waits. SMELT/TEND end via {@link #externallyComplete} the moment the melt lands
+ * (the Potter's kiln idiom, as is the fire-stick ignite wind-up), and the molten crucible STAYS
+ * in the bloomery -- its occupancy throttles the chain like the potter's kiln slot; an unfinished
+ * melt (SMELT_TICKS cap hit) simply re-enters as TEND, the charge never regressing while the fire
+ * holds, and TEND outranks all demand so a started melt is always finished. EXTRACT collects
+ * ungated (a ready cast jams the anvil); every start step is gated through {@link #neededCasting}
+ * (orders FIFO, then min-stock; hammer-recipe heads before direct casts), which treats a
+ * placed/filled/cooling mold on the anvil as in flight so one order never melts twice while its
+ * casting cools, and prefers needs a molten leftover can serve so it is poured before a fresh
+ * charge slags it in onStart. Fire sticks are conserved ({@link #consumesInput}).
  *
- * <p>Step discrimination (the Tannery idiom, by input/result shape):
- * EXTRACT = result, no inputs · HAMMER = result + inputs · POUR = neither ·
- * TEND = only fire sticks in · PLACE-MOLD = a fired mold in · SMELT = ore in.
+ * <p>Steps are discriminated by Craft shape (the Tannery idiom): EXTRACT = result, no inputs;
+ * HAMMER = result + inputs; POUR = neither; TEND = only fire sticks in; PLACE-MOLD = a fired mold
+ * in; SMELT = ore in. The casting reverse-lookup is built lazily on first use -- item registration
+ * is long done by the time any executor runs.
  */
 public class SmithExecutor implements WorkExecutor {
     private static final int EXTRACT_TICKS = 30;
     private static final int PLACE_TICKS = 30;
     private static final int POUR_TICKS = 60;
     private static final int TICKS_PER_STRIKE = 36;
-    /** Cap on a melt session; {@link #externallyComplete} ends it the moment the melt lands, and an
-     *  unfinished melt just re-enters as TEND (the charge never regresses while the fire holds). */
     private static final int SMELT_TICKS = 1200;
     private static final int TEND_TICKS = 600;
     private static final int IGNITE_TICKS = 40;
     private static final int IGNITE_SWING_INTERVAL = 10;
-    /** Direct-cast shapes: the mold's output IS the finished/orderable item (no hammering). */
     private static final List<String> DIRECT_SHAPES = List.of("ingot", "chisel", "spear", "arrow");
 
-    /** Fire-stick ignite wind-up per bloomery (the Potter's kiln idiom). */
     private final Map<BlockPos, Integer> igniteTicksLeft = new HashMap<>();
 
-    /** A casting the chain still has to produce: its mold shape, metal, and the casting item. */
     private record Need(String shape, String metal, Item casting) {
     }
-
-    // ── chooseCraft ─────────────────────────────────────────────────────────────────────────────
 
     @Nullable
     @Override
@@ -86,7 +91,6 @@ public class SmithExecutor implements WorkExecutor {
         StoneAnvilBlockEntity anvil =
             sl.getBlockEntity(workBlock) instanceof StoneAnvilBlockEntity a ? a : null;
         if (anvil == null) return null;
-        // EXTRACT — ungated collect: the casting is already made; leaving it jams the anvil.
         if (anvil.isCastReady()) {
             ItemStack casting = MetalworkingItems.castingFor(anvil.moldShape(), anvil.metalId());
             if (!casting.isEmpty()) {
@@ -94,19 +98,15 @@ public class SmithExecutor implements WorkExecutor {
             }
         }
         BloomeryBlockEntity bloomery = SmithyWorkshopRules.findBloomery(sl, workshop);
-        // TEND — a charged, un-molten crucible sits in the bloomery: keep the fire in the metal's
-        // band until the melt lands, whatever else the demand picture says (finish what's started).
         if (bloomery != null && chargedContents(bloomery) != null
                 && WorkshopStorage.count(sl, workshop, BannerboundAntiquity.FIRE_STICKS.get()) > 0) {
             return new Craft(List.of(new ItemStack(BannerboundAntiquity.FIRE_STICKS.get())),
                 ItemStack.EMPTY, TEND_TICKS, 8);
         }
-        // HAMMER — finish stocked castings into wanted tools (orders FIFO, then min-stock).
         Craft hammer = tryHammer(sl, settlement, workshop, workBlock, anvil, true);
         if (hammer != null) return hammer;
         hammer = tryHammer(sl, settlement, workshop, workBlock, anvil, false);
         if (hammer != null) return hammer;
-        // POUR — a placed mold + matching molten metal: fill it (also tops up a same-metal dud).
         CrucibleContents molten = bloomery == null ? null : moltenContents(bloomery);
         if (anvil.hasMold() && !anvil.molten() && molten != null) {
             int missing = anvil.requiredMb() - anvil.fillMb();
@@ -117,7 +117,6 @@ public class SmithExecutor implements WorkExecutor {
         }
         Need need = neededCasting(sl, settlement, workshop, workBlock, anvil, molten);
         if (need == null || bloomery == null) return null;
-        // PLACE-MOLD — the metal for the need is molten and its fired mold is stocked.
         if (!anvil.hasMold() && anvil.pileEmpty() && !anvil.isForging()
                 && molten != null && molten.dominantMetal().equals(need.metal())
                 && molten.totalMb() >= MetalworkingItems.requiredMb(need.shape())) {
@@ -126,9 +125,6 @@ public class SmithExecutor implements WorkExecutor {
                 return new Craft(List.of(new ItemStack(mold.get())), ItemStack.EMPTY, PLACE_TICKS, 1);
             }
         }
-        // SMELT — start a fresh melt for the need. A useless molten leftover (wrong metal / too
-        // little for anything wanted — neededCasting already preferred needs it could serve) is
-        // slagged when the new charge overwrites it in onStart.
         if (WorkshopStorage.count(sl, workshop, BannerboundAntiquity.FIRE_STICKS.get()) > 0
                 && chargedContents(bloomery) == null) {
             boolean crucibleInside = !bloomery.getHeldItem().isEmpty()
@@ -177,13 +173,6 @@ public class SmithExecutor implements WorkExecutor {
         return null;
     }
 
-    // ── Demand: the next casting the chain must produce ────────────────────────────────────────
-
-    /** The casting the chain should produce next: the first wanted-but-unstocked casting (orders
-     *  FIFO, then min-stock; hammer-recipe heads before direct casts), skipping anything already in
-     *  flight on the anvil (a placed / filled / cooling mold — the waiting-stage in-flight count).
-     *  When molten metal already sits in the bloomery, needs it can serve are preferred so a
-     *  leftover is poured before a fresh melt slags it. */
     @Nullable
     private static Need neededCasting(ServerLevel sl, Settlement settlement, Workshop workshop,
                                       BlockPos workBlock, StoneAnvilBlockEntity anvil,
@@ -223,22 +212,18 @@ public class SmithExecutor implements WorkExecutor {
             if (inFlightOnAnvil(anvil, need)) continue;
             if (molten != null && molten.dominantMetal().equals(need.metal())
                     && molten.totalMb() >= MetalworkingItems.requiredMb(need.shape())) {
-                return need;   // the leftover melt can serve this — use it before anything else
+                return need;
             }
             if (fallback == null) fallback = need;
         }
         return fallback;
     }
 
-    /** True when the anvil already carries this need: its mold placed (being filled) or a matching
-     *  filled/cooling cast — the committed unit a single order must not melt twice for. */
     private static boolean inFlightOnAnvil(StoneAnvilBlockEntity anvil, Need need) {
         if (!anvil.hasMold() || !anvil.moldShape().equals(need.shape())) return false;
         return anvil.fillMb() == 0 || anvil.metalId().equals(need.metal());
     }
 
-    /** Reverse lookup: casting/finished item → the (shape, metal) mold that casts it. Lazily built
-     *  once — item registration is long done by the time any executor runs. */
     private static Map<Item, Need> castingLookup;
 
     @Nullable
@@ -257,9 +242,6 @@ public class SmithExecutor implements WorkExecutor {
         return lookup.get(item);
     }
 
-    /** The ore stacks that melt to ≥ {@code mb} of {@code metal}, from workshop stock — copper/tin
-     *  straight, bronze ratio-searched (prefer ~70% copper) against the data-driven alloy bands.
-     *  {@code null} when the stock can't cover it. Charge capped at the crucible's 8 units. */
     @Nullable
     private static List<ItemStack> chargeFor(ServerLevel sl, Workshop workshop, String metal, int mb) {
         int per = Math.max(1, MetalworkingData.mbPerUnit("copper"));
@@ -267,7 +249,7 @@ public class SmithExecutor implements WorkExecutor {
         if (metal.equals("copper") || metal.equals("tin")) {
             Item ore = metal.equals("copper") ? Items.RAW_COPPER : BannerboundAntiquity.RAW_TIN.get();
             int n = Math.min(8, base);
-            if (n * per < mb) return null;   // > 8 units would be needed — no single melt covers it
+            if (n * per < mb) return null;   // crucible holds 8 units max -- no single melt covers this need
             return WorkshopStorage.count(sl, workshop, ore) >= n ? List.of(new ItemStack(ore, n)) : null;
         }
         if (!metal.equals("bronze")) return null;
@@ -294,7 +276,6 @@ public class SmithExecutor implements WorkExecutor {
         return null;
     }
 
-    /** Validate a copper/tin split against the same data-driven alloy resolution the bloomery uses. */
     private static boolean resolvesToBronze(int cu, int sn) {
         List<ItemStack> charge = new ArrayList<>();
         for (int i = 0; i < cu; i++) charge.add(new ItemStack(Items.RAW_COPPER));
@@ -303,16 +284,12 @@ public class SmithExecutor implements WorkExecutor {
         return v != null && v.metalId().equals("bronze");
     }
 
-    // ── Bloomery state helpers ──────────────────────────────────────────────────────────────────
-
-    /** The bloomery crucible's still-solid charge, or {@code null} (no crucible / empty / molten). */
     @Nullable
     private static CrucibleContents chargedContents(BloomeryBlockEntity bloomery) {
         CrucibleContents c = crucibleContents(bloomery);
         return c != null && c.hasCharge() && !c.molten() ? c : null;
     }
 
-    /** The bloomery crucible's molten metal, or {@code null}. */
     @Nullable
     private static CrucibleContents moltenContents(BloomeryBlockEntity bloomery) {
         CrucibleContents c = crucibleContents(bloomery);
@@ -332,8 +309,6 @@ public class SmithExecutor implements WorkExecutor {
         Workshop w = s == null ? null : s.getWorkshop(citizen.getAssignedWorkshopId());
         return w == null ? null : SmithyWorkshopRules.findBloomery(sl, w);
     }
-
-    // ── Craft discrimination ────────────────────────────────────────────────────────────────────
 
     private static boolean isExtract(Craft craft) {
         return !craft.result().isEmpty() && craft.inputs().isEmpty();
@@ -375,9 +350,6 @@ public class SmithExecutor implements WorkExecutor {
         return path.startsWith("fired_clay_mold_") ? path.substring("fired_clay_mold_".length()) : null;
     }
 
-    // ── Work placement & lifecycle ──────────────────────────────────────────────────────────────
-
-    /** SMELT/TEND happen at the bellows (falling back to the bloomery); the rest at the anvil. */
     @Override
     public BlockPos workTarget(ServerLevel sl, Settlement settlement, Workshop workshop,
                                BlockPos workBlock, Craft craft) {
@@ -395,8 +367,6 @@ public class SmithExecutor implements WorkExecutor {
         if (isSmelt(craft)) {
             BloomeryBlockEntity bloomery = bloomeryFor(sl, citizen);
             if (bloomery == null) return;
-            // The crucible: withdrawn from storage (in the inputs), else the one already inside —
-            // whose leftover contents (a useless molten dreg) are slagged by the fresh charge.
             ItemStack crucible = ItemStack.EMPTY;
             List<ItemStack> charge = new ArrayList<>();
             for (ItemStack in : craft.inputs()) {
@@ -431,7 +401,6 @@ public class SmithExecutor implements WorkExecutor {
         if (bloomery == null) return;
         BlockPos key = bloomery.getBlockPos().immutable();
         if (!bloomery.isLit()) {
-            // Fire-stick ignite wind-up (the Potter's kiln idiom) — also covers a fire that died.
             int left = igniteTicksLeft.getOrDefault(key, IGNITE_TICKS);
             if (left % IGNITE_SWING_INTERVAL == 0) {
                 citizen.swing(InteractionHand.MAIN_HAND);
@@ -445,11 +414,7 @@ public class SmithExecutor implements WorkExecutor {
             }
             return;
         }
-        // A player-opened door mid-melt bleeds all the heat off — re-shut it.
-        if (bloomery.isOpen()) bloomery.toggle();
-        // Band-aware pump regulation, at most one pump per second: pump while the temperature sits
-        // below the middle of the metal's green band, coast (boost decays) once above it — copper
-        // pumps continuously, tin/bronze oscillate around green-mid without overshooting the band.
+        if (bloomery.isOpen()) bloomery.toggle();   // a player-opened door mid-melt bleeds off all the heat -- re-shut it
         if (sl.getGameTime() % 20 == 0) {
             CrucibleContents contents = crucibleContents(bloomery);
             if (contents == null || contents.molten()) return;
@@ -466,7 +431,6 @@ public class SmithExecutor implements WorkExecutor {
         }
     }
 
-    /** SMELT/TEND end the moment the melt lands (the Potter's kiln idiom). */
     @Override
     public boolean externallyComplete(ServerLevel sl, CitizenEntity citizen, BlockPos workBlock,
                                       Craft craft, int ticksLeft) {
@@ -478,8 +442,6 @@ public class SmithExecutor implements WorkExecutor {
     @Override
     public ItemStack finish(ServerLevel sl, CitizenEntity citizen, BlockPos workBlock, Craft craft) {
         if (isSmelt(craft) || isTend(craft)) {
-            // The molten crucible STAYS in the bloomery (its occupancy throttles the chain, like the
-            // potter's kiln slot); an unfinished melt simply re-enters as TEND next scan.
             BloomeryBlockEntity bloomery = bloomeryFor(sl, citizen);
             if (bloomery != null) igniteTicksLeft.remove(bloomery.getBlockPos());
             return ItemStack.EMPTY;
@@ -516,7 +478,7 @@ public class SmithExecutor implements WorkExecutor {
                     return ItemStack.EMPTY;
                 }
             }
-            // The anvil raced busy — hand the mold back to storage instead of losing it.
+            // The anvil raced busy -- hand the mold back to storage instead of losing it.
             return craft.inputs().get(0).copy();
         }
         if (isExtract(craft)) {
@@ -530,9 +492,6 @@ public class SmithExecutor implements WorkExecutor {
             StoneAnvilBlockEntity anvil =
                 sl.getBlockEntity(workBlock) instanceof StoneAnvilBlockEntity a ? a : null;
             if (anvil != null) anvil.endForging();
-            // Per-strike scores through the shared NPC XP curve, then the player minigame's exact
-            // hammer-rank gate: without a hammer within one rank of the workpiece, quality caps at
-            // Standard (Hammer.complete's rule).
             QualityTier tier = QualityMath.simulateNpcTier(
                 sl.random, citizen.getJobXp("smithy"), Math.max(1, craft.beats()));
             String metal = MetalworkingItems.metalOf(craft.result().getItem());
@@ -551,12 +510,11 @@ public class SmithExecutor implements WorkExecutor {
     @Override
     public void onAbort(ServerLevel sl, CitizenEntity citizen, BlockPos workBlock, Craft craft) {
         if (isSmelt(craft)) {
-            // The goal returns the withdrawn ores/crucible/fire sticks — discard the bloomery-side
-            // charge so nothing dupes. A crucible that was ALREADY inside stays inside, emptied.
+            // The goal refunds the withdrawn inputs -- drop the bloomery-side charge or the ores dupe.
             BloomeryBlockEntity bloomery = bloomeryFor(sl, citizen);
             if (bloomery == null) return;
             igniteTicksLeft.remove(bloomery.getBlockPos());
-            if (chargedContents(bloomery) == null) return;   // melt landed / player intervened
+            if (chargedContents(bloomery) == null) return;
             boolean crucibleWasInput = false;
             for (ItemStack in : craft.inputs()) {
                 if (in.is(BannerboundAntiquity.CRUCIBLE.get())) crucibleWasInput = true;
@@ -606,9 +564,6 @@ public class SmithExecutor implements WorkExecutor {
         return !input.is(BannerboundAntiquity.FIRE_STICKS.get());
     }
 
-    // ── Stocker surfaces ────────────────────────────────────────────────────────────────────────
-
-    /** Min-stock rows: every hammered tool + every direct-cast item (researched). */
     @Override
     public List<ItemStack> possibleOutputs(ServerLevel sl, BlockPos workBlock) {
         List<ItemStack> out = new ArrayList<>();
@@ -628,9 +583,6 @@ public class SmithExecutor implements WorkExecutor {
         return out;
     }
 
-    /** Stocker SUPPLY: for every wanted final — its non-casting ingredients (sticks), the ores +
-     *  fired mold behind each missing casting, plus the chain's conserved tools (fire sticks, a
-     *  crucible when none is anywhere, a stone hammer when the smithy has no hammer at all). */
     @Override
     public List<ItemStack> missingInputs(ServerLevel sl, Settlement settlement, Workshop workshop,
                                          BlockPos workBlock) {
@@ -687,7 +639,6 @@ public class SmithExecutor implements WorkExecutor {
         return out;
     }
 
-    /** The ore units (+ the fired mold) one casting of {@code need} consumes. */
     private static void addCastingDemand(Map<Item, Integer> desired, Need need) {
         int mb = MetalworkingItems.requiredMb(need.shape());
         int per = Math.max(1, MetalworkingData.mbPerUnit("copper"));
@@ -705,8 +656,6 @@ public class SmithExecutor implements WorkExecutor {
         if (mold != null) desired.merge(mold.get(), 1, Integer::sum);
     }
 
-    /** Stocker KEEP: ores, sticks, fired molds, castings, the conserved chain tools and every
-     *  hammer — only finished tools are surplus. */
     @Override
     public Set<Item> retainedItems(ServerLevel sl, Settlement settlement, Workshop workshop, BlockPos workBlock) {
         Set<Item> keep = new LinkedHashSet<>();

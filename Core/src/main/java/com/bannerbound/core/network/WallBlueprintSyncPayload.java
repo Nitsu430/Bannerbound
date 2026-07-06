@@ -10,12 +10,12 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client. The full wall blueprint for the receiving player's settlement: packed
- * {@code BlockPos.asLong()} positions paired with global block-state ids
- * ({@code Block.getId(state)} — decoded client-side via {@code Block.stateById}). Drives the
- * ghost renderer. Sent on construct/adapt/cancel and on login — plan changes are rare,
- * explicit player actions, so a full snapshot beats per-section diffing until proven otherwise
- * (WALLS_PLAN.md §E). An empty payload clears the client's blueprint.
+ * Server -> client. The full wall blueprint for the receiving player's settlement: packed
+ * BlockPos.asLong() positions paired with global block-state ids (Block.getId(state), decoded
+ * client-side via Block.stateById). Drives the ghost renderer. Sent on construct/adapt/cancel
+ * and on login - plan changes are rare, explicit player actions, so a full snapshot beats
+ * per-section diffing until proven otherwise (WALLS_PLAN.md section E). An empty payload clears
+ * the client's blueprint.
  */
 @ApiStatus.Internal
 public record WallBlueprintSyncPayload(long[] positions, int[] stateIds) implements CustomPacketPayload {

@@ -36,25 +36,22 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 import net.neoforged.neoforge.client.extensions.common.IClientBlockExtensions;
 
 /**
- * Chopping Stump — a log butchering block made by right-clicking a lone log with an axe (see
- * {@code AntiquityEvents.onChopLoneLog}). It's skinned with the textures of the log it was carved
- * from (rendered by {@code ChoppingStumpRenderer}, so the static block model is invisible). Logs
- * dropped onto it are split into firewood one swing at a time.
- * <ul>
- *   <li>Right-click with logs → deposit the stack (slides in from your side).</li>
- *   <li>Right-click with an axe → chop one log: 50% chance to yield a firewood (with that log's
- *       chip particles), axe takes 1 durability. The pile shrinks each swing.</li>
- *   <li>Right-click empty-handed → take the remaining logs back.</li>
- * </ul>
- * Breaking the stump drops nothing and throws the source log's particles.
+ * Chopping Stump -- a log butchering block made by right-clicking a lone log with an axe
+ * (AntiquityEvents.onChopLoneLog). It is skinned with the textures of the log it was carved from:
+ * ChoppingStumpRenderer (a BER) draws the whole body, so getRenderShape is INVISIBLE or the static
+ * model would double up, and break particles are re-pointed at the source log's texture through a
+ * client-only IClientBlockExtensions. Right-click with logs deposits them onto the stump (one log
+ * type at a time, up to MAX_LOGS; the pile slides in from the player's side); right-click with an
+ * axe chops ONE log per swing -- FIREWOOD_PER_LOG_CHANCE odds of popping a firewood, the chopped
+ * log's chip particles, and 1 axe durability; right-click empty-handed takes the remaining logs
+ * back, and breaking the stump pops them via onRemove. SHAPE matches the 6px-tall stump body the
+ * renderer draws; because that is not a full cube, vanilla would classify the cell walkable and
+ * NPCs would path onto it and snag, so isPathfindable returns false.
  */
 public class ChoppingStumpBlock extends Block implements EntityBlock {
     public static final MapCodec<ChoppingStumpBlock> CODEC = simpleCodec(ChoppingStumpBlock::new);
-    /** Matches the 6px-tall stump body the renderer draws. */
     public static final VoxelShape SHAPE = Block.box(0.0, 0.0, 0.0, 16.0, 6.0, 16.0);
-    /** Chance each chopped log yields a firewood. */
     public static final float FIREWOOD_PER_LOG_CHANCE = 0.85f;
-    /** Logs the stump can hold at once. */
     public static final int MAX_LOGS = 64;
 
     public ChoppingStumpBlock(BlockBehaviour.Properties properties) {
@@ -71,18 +68,12 @@ public class ChoppingStumpBlock extends Block implements EntityBlock {
         return SHAPE;
     }
 
-    /**
-     * The collision box isn't a full block, so vanilla classifies the cell as walkable and NPCs path
-     * onto it and snag. Mark it un-pathfindable so every pathfinder routes around it.
-     */
     @Override
     protected boolean isPathfindable(BlockState state,
                                      net.minecraft.world.level.pathfinder.PathComputationType type) {
         return false;
     }
 
-    /** The stump body is drawn by the BER (using the source log's textures), so the static
-     *  blockstate model must not render or it would double up. */
     @Override
     protected RenderShape getRenderShape(BlockState state) {
         return RenderShape.INVISIBLE;
@@ -107,7 +98,6 @@ public class ChoppingStumpBlock extends Block implements EntityBlock {
         if (!(level.getBlockEntity(pos) instanceof ChoppingStumpBlockEntity be)) {
             return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
         }
-        // Axe → chop ONE log into firewood (the pile shrinks a swing at a time).
         if (stack.getItem() instanceof AxeItem) {
             if (be.isEmpty()) {
                 return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
@@ -130,7 +120,6 @@ public class ChoppingStumpBlock extends Block implements EntityBlock {
             }
             return ItemInteractionResult.sidedSuccess(level.isClientSide);
         }
-        // Logs → deposit onto the stump (one type at a time, up to a stack).
         if (stack.is(ItemTags.LOGS)) {
             int held = be.isEmpty() ? 0 : be.getLogs().getCount();
             boolean sameType = be.isEmpty() || ItemStack.isSameItemSameComponents(be.getLogs(), stack);
@@ -175,9 +164,7 @@ public class ChoppingStumpBlock extends Block implements EntityBlock {
         super.onRemove(oldState, level, pos, newState, moved);
     }
 
-    /** Break particles use the source log's texture rather than the (invisible) stump model. The
-     *  anonymous {@link IClientBlockExtensions} loads only on the client. (initializeClient is
-     *  deprecated-for-removal but is the 1.21.1 registration point for per-block client extensions.) */
+    // initializeClient is deprecated-for-removal but IS the 1.21.1 hook for per-block client extensions.
     @Override
     @SuppressWarnings("removal")
     public void initializeClient(java.util.function.Consumer<IClientBlockExtensions> consumer) {

@@ -14,9 +14,10 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Centre-top HUD banner shown to EVERY settlement member when food is running out. Driven by the
- * server-broadcast {@link SettlementFoodWarningPayload} held in {@link ClientFoodWarningState}:
- * amber "Food running low" while food is below the low threshold, red "Your settlement is STARVING"
- * at zero. Honours the vanilla GUI scale (positions off {@code graphics.guiWidth()}).
+ * server-broadcast SettlementFoodWarningPayload held in ClientFoodWarningState: amber "Food running
+ * low" while food is below the low threshold, red "Your settlement is STARVING" at zero (the
+ * starving banner pulses via System.currentTimeMillis so it can't be ignored; the low banner stays
+ * steady). Honours the vanilla GUI scale (positions off graphics.guiWidth()).
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -38,7 +39,6 @@ public final class SettlementFoodWarningHudLayer implements LayeredDraw.Layer {
             : "bannerbound.food.warning.low");
         int barColor = starving ? 0xFFE03030 : 0xFFE0A030;
 
-        // Pulse the starving banner so it can't be ignored; the low banner stays steady.
         int alpha = 0xFF;
         if (starving) {
             float pulse = 0.65f + 0.35f * (float) Math.sin(System.currentTimeMillis() / 250.0);

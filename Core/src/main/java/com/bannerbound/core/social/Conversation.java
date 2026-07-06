@@ -8,43 +8,41 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.util.RandomSource;
 
 /**
- * Transient server-side coordinator for one in-progress chat between two citizens. Held on
- * {@code Settlement.activeConversations} so both participating {@code ConversationGoal}s can
- * find it via the partner's UUID and share state.
+ * Transient server-side coordinator for one in-progress chat between two citizens, held on
+ * {@code Settlement.activeConversations} so both {@code ConversationGoal}s find it via the partner's
+ * UUID and share state. Never persisted: a save landing mid-conversation silently drops it on world
+ * load - citizens fall back to patrol and a fresh conversation may spawn.
  * <p>
- * <b>Initiator-owns-progress.</b> Both goals tick on the server main thread one at a time, so
- * there's no concurrency hazard, but to avoid double-counting on shared fields the
- * <em>initiator</em> (citizen {@link #a}) is the sole writer of {@link #phaseTimer}, {@link
- * #phase}, {@link #matches}, and the {@link #outcomeApplied} flag. The joiner only mutates its
- * own facing, its own navigation, its own {@code DATA_BUBBLE} slot, and the {@code bArrived}
- * flag on this object.
+ * Initiator-owns-progress: both goals tick on the server main thread one at a time, so there is no
+ * concurrency hazard, but to avoid double-counting the initiator (citizen {@link #a}) is the sole
+ * writer of {@link #phase}, {@link #phaseStartGameTime}, {@link #currentBubble}, {@link #matches},
+ * and {@link #outcomeApplied}. The joiner only mutates its own facing, navigation, DATA_BUBBLE slot,
+ * and {@link #bArrived}. Phases store a shared start game-tick rather than an incrementing counter so
+ * each participant reads "time in phase" as {@code now - phaseStartGameTime}, sidestepping tick-order
+ * races between the two goal ticks within one game tick.
  * <p>
- * Never persisted. If a save lands mid-conversation, the conversation is silently dropped on
- * world load — citizens fall through to patrol behaviour and a fresh conversation may spawn.
+ * Outcome by match count (0..3 over the three bubbles): 0 -> fight (-10), 1 -> argument (-3),
+ * 2 -> neutral (+1), 3 -> agreement (+5). {@link #begin} weights matching by happiness: it rolls a
+ * per-bubble {@code commonProb = avg(happiness)/125} clamped to [0, 0.8]; on a hit both citizens are
+ * forced onto the same random topic, else each rolls independently. This compensates for the 5-topic
+ * enum diluting the natural match rate from 1/3 to 1/5 - without it the average conversation would
+ * fall from neutral (+1) to argument (-3) purely from the topic-count change. Expected matches:
+ * avg 0 -> ~0.6 (mostly fights), avg 50 -> ~1.56 (neutral-leaning), avg 100 -> ~2.52 (mostly
+ * agreements), so friendships build faster when both parties are doing well.
  */
 public final class Conversation {
-    // ─── Tunables — one place to change the entire pacing ─────────────────────────────────────
-    /** Max distance from the town hall a citizen can be and still join the conversation pool. */
     public static final double SOCIAL_RADIUS = 10.0;
-    /** Squared distance from meetPos that counts as "arrived". */
     public static final double MEET_REACH_SQ = 1.5 * 1.5;
-    /** Bail if not both arrived after this many ticks. */
     public static final int WALK_TIMEOUT_TICKS = 200;
-    /** Quiet pause facing each other before bubble 1. */
     public static final int FACE_OFF_TICKS = 20;
-    /** Bubble visible for this many ticks — 4 seconds, matching the scale-in + hold + fade-out
-     *  animation the client renderer plays. */
-    public static final int BUBBLE_TICKS = 80;
-    /** Blank between bubbles. */
+    public static final int BUBBLE_TICKS = 80; // 4s - must match the client bubble scale-in+hold+fade animation
     public static final int GAP_TICKS = 20;
-    /** Resolve outcome, then linger this long before stopping. */
     public static final int RESOLVING_TICKS = 30;
 
-    // ─── Outcome → score delta (matches: 0..3) ────────────────────────────────────────────────
-    public static final int FIGHT_DELTA     = -10; // 0 matches
-    public static final int ARGUMENT_DELTA  = -3;  // 1 match
-    public static final int NEUTRAL_DELTA   = +1;  // 2 matches
-    public static final int AGREEMENT_DELTA = +5;  // 3 matches
+    public static final int FIGHT_DELTA     = -10;
+    public static final int ARGUMENT_DELTA  = -3;
+    public static final int NEUTRAL_DELTA   = +1;
+    public static final int AGREEMENT_DELTA = +5;
 
     public enum Phase { WALK_TO_MEET, FACE_OFF, BUBBLE, GAP, RESOLVING, DONE }
 
@@ -56,13 +54,9 @@ public final class Conversation {
     public final ConversationTopic[] topicsB;
 
     public Phase phase = Phase.WALK_TO_MEET;
-    /** Server-game-tick at which the current phase began. -1 until the initiator's first tick.
-     *  Both citizens compute their own "time in phase" as {@code currentGameTime - this}; using
-     *  a shared start tick instead of an incrementing counter sidesteps tick-order races between
-     *  the two participants' goal ticks within the same game tick. */
     public long phaseStartGameTime = -1L;
-    public int currentBubble = 0; // 0..2
-    public int matches = 0;        // 0..3
+    public int currentBubble = 0;
+    public int matches = 0;
     public boolean outcomeApplied = false;
 
     public boolean aArrived = false;
@@ -78,25 +72,6 @@ public final class Conversation {
         this.topicsB = topicsB;
     }
 
-    /** Rolls 6 topics and constructs the shared coordinator. Each citizen gets their own meet
-     *  tile so they end up 1 block apart facing each other, not overlapping on the same block.
-     *  Caller should add the result to {@code Settlement.activeConversations}.
-     *
-     *  <p><b>Happiness-weighted matching</b>: happy citizens find common ground more often.
-     *  For each of the 3 bubbles a {@code commonProb} is rolled — if it hits, both citizens are
-     *  forced to the same random topic for that bubble; otherwise each rolls independently.
-     *  {@code commonProb = avgHappiness / 125} (clamped to [0, 0.8]), so:
-     *  <ul>
-     *    <li>Avg 0 → commonProb ≈ 0, per-bubble match ≈ 0.2 → expected matches ≈ 0.6 (mostly
-     *        fights/arguments).</li>
-     *    <li>Avg 50 → commonProb ≈ 0.4, per-bubble match ≈ 0.52 → expected matches ≈ 1.56
-     *        (neutral-leaning).</li>
-     *    <li>Avg 100 → commonProb ≈ 0.8, per-bubble match ≈ 0.84 → expected matches ≈ 2.52
-     *        (mostly agreements). Friendships build faster when both parties are doing well.</li>
-     *  </ul>
-     *  Compensates for the 5-topic enum diluting natural-match probability from 1/3 to 1/5;
-     *  without the bias, the average conversation would drop from +1 (neutral) to −3 (argument)
-     *  purely from the topic count change. */
     public static Conversation begin(UUID initiator, UUID partner,
                                       BlockPos initiatorStand, BlockPos partnerStand,
                                       int initiatorHappiness, int partnerHappiness,
@@ -124,7 +99,6 @@ public final class Conversation {
         return a.equals(id) || b.equals(id);
     }
 
-    /** UUID of the OTHER citizen in the pair, given one's UUID. */
     @Nullable
     public UUID otherSide(UUID self) {
         if (a.equals(self)) return b;
@@ -132,17 +106,14 @@ public final class Conversation {
         return null;
     }
 
-    /** That citizen's stand position. */
     public BlockPos standFor(UUID self) {
         return a.equals(self) ? meetPosA : meetPosB;
     }
 
-    /** That citizen's topic on the given bubble turn (0..2). */
     public ConversationTopic topicFor(UUID self, int bubbleIndex) {
         return a.equals(self) ? topicsA[bubbleIndex] : topicsB[bubbleIndex];
     }
 
-    /** Marks the given participant as arrived at their stand tile. */
     public void markArrived(UUID self) {
         if (a.equals(self)) aArrived = true;
         else if (b.equals(self)) bArrived = true;
@@ -152,20 +123,17 @@ public final class Conversation {
         return aArrived && bArrived;
     }
 
-    /** Initiator-only — move to a new phase and reset the phase timer to {@code now}. */
     public void transitionTo(Phase next, long now) {
         this.phase = next;
         this.phaseStartGameTime = now;
     }
 
-    /** Ticks elapsed since the current phase began, or 0 if the phase hasn't started yet. */
     public int ticksInPhase(long now) {
         if (phaseStartGameTime < 0L) return 0;
         long elapsed = now - phaseStartGameTime;
         return elapsed < 0L ? 0 : (int) elapsed;
     }
 
-    /** Relationship delta for the resolved conversation. {@code matches} should be 0..3. */
     public static int outcomeDelta(int matches) {
         return switch (matches) {
             case 0 -> FIGHT_DELTA;

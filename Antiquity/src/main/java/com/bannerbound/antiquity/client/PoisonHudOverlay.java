@@ -15,9 +15,13 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * The HUD-stage poison overlay. The wolfsbane "world goes cold and closes in" look (desaturate / blur
- * / vignette) is now a real framebuffer shader ({@link PoisonPostProcessor}); all that remains here is
- * the warm antidote relief-flash, which is a simple full-screen fade drawn over the (crisp) HUD.
+ * The HUD-stage poison overlay. The wolfsbane "world goes cold and closes in" look (desaturate /
+ * blur / vignette) is now a real framebuffer shader ({@link PoisonPostProcessor}); what remains
+ * here is drawn over the crisp HUD: the warm-yellow antidote relief-flash (a full-screen fade
+ * driven by {@link StatusClientEffects#healFlash}) and the curare eyelids -- heavy lids drooping
+ * and fluttering as the player fights the stun (phase computed from the synced faint/wake
+ * deadline attachments plus the configured stun length), then snapping to full black while
+ * unconscious. Local player only; suppressed while the GUI is hidden.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -30,16 +34,14 @@ public final class PoisonHudOverlay {
             return;
         }
         float time = (float) mc.level.getGameTime() + delta.getGameTimeDeltaPartialTick(false);
-        float flash = PoisonClientEffects.healFlash(time);
+        float flash = StatusClientEffects.healFlash(time);
         if (flash > 0.0F) {
             int a = (int) (flash * 105);
-            g.fill(0, 0, g.guiWidth(), g.guiHeight(), (a << 24) | 0xFFE85C); // warm yellow relief
+            g.fill(0, 0, g.guiWidth(), g.guiHeight(), (a << 24) | 0xFFE85C);
         }
         renderCurareEyelids(mc, g, time);
     }
 
-    /** Curare: heavy eyelids drooping (and fluttering as you fight it) during the stun, then closing to
-     *  full black while unconscious. Local player only; phase from the synced curare deadlines. */
     private static void renderCurareEyelids(Minecraft mc, GuiGraphics g, float time) {
         PoisonState s = mc.player.getData(BannerboundAntiquity.POISON_STATE.get());
         if (s.type() != PoisonType.CURARE) {
@@ -57,7 +59,7 @@ public final class PoisonHudOverlay {
             float stunFrac = Mth.clamp((now - (faintAt - stunTicks)) / (float) stunTicks, 0.0F, 1.0F);
             cover = Math.min(0.92F, 0.20F + 0.65F * stunFrac + 0.05F * Mth.sin(time * 0.5F) * stunFrac);
         } else if (now < wakeAt) {
-            cover = 1.0F; // passed out — eyes shut, full black
+            cover = 1.0F;
         } else {
             return;
         }

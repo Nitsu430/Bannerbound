@@ -6,7 +6,12 @@ import net.minecraft.core.BlockPos;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-/** Client-only shared state between the pottery screen and the slab renderer. */
+/**
+ * Client-only shared state between {@link PotteryScreen} and {@link PotterySlabRenderer}: the
+ * screen writes the active wheel pos, accumulated spin angle, hold flag and progress; the renderer
+ * reads them so the in-progress clay at that block spins with the player's mouse instead of the
+ * idle fallback. One wheel at a time (static fields); the screen must clear() on removal.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class PotterySpinState {

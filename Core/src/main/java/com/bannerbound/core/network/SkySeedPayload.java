@@ -8,9 +8,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C on login, on /bannerbound sky reroll, and on celestialSpeed gamerule change: the
+ * S->C on login, on /bannerbound sky reroll, and on celestialSpeed gamerule change: the
  * world's sky seed + the current celestial time multiplier. The client generates the
- * entire faith sky ({@link com.bannerbound.core.celestial.SkyField}) from the seed —
+ * entire faith sky ({@link com.bannerbound.core.celestial.SkyField}) from the seed -
  * star positions and planet orbits are never themselves synced.
  */
 public record SkySeedPayload(long skySeed, int celestialSpeed, int meteorAmount, int[] monthDays) implements CustomPacketPayload {

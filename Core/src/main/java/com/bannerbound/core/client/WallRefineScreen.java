@@ -17,15 +17,26 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The wall REFINEMENT view (WALLS_PLAN.md Phase 5.5) — the editor's "step 2". A rotating
- * axonometric god-view of the whole planned wall: every piece drawn as a 3D box at its true
- * elevation over a terrain baseline, so height decisions are finally VISIBLE. The auto
- * top-alignment chain is just the first draft; here the player selects pieces and raises /
- * lowers their tops (per-slot overrides, gate-anchor stability rules), places gates, and
- * commits. Blender edit-mode for your wall.
+ * The wall REFINEMENT view (WALLS_PLAN.md Phase 5.5), the wall editor's "step 2": a rotating
+ * axonometric god-view of the whole planned wall, every piece drawn as a 3D box at its true
+ * elevation over a terrain baseline so height decisions are finally VISIBLE. The auto
+ * top-alignment chain is only the first draft; here the player selects pieces and raises /
+ * lowers their tops (per-slot overrides, gate-anchor stability rules), cycles variants, toggles
+ * foundations, places gates, and commits. Blender edit-mode for your wall. Controls: LMB select,
+ * Raise/Lower buttons or +/- keys, Reset returns a piece to the auto height, MMB-drag orbit,
+ * Shift+MMB pan, scroll zoom, A/D/W/S orbit.
  *
- * <p>Controls: LMB select piece · Raise/Lower buttons or +/- keys · Reset returns a piece to
- * the auto height · MMB-drag orbit, Shift+MMB pan, scroll zoom, A/D/W/S orbit.
+ * <p>selectedAnchor is the selected piece's slot-start anchor: stable across payload refreshes,
+ * so a refine/gate/construct action can rebuild the piece list without losing the selection.
+ * parentPreview is the WallPreviewScreen that opened this view; Escape/Close hands the freshest
+ * payload back to it (refine actions mutated it) rather than dumping to the world, and is null
+ * when opened via command. blocksMode renders each piece's real player-authored design voxels,
+ * indexed per-piece so variant overrides show their true blocks; it falls back to flat shaded
+ * solid boxes when design data is missing or the wall is huge (> 12000 cells). The solid pass is
+ * painter's-algorithm depth-sorted (corner > gate > segment tie-break); the block pass is truly
+ * depth-tested. Foundation extensions continue the bottom course down to the deepest ground as
+ * translucent below-grade ghosts. Header strip / right tool panel / selection-card chrome was
+ * added 2026-06-12; the earlier bare floating buttons "looked very placeholder".
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -33,7 +44,6 @@ public class WallRefineScreen extends PolishedScreen {
 
     private WallScreenPayloads.OpenWallPreview payload;
     private List<WallScreenPayloads.PieceLite> pieces;
-    /** Selected piece identity — slot-start anchor, stable across refreshes. */
     private long selectedAnchor = Long.MIN_VALUE;
 
     private double centerX;
@@ -47,8 +57,6 @@ public class WallRefineScreen extends PolishedScreen {
     private boolean orbiting;
     private boolean panning;
 
-    /** The WallPreviewScreen that opened this view — Escape/Close returns to it (with the
-     *  latest payload) instead of dumping to the world. Null when opened via command. */
     @org.jetbrains.annotations.Nullable
     private WallPreviewScreen parentPreview;
 
@@ -64,7 +72,6 @@ public class WallRefineScreen extends PolishedScreen {
     @Override
     public void onClose() {
         if (parentPreview != null && this.minecraft != null) {
-            // Hand the freshest data back — refine actions changed it while we were open.
             parentPreview.refreshWalls(payload);
             this.minecraft.setScreen(parentPreview);
         } else {
@@ -72,12 +79,8 @@ public class WallRefineScreen extends PolishedScreen {
         }
     }
 
-    /** Every design the pieces reference (payload order) — each piece carries its INDEX, so
-     *  per-piece variant overrides render their REAL player-authored blocks. */
     private List<com.bannerbound.core.api.walls.WallDesign> designList = List.of();
-    /** False = design data missing or the wall is huge — fall back to the old solid boxes. */
     private boolean blocksMode;
-    /** Screen-depth compression for the block pass (same trick as the designer viewport). */
     private static final float DEPTH_SQUASH = 0.12f;
 
     private void accept(WallScreenPayloads.OpenWallPreview newPayload) {
@@ -105,24 +108,20 @@ public class WallRefineScreen extends PolishedScreen {
         blocksMode = !designList.isEmpty() && cells > 0 && cells <= 12000;
     }
 
-    /** The design a piece renders with (its payload index), or null. */
     @Nullable
     private com.bannerbound.core.api.walls.WallDesign designFor(WallScreenPayloads.PieceLite p) {
         int index = p.designIndex();
         return index >= 0 && index < designList.size() ? designList.get(index) : null;
     }
 
-    /** Consumes a refreshed payload after a refine/gate/construct action. */
     public void refreshWalls(WallScreenPayloads.OpenWallPreview newPayload) {
         long keep = selectedAnchor;
         accept(newPayload);
-        selectedAnchor = keep; // anchors are stable across recomputes
+        selectedAnchor = keep;
     }
 
-    /** Right tool-panel metrics — backdrop drawn in renderPolishedBackdrop, group labels too. */
     private static final int PANEL_W = 124;
 
-    /** File · Edit · Go — clicks checked first, dropdown drawn last. */
     @org.jetbrains.annotations.Nullable
     private WallMenuBar menuBar;
 
@@ -145,7 +144,6 @@ public class WallRefineScreen extends PolishedScreen {
                         PacketDistributor.sendToServer(
                             new WallScreenPayloads.ToggleWallGate(sel.anchor()));
                     }
-                    // Corners can't hold gates — runs are clipped around them.
                 }, () -> selectedPiece() != null && selectedPiece().kindOrdinal() != 1))),
             new WallMenuBar.Menu("Go", List.of(
                 WallMenuBar.Item.of("Flat Preview", () -> {
@@ -173,7 +171,6 @@ public class WallRefineScreen extends PolishedScreen {
                 Component.translatable("bannerbound.wall_refine.reset_height.tooltip")))
             .accent(primaryAccent())
             .build());
-        // PIECE group: per-piece variant + foundation refinements (playtest 2026-06-12).
         addRenderableWidget(PolishButton.polished(
                 Component.translatable("bannerbound.wall_refine.variant_cycle"), b -> {
             WallScreenPayloads.PieceLite sel = selectedPiece();
@@ -204,7 +201,6 @@ public class WallRefineScreen extends PolishedScreen {
         addRenderableWidget(PolishButton.polished(
                 Component.translatable("bannerbound.wall_refine.toggle_gate"), b -> {
             WallScreenPayloads.PieceLite sel = selectedPiece();
-            // Corners can't hold gates — runs are clipped around them (playtest 2026-06-12).
             if (sel != null && sel.kindOrdinal() != 1) {
                 // Gates key on the SLOT anchor (y=0), not the kind-aware refine key.
                 PacketDistributor.sendToServer(new WallScreenPayloads.ToggleWallGate(sel.anchor()));
@@ -222,8 +218,6 @@ public class WallRefineScreen extends PolishedScreen {
             .build());
         addRenderableWidget(PolishButton.polished(
                 Component.translatable("bannerbound.wall_refine.flat_preview"), b -> {
-                // Prefer the live parent (keeps ITS Town Hall back-link); fall back to a
-                // fresh preview when opened via command.
                 if (parentPreview != null) {
                     onClose();
                 } else if (this.minecraft != null) {
@@ -242,9 +236,6 @@ public class WallRefineScreen extends PolishedScreen {
         }
     }
 
-    // ─── Projection (axonometric, world coords relative to the wall's centroid) ─────────────
-
-    /** Returns {screenX, screenY, viewDepth} — depth backs the painter's-algorithm sort. */
     private double[] project(double wx, double wy, double wz) {
         double px = wx - centerX;
         double py = wy - centerY;
@@ -259,7 +250,6 @@ public class WallRefineScreen extends PolishedScreen {
             this.height / 2.0 + panY - zoom * y2, z2};
     }
 
-    /** Filled (possibly non-rectangular) projected quad — both windings, no culling games. */
     private void quad(GuiGraphics g, double[] a, double[] b, double[] c, double[] d, int argb) {
         org.joml.Matrix4f mat = g.pose().last().pose();
         com.mojang.blaze3d.vertex.VertexConsumer vc = net.minecraft.client.Minecraft.getInstance()
@@ -275,10 +265,7 @@ public class WallRefineScreen extends PolishedScreen {
         vc.addVertex(mat, (float) a[0], (float) a[1], 0).setColor(argb);
     }
 
-    /** Lambert factor for a fixed sun from the north-west, above — consistent face shading
-     *  from every orbit angle. */
     private static float faceLight(int nx, int ny, int nz) {
-        // Normalized light direction ≈ (-0.458, 0.815, -0.356).
         double dot = nx * -0.458 + ny * 0.815 + nz * -0.356;
         return (float) (0.55 + 0.5 * Math.max(0, dot));
     }
@@ -304,7 +291,6 @@ public class WallRefineScreen extends PolishedScreen {
         g.pose().popPose();
     }
 
-    /** The piece's world-space box corners: start column → along × length, inward × depth. */
     private double[][] pieceCorners(WallScreenPayloads.PieceLite p) {
         Direction outward = Direction.from2DDataValue(p.outward2d());
         Direction along = outward.getClockWise();
@@ -324,7 +310,6 @@ public class WallRefineScreen extends PolishedScreen {
             {minX, y1, minZ}, {maxX, y1, minZ}, {minX, y1, maxZ}, {maxX, y1, maxZ}};
     }
 
-    /** Terrain plate + earth skirt for one piece — the strip of land the wall stands on. */
     private void drawPieceGround(GuiGraphics g, WallScreenPayloads.PieceLite p) {
         double[][] c = pieceCorners(p);
         double groundY = p.maxGround() + 1;
@@ -344,8 +329,6 @@ public class WallRefineScreen extends PolishedScreen {
         quad(g, gt[1], gt[3], gb[3], gb[1], earth);
     }
 
-    /** Kind-colored top outline (thick yellow when selected) — piece identification now that
-     *  the body renders as real blocks. */
     private void drawTopOutline(GuiGraphics g, WallScreenPayloads.PieceLite p, boolean selected) {
         double[][] c = pieceCorners(p);
         double[] s4 = project(c[4][0], c[4][1], c[4][2]);
@@ -353,9 +336,9 @@ public class WallRefineScreen extends PolishedScreen {
         double[] s6 = project(c[6][0], c[6][1], c[6][2]);
         double[] s7 = project(c[7][0], c[7][1], c[7][2]);
         int edge = selected ? 0xFFFFE040 : switch (p.kindOrdinal()) {
-            case 1 -> 0xFFE08A28; // corner
-            case 2 -> 0xFF35C060; // gate
-            default -> 0x80AAAAB8; // segment — subtle
+            case 1 -> 0xFFE08A28;
+            case 2 -> 0xFF35C060;
+            default -> 0x80AAAAB8;
         };
         float px = selected ? 2.5f : 1f;
         seg(g, s4, s5, edge, px);
@@ -364,10 +347,6 @@ public class WallRefineScreen extends PolishedScreen {
         seg(g, s6, s4, edge, px);
     }
 
-    /**
-     * FALLBACK shaded box (used when design data is missing or the wall is enormous).
-     * Painter's-algorithm ordering happens in the caller.
-     */
     private void drawPieceSolid(GuiGraphics g, WallScreenPayloads.PieceLite p, int base,
                                 boolean selected) {
         double[][] c = pieceCorners(p);
@@ -376,39 +355,29 @@ public class WallRefineScreen extends PolishedScreen {
             s[i] = project(c[i][0], c[i][1], c[i][2]);
         }
         drawPieceGround(g, p);
-        // Foundation stem: base floating above the lowest ground = visible dip cost.
         if (p.baseY() > p.minGround() + 1) {
             double midX = (c[0][0] + c[3][0]) / 2.0;
             double midZ = (c[0][2] + c[3][2]) / 2.0;
             seg(g, project(midX, p.minGround() + 1, midZ), project(midX, p.baseY(), midZ),
                 0xFF5577AA, 2f);
         }
-        // Sun-direction shading (light from NW-above) so every box reads consistently from
-        // any orbit angle — fixed per-axis factors looked "inverted" from some sides.
-        quad(g, s[0], s[2], s[6], s[4], shade(base, faceLight(-1, 0, 0)));  // x-min (west)
-        quad(g, s[1], s[3], s[7], s[5], shade(base, faceLight(1, 0, 0)));   // x-max (east)
-        quad(g, s[0], s[1], s[5], s[4], shade(base, faceLight(0, 0, -1))); // z-min (north)
-        quad(g, s[2], s[3], s[7], s[6], shade(base, faceLight(0, 0, 1)));  // z-max (south)
-        quad(g, s[4], s[5], s[7], s[6], shade(base, faceLight(0, 1, 0)));  // top
+        quad(g, s[0], s[2], s[6], s[4], shade(base, faceLight(-1, 0, 0)));
+        quad(g, s[1], s[3], s[7], s[5], shade(base, faceLight(1, 0, 0)));
+        quad(g, s[0], s[1], s[5], s[4], shade(base, faceLight(0, 0, -1)));
+        quad(g, s[2], s[3], s[7], s[6], shade(base, faceLight(0, 0, 1)));
+        quad(g, s[4], s[5], s[7], s[6], shade(base, faceLight(0, 1, 0)));
         drawTopOutline(g, p, selected);
     }
 
-    /**
-     * The REAL wall: every piece's design voxels rendered as depth-tested blocks through the
-     * same pose convention as {@link #project} (so 2D plates/outlines line up exactly), plus
-     * TRANSLUCENT foundation extensions — the bottom course continuing down to the deepest
-     * ground ("use the actual designs here, and show the foundation extensions", playtest
-     * 2026-06-12). Depth testing also retires the painter's-algorithm face inversions.
-     */
     private void renderDesignBlocks(GuiGraphics g) {
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
         com.mojang.blaze3d.vertex.PoseStack pose = g.pose();
-        // Clip below the menu bar; clamped so the rect can't invert on very short/narrow windows.
+        // Scissor rect clamped so it can't invert on very short/narrow windows.
         g.enableScissor(0, Math.min(25, Math.max(0, this.height - 1)),
             Math.max(1, this.width - PANEL_W), this.height);
         pose.pushPose();
         pose.translate(this.width / 2.0 + panX, this.height / 2.0 + panY, 400);
-        pose.last().pose().scale(1f, 1f, DEPTH_SQUASH); // position matrix only — see designer
+        pose.last().pose().scale(1f, 1f, DEPTH_SQUASH); // scale position matrix only, not normals
         pose.scale(zoom, -zoom, zoom);
         pose.mulPose(Axis.XP.rotationDegrees(pitch));
         pose.mulPose(Axis.YP.rotationDegrees(-yaw));
@@ -422,7 +391,6 @@ public class WallRefineScreen extends PolishedScreen {
         com.mojang.blaze3d.platform.Lighting.setupForEntityInInventory();
         for (WallScreenPayloads.PieceLite p : pieces) {
             if (p.waterGap()) continue;
-            // Per-piece design (variant overrides included) by payload index.
             com.bannerbound.core.api.walls.WallDesign design = designFor(p);
             if (design == null) continue;
             Direction outward = Direction.from2DDataValue(p.outward2d());
@@ -451,9 +419,6 @@ public class WallRefineScreen extends PolishedScreen {
                             net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY);
                         pose.popPose();
                     }
-                    // Foundation extension: the BOTTOM course block continues down to the
-                    // deepest ground under this piece — translucent (below-grade). Mirrors
-                    // forEachBlock: per-piece suppression + never continue openables.
                     net.minecraft.world.level.block.state.BlockState bottom =
                         design.stateAt(l, d, 0);
                     boolean openable = bottom != null
@@ -482,7 +447,6 @@ public class WallRefineScreen extends PolishedScreen {
         g.disableScissor();
     }
 
-    /** GUI no-cull remap — same rationale as the designer viewport. */
     private static net.minecraft.client.renderer.RenderType noCullBlockType(
             net.minecraft.client.renderer.RenderType requested, boolean forceTranslucent) {
         boolean translucent = forceTranslucent
@@ -496,7 +460,6 @@ public class WallRefineScreen extends PolishedScreen {
                 net.minecraft.world.inventory.InventoryMenu.BLOCK_ATLAS);
     }
 
-    /** Alpha-scaling consumer for the below-grade foundation ghosts. */
     private record GhostTint(com.mojang.blaze3d.vertex.VertexConsumer delegate)
         implements com.mojang.blaze3d.vertex.VertexConsumer {
         @Override
@@ -539,31 +502,26 @@ public class WallRefineScreen extends PolishedScreen {
     @Override
     protected void renderPolishedBackdrop(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         g.fill(0, 0, this.width, this.height, 0xFF101014);
-        // Painter's algorithm: draw far pieces first (project()'s view depth — higher z is
-        // closer to the viewer in this space).
         java.util.List<WallScreenPayloads.PieceLite> sorted = new java.util.ArrayList<>(pieces);
-        // Tie-break: corners/gates draw after segments at equal depth, mirroring the
-        // blueprint's corner > gate > segment precedence.
         sorted.sort(java.util.Comparator.comparingDouble(p ->
             project(p.startX() + p.length() / 2.0, (p.baseY() + p.topY()) / 2.0,
                 p.startZ() + p.depth() / 2.0)[2] + p.kindOrdinal() * 0.001));
         for (WallScreenPayloads.PieceLite p : sorted) {
             if (p.waterGap()) continue;
             if (blocksMode) {
-                drawPieceGround(g, p); // blocks render the body; ground stays a 2D plate
+                drawPieceGround(g, p);
             } else {
                 boolean selected = p.refineAnchor() == selectedAnchor;
                 int color = switch (p.kindOrdinal()) {
-                    case 1 -> 0xFFE08A28; // corner
-                    case 2 -> 0xFF35C060; // gate
-                    default -> 0xFF9A9AA8; // segment
+                    case 1 -> 0xFFE08A28;
+                    case 2 -> 0xFF35C060;
+                    default -> 0xFF9A9AA8;
                 };
                 drawPieceSolid(g, p, selected ? 0xFFE0C040 : color, selected);
             }
         }
         if (blocksMode) {
             renderDesignBlocks(g);
-            // Identification outlines + selection ABOVE the blocks' depth range.
             g.pose().pushPose();
             g.pose().translate(0, 0, 700);
             for (WallScreenPayloads.PieceLite p : pieces) {
@@ -572,8 +530,6 @@ public class WallRefineScreen extends PolishedScreen {
             }
             g.pose().popPose();
         }
-        // Settlement anchor: a red marker box at the town hall's chunk center so the view has
-        // a "where is home" reference. Raised above the blocks' depth range.
         g.pose().pushPose();
         g.pose().translate(0, 0, 700);
         net.minecraft.core.BlockPos th = payload.base().townHallChunkOrigin();
@@ -586,10 +542,6 @@ public class WallRefineScreen extends PolishedScreen {
         g.drawCenteredString(this.font, "Town Hall", (int) thLabel[0], (int) thLabel[1], 0xFFE08080);
         g.pose().popPose();
 
-        // ─── Chrome: header strip, right tool panel, selection card ────────────────────────
-        // (The bare floating buttons "looked very placeholder", playtest 2026-06-12.)
-        // Fills stay translucent over the 3D god-view; the banner identity rides the 1px
-        // edge lines instead of the panels themselves.
         g.fill(0, 0, this.width, 24, 0xC8101016);
         drawIdentityDivider(g, 0, 24, this.width, identityAccents);
         g.drawCenteredString(this.font, "Wall Refinement", this.width / 2, 8, 0xFFFFFFFF);
@@ -603,7 +555,6 @@ public class WallRefineScreen extends PolishedScreen {
         g.drawString(this.font, "PLAN", px + 8, 212, 0xFF6F6F78);
         g.drawString(this.font, "VIEW", px + 8, 252, 0xFF6F6F78);
 
-        // Selection card (top-left, under the header).
         WallScreenPayloads.PieceLite sel = selectedPiece();
         if (sel != null) {
             String kind = sel.kindOrdinal() == 1 ? "Corner" : sel.kindOrdinal() == 2 ? "Gate" : "Segment";
@@ -624,8 +575,6 @@ public class WallRefineScreen extends PolishedScreen {
             g.drawString(this.font, "Select a piece, then Raise / Lower (+/-)", 10, 34, 0x90A0A0A8);
         }
         if (payload.hasPlan()) {
-            // The committed wall may be an OLDER design than the layout shown here — say so
-            // instead of implying the current design is built (playtest 2026-06-12).
             if (payload.planCurrent()) {
                 g.drawString(this.font, "Committed plan: " + payload.completenessPercent()
                     + "% built", 10, this.height - 16, 0xFF90E090);
@@ -636,8 +585,6 @@ public class WallRefineScreen extends PolishedScreen {
         }
     }
 
-    /** 1px vertical identity edge along a panel border (neutral line when no identity) — same
-     *  chrome as {@code WallDesignerScreen}'s edge, which this screen's panel copied. */
     private void identityEdge(GuiGraphics g, int x, int y0, int y1) {
         if (identityAccents.isEmpty()) {
             g.fill(x, y0, x + 1, y1, GuiPalette.PANEL_BORDER);
@@ -663,11 +610,9 @@ public class WallRefineScreen extends PolishedScreen {
         return null;
     }
 
-    // ─── Input ───────────────────────────────────────────────────────────────────────────────
-
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        // Menu bar first — its dropdown overlays the scene and must win the click.
+        // Menu bar first: its dropdown overlays the scene and must win the click.
         if (menuBar != null && menuBar.mouseClicked(mouseX, mouseY, button)) return true;
         if (super.mouseClicked(mouseX, mouseY, button)) return true;
         if (button == 2) {
@@ -676,7 +621,6 @@ public class WallRefineScreen extends PolishedScreen {
             return true;
         }
         if (button == 0) {
-            // Nearest piece by projected center, generous radius.
             long best = Long.MIN_VALUE;
             double bestDist = 18.0;
             for (WallScreenPayloads.PieceLite p : pieces) {
@@ -735,8 +679,8 @@ public class WallRefineScreen extends PolishedScreen {
             case 68 -> { yaw += 15f; return true; }
             case 87 -> { pitch = Math.min(80f, pitch + 10f); return true; }
             case 83 -> { pitch = Math.max(10f, pitch - 10f); return true; }
-            case 61, 334 -> { sendRefine(1); return true; }   // = / numpad+
-            case 45, 333 -> { sendRefine(-1); return true; }  // - / numpad-
+            case 61, 334 -> { sendRefine(1); return true; }
+            case 45, 333 -> { sendRefine(-1); return true; }
             default -> { }
         }
         return super.keyPressed(keyCode, scanCode, modifiers);

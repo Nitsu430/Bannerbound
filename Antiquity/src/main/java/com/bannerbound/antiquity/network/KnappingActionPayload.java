@@ -13,18 +13,14 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: a step in the active knapping session.
- * <ul>
- *   <li>{@link #COMMIT} — fired on the FIRST chip; the server consumes one rock (the commitment
- *       point — abandoning after this forfeits the rock).</li>
- *   <li>{@link #COMPLETE} — fired after the timing minigame; {@code head} is the shaped head's id and
- *       {@code scores} the per-rep 0–100 scores. The server rolls the quality tier and gives the head.</li>
- *   <li>{@link #BROKE} — the player chipped every cell away (wasted the rock). The rock is already
- *       gone (consumed at COMMIT); the server just ends the session.</li>
- *   <li>{@link #CANCEL} — aborted (Escape) before completing. If COMMIT had fired the rock is forfeit,
- *       otherwise nothing was consumed.</li>
- * </ul>
- * {@code head} is meaningful only for {@link #COMPLETE}; other actions send the {@link #NONE} sentinel.
+ * Client -> server: a step in the active knapping session. COMMIT fires on the FIRST chip and makes
+ * the server consume one rock - the commitment point; abandoning after this forfeits the rock.
+ * COMPLETE fires after the timing minigame with the shaped head's id in {@code head} and the
+ * per-rep 0-100 scores in {@code scores}; the server rolls the quality tier and gives the head.
+ * BROKE means the player chipped every cell away and wasted the (already consumed) rock; the server
+ * just ends the session. CANCEL aborts (Escape) before completing - if COMMIT had fired the rock is
+ * forfeit, otherwise nothing was consumed. {@code head} is meaningful only for COMPLETE; other
+ * actions send the {@link #NONE} placeholder sentinel.
  */
 @ApiStatus.Internal
 public record KnappingActionPayload(int action, ResourceLocation head, List<Integer> scores)
@@ -34,7 +30,6 @@ public record KnappingActionPayload(int action, ResourceLocation head, List<Inte
     public static final int BROKE = 2;
     public static final int CANCEL = 3;
 
-    /** Placeholder head id for non-COMPLETE actions. */
     public static final ResourceLocation NONE =
         ResourceLocation.fromNamespaceAndPath(BannerboundAntiquity.MODID, "none");
 

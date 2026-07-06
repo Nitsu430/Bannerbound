@@ -16,7 +16,12 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** Server -> client full journal snapshot for the current player. */
+/**
+ * Server -> client: the full journal snapshot for the current player (entries + the server gameTick
+ * the snapshot was taken at). The nested Entry and Objective records are the wire mirrors of
+ * JournalEntry / JournalObjective, each with its own StreamCodec. fromEntries builds the payload from
+ * the server-side JournalEntry list, flattening enums to strings and resolving showOnHud at send time.
+ */
 @ApiStatus.Internal
 public record JournalSyncPayload(List<Entry> entries, long gameTick) implements CustomPacketPayload {
     public record Objective(String id, String label, String progressText, boolean complete,

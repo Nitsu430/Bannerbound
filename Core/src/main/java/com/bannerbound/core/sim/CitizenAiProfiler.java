@@ -9,7 +9,7 @@ import org.jetbrains.annotations.ApiStatus;
  * snapshots the total + count. The on-screen {@code CitizenAiProfilerHudLayer} reads the snapshot.
  *
  * <p>Accumulators are touched only on the server thread; the snapshot fields are volatile for the
- * client HUD to read (works directly in single-player — same JVM). Toggle with
+ * client HUD to read (works directly in single-player - same JVM). Toggle with
  * {@code /bannerbound ai_profiler}.
  */
 @ApiStatus.Internal
@@ -23,13 +23,11 @@ public final class CitizenAiProfiler {
     private CitizenAiProfiler() {
     }
 
-    /** Add one citizen's tick duration (server thread only). */
     public static void add(long nanos) {
         accumNanos += nanos;
         accumCount++;
     }
 
-    /** Snapshot this tick's totals and reset the accumulators (call once per server tick). */
     public static void endTick() {
         lastMsPerTick = accumNanos / 1_000_000.0;
         lastCount = accumCount;
@@ -40,7 +38,6 @@ public final class CitizenAiProfiler {
     public static double lastMsPerTick() { return lastMsPerTick; }
     public static int lastCount() { return lastCount; }
 
-    /** Average microseconds spent per citizen this tick. */
     public static double lastMicrosPerCitizen() {
         return lastCount == 0 ? 0.0 : (lastMsPerTick * 1000.0) / lastCount;
     }

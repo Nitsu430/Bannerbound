@@ -18,16 +18,26 @@ import net.neoforged.neoforge.event.level.BlockDropsEvent;
 import net.neoforged.neoforge.event.level.BlockEvent;
 
 /**
- * Strips drops a civ doesn't recognize yet — kill a sheep before you know wool and no wool drops;
+ * Strips drops a civ doesn't recognize yet - kill a sheep before you know wool and no wool drops;
  * break grass before you know seeds and no seeds drop. The decision is delegated to
- * {@link SettlementDropFilter}: automatic known-set gating plus the {@code drop_overrides}
- * exceptions.
- * <p>
- * Both handlers run at {@link EventPriority#LOW} so they filter the <i>final</i> drop set — after
- * {@link OreBreakHandler} has applied any ore-disguise swap and after
- * {@code AnimalDropsEvents} has added its bone bootstrap (bones survive via an {@code always_drop}
- * override). Worker citizens that harvest with {@code Block.getDrops} bypass these events
- * entirely and apply the same filter at their own collection sites.
+ * {@link SettlementDropFilter}: automatic known-set gating plus the drop_overrides exceptions.
+ * Both handlers also feed {@code InsightManager.recordEvent} (mine_block / kill_entity) as a side
+ * effect of the same drop pass.
+ *
+ * Both drop handlers run at {@link EventPriority#LOW} so they filter the FINAL drop set - after
+ * OreBreakHandler has applied any ore-disguise swap and after HuntingEvents has added its bone
+ * bootstrap (bones survive via an always_drop override). Worker citizens that harvest with
+ * Block.getDrops bypass these events entirely and apply the same filter at their own collection
+ * sites.
+ *
+ * Multi-block plant gotcha (bamboo, scaffolding, cactus, sugar cane, kelp): the upper blocks
+ * self-break via neighbor updates the SAME tick the player breaks the support, and those cascade
+ * breaks carry no breaker, so settlementOf(null) is null and every non-starting drop would be
+ * stripped (only the player-broken block survives). We remember the breaking player's settlement
+ * and let breaker-less breaks in the same game tick inherit it. Order-critical: the cascade drop
+ * events fire DURING removeBlock, BEFORE the player's own BlockDropsEvent, so the player must be
+ * recorded at BlockEvent.BreakEvent (start of break, before removal) - hence HIGHEST priority on
+ * onBlockBreakStart - not at BlockDropsEvent, or the cascade would run before anything is recorded.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -35,22 +45,10 @@ public final class DropGatingEvents {
     private DropGatingEvents() {
     }
 
-    // A multi-block plant (bamboo, scaffolding, cactus, sugar cane, kelp, …) breaks its upper
-    // blocks via neighbor-update self-breaks the SAME tick the player breaks the support. Those
-    // cascade breaks carry no breaker, so settlementOf(null) is null and every non-starting drop
-    // gets stripped — only the first, player-broken block dropped. We remember the settlement of
-    // the breaking player and, for a breaker-less break in the same game tick, treat it as part of
-    // that player's action so the whole column drops under their research.
-    //
-    // CRITICAL ordering: the cascade's drop events fire DURING removeBlock of the player's block,
-    // which is BEFORE the player's own block-drop event. So we must record the player at
-    // BlockEvent.BreakEvent (fired at the start of the break, before removal), not at the player's
-    // BlockDropsEvent — otherwise the cascade runs before we've recorded anything.
     private static Settlement lastBreakSettlement;
     private static long lastBreakTick = Long.MIN_VALUE;
 
-    /** Record the breaking player BEFORE the block is removed, so the breaker-less cascade drops it
-     *  triggers this same tick can inherit the player's settlement. */
+    // HIGHEST + recorded before block removal so same-tick cascade self-breaks can inherit it.
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public static void onBlockBreakStart(BlockEvent.BreakEvent event) {
         if (event.getPlayer() == null) {
@@ -64,7 +62,6 @@ public final class DropGatingEvents {
         lastBreakTick = level.getGameTime();
     }
 
-    /** Player block break: filter the spawned drops against the breaker's settlement. */
     @SubscribeEvent(priority = EventPriority.LOW)
     public static void onBlockDrops(BlockDropsEvent event) {
         Level level = event.getLevel();
@@ -78,7 +75,7 @@ public final class DropGatingEvents {
             lastBreakSettlement = settlement;
             lastBreakTick = tick;
         } else if (settlement == null && tick == lastBreakTick) {
-            // Cascade break from a player's action this tick — inherit their settlement.
+            // Breaker-less cascade this tick: inherit the recorded player's settlement.
             settlement = lastBreakSettlement;
         }
         com.bannerbound.core.api.research.InsightManager.recordEvent(
@@ -88,8 +85,6 @@ public final class DropGatingEvents {
         SettlementDropFilter.filterEntities(settlement, sourceId, event.getDrops());
     }
 
-    /** Mob death: filter the spawned drops against the killer's settlement (null = wild death,
-     *  which leaves only starting items). */
     @SubscribeEvent(priority = EventPriority.LOW)
     public static void onLivingDrops(LivingDropsEvent event) {
         if (event.getEntity().level().isClientSide()) {

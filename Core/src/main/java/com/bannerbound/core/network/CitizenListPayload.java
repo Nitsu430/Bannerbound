@@ -16,9 +16,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: response to {@link RequestUnemployedCitizensPayload}. Carries the workstation
- * pos so the client can pair the picker screen with the workstation it was opened from, plus
- * the list of (citizen UUID, name) tuples eligible for assignment.
+ * S->C response to {@link RequestUnemployedCitizensPayload}. Carries the workstation pos so the
+ * client can pair the picker screen with the workstation it was opened from, plus the list of
+ * (citizen UUID, name) tuples eligible for assignment.
  */
 @ApiStatus.Internal
 public record CitizenListPayload(BlockPos workstationPos, List<Entry> entries) implements CustomPacketPayload {

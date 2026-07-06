@@ -15,10 +15,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C snapshot of a settlement's culture-tree state. Twin of {@link ResearchStateSyncPayload}
+ * S->C snapshot of a settlement's culture-tree state. Twin of {@link ResearchStateSyncPayload}
  * for the parallel Culture board in {@code ResearchScreen}'s Culture tab. Same shape minus
- * {@code unlockedItemIds} (the v1 Culture tree doesn't unlock items — narrative milestones
- * only — so we save the bytes and add it back when content needs it).
+ * {@code unlockedItemIds} (the v1 Culture tree doesn't unlock items - narrative milestones
+ * only - so we save the bytes and add it back when content needs it).
  */
 @ApiStatus.Internal
 public record CultureStateSyncPayload(

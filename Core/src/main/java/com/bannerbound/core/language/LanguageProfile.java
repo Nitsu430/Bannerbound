@@ -6,11 +6,20 @@ import java.util.Random;
 import com.bannerbound.core.api.settlement.Era;
 
 /**
- * Deterministic language generator used by both server labels and client-side item names.
+ * Deterministic, seed-driven language generator shared by server labels and client-side item names.
+ * Intentionally self-contained: no lang-file mutation, no network calls, no Minecraft registries -
+ * callers pass a normalized concept and get back repeatable RegisterForms for that settlement seed
+ * and Era.
  *
- * <p>This is intentionally self-contained: no lang-file mutation, no network calls, and no
- * Minecraft registries. Callers supply a normalized concept id/gloss and this class supplies
- * repeatable historical/register forms for that settlement seed.
+ * <p>Word building runs a stem through applyMorphology (a role-specific affix) and then evolveStep
+ * once per era up to the target era, accumulating sound changes so older eras read as ancestral
+ * forms of later ones. Everything keys off mix, a seed+salt hash, so identical inputs always yield
+ * the same word.
+ *
+ * <p>Family names deliberately grow from the very same conceptCore stem as the concept's job word -
+ * a hunter's surname reads as the same word family as the "Hunter" lexicon entry - while the
+ * per-citizen variation perturbs ONLY the trailing family-name ending, so same-profession families
+ * share a stem but differ at the tail.
  */
 public final class LanguageProfile {
     private static final String[] VOWEL_SETS = {
@@ -125,10 +134,6 @@ public final class LanguageProfile {
         );
     }
 
-    /** Earned-surname forms. Shares the concept's ancestral stem with the lexicon's word for that
-     *  concept — so a hunter's surname reads as the same word family as the "Hunter" job entry —
-     *  while {@code variation} (e.g. the citizen's UUID) perturbs ONLY the family-name ending.
-     *  Every same-profession surname therefore shares a stem but differs at the tail. */
     public RegisterForms formsForFamilyName(LanguageConcept concept, Era era, String variation) {
         LanguageConcept actual = concept == null
             ? new LanguageConcept("unknown", "concept", ConceptRole.FAMILY_NAME)
@@ -164,18 +169,15 @@ public final class LanguageProfile {
         return capitalize(root);
     }
 
-    /** Appends the language's family-name marker ("in", per {@link #applyMorphology}) to the shared
-     *  stem, varying the join per citizen. Always suffixes — the recognizable stem leads and only
-     *  the tail changes between same-profession families. */
     private String familyNameTail(String root, String variation) {
         if (root == null || root.isBlank()) return "in";
         Random rng = new Random(mix(seed, "surname-tail:" + variation));
         String marker = "in";
         return switch (rng.nextInt(4)) {
-            case 0 -> root + marker;                                              // …in
-            case 1 -> root + vowels[rng.nextInt(vowels.length)] + marker;         // …ain / …uin
-            case 2 -> root + "-" + marker;                                        // …-in
-            default -> root + marker + consonants[rng.nextInt(consonants.length)]; // …ins / …int
+            case 0 -> root + marker;
+            case 1 -> root + vowels[rng.nextInt(vowels.length)] + marker;
+            case 2 -> root + "-" + marker;
+            default -> root + marker + consonants[rng.nextInt(consonants.length)];
         };
     }
 
@@ -208,10 +210,6 @@ public final class LanguageProfile {
             "concept-morph:" + concept.role().name() + ":" + family + ":" + kind);
     }
 
-    /** The pre-morphology stem of a concept — its family (plus kind and modifier) roots combined,
-     *  before any role-specific affix. Both the lexicon's role forms and earned surnames build on
-     *  this, so a citizen's family name grows from the very same stem as the job word the lexicon
-     *  shows; only the trailing role affix differs. */
     private String conceptCore(LanguageConcept concept) {
         String family = normalizedOptional(concept.family());
         if (family.isBlank()) family = normalized(concept.base());
@@ -242,10 +240,10 @@ public final class LanguageProfile {
         if (kindRoot == null || kindRoot.isBlank()) return familyRoot;
         String link = vowels[Math.floorMod((int) mix(seed, salt + ":link"), vowels.length)];
         return switch (compoundStyle) {
-            case 0 -> familyRoot + kindRoot;          // iron-ingot languages read material first
-            case 1 -> kindRoot + familyRoot;          // head-first compounds
-            case 2 -> familyRoot + "-" + kindRoot;    // marked prestige compounds
-            case 3 -> familyRoot + link + kindRoot;   // fused with a linking vowel
+            case 0 -> familyRoot + kindRoot;
+            case 1 -> kindRoot + familyRoot;
+            case 2 -> familyRoot + "-" + kindRoot;
+            case 3 -> familyRoot + link + kindRoot;
             default -> kindRoot + link + familyRoot;
         };
     }
@@ -253,9 +251,9 @@ public final class LanguageProfile {
     private String combineModifier(String modifierRoot, String core, String salt) {
         String link = vowels[Math.floorMod((int) mix(seed, salt + ":modifier-link"), vowels.length)];
         return switch (modifierStyle) {
-            case 0 -> modifierRoot + core;        // adjective before noun
-            case 1 -> core + modifierRoot;        // adjective after noun
-            case 2 -> modifierRoot + "-" + core;  // visibly marked adjective
+            case 0 -> modifierRoot + core;
+            case 1 -> core + modifierRoot;
+            case 2 -> modifierRoot + "-" + core;
             default -> core + link + modifierRoot;
         };
     }
@@ -271,11 +269,9 @@ public final class LanguageProfile {
         return out.toString();
     }
 
-    /** A stable 2-char affix derived from a syllable. {@link #syllable} can return a single vowel
-     *  when the optional leading consonant is dropped (non-initial syllables), so pad to length 2
-     *  before slicing â€” otherwise {@code substring(0, 2)} runs off the end and crashes. */
     private String affix(String salt, boolean initial) {
         String s = syllable(salt, initial);
+        // syllable() may return a single vowel; pad to length 2 or substring(0, 2) below crashes.
         while (s.length() < 2) s = s + vowels[0];
         return s.substring(0, 2);
     }
@@ -315,8 +311,7 @@ public final class LanguageProfile {
             case 1 -> root + marker;
             case 2 -> root.length() > 3 ? root.substring(0, 2) + marker + root.substring(2) : root + marker;
             case 3 -> root + "-" + marker;
-            // Gemination of the final char. Guard the empty-root case so charAt never runs off the
-            // end (same failure class as the prefix/suffix substring crash).
+            // Guard empty root: charAt(length-1) would crash when geminating the final char.
             default -> root.isEmpty() ? marker : root + root.charAt(root.length() - 1) + marker;
         };
     }
@@ -328,8 +323,6 @@ public final class LanguageProfile {
                 if (out.length() < 7) out = out + suffix;
             }
             case CLASSICAL -> {
-                // Classical sits between the raw Ancient forms and Medieval's consonant shifts:
-                // lightly soften the word and lengthen short stems, but keep the older shape.
                 out = soften(out);
                 if (out.length() < 7) out = out + suffix;
             }

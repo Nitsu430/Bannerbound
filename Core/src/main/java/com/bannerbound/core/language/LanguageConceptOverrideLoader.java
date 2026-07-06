@@ -19,18 +19,16 @@ import net.minecraft.util.GsonHelper;
 import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
- * Optional semantic hints for generated language concepts.
+ * Datapack-driven semantic hints layered on top of seed-derived word generation: entries only
+ * sharpen a concept's base/family/role before generation, the actual word still comes from the
+ * settlement seed.
  *
- * <p>Datapacks may add files under {@code data/<namespace>/language_concepts/*.json}:
- * <pre>
- * { "concepts": [
- *   { "id": "alexsmobs:gorilla", "gloss": "gorilla", "family": "ape", "role": "entity" },
- *   { "token": "ingot", "family": "metal", "role": "material" }
- * ] }
- * </pre>
- *
- * <p>The generated word still comes from the settlement seed. These entries only improve the
- * concept's semantic base and role before generation.
+ * <p>Reads data/&lt;namespace&gt;/language_concepts/*.json, where each concept may key on an exact id
+ * ("id"/"ids"), a whitespace-delimited token match ("token"/"tokens"), or default to the file's
+ * resource id. The exact and token maps are rebuilt on datapack reload and are volatile because the
+ * reload runs off the main thread while lookups happen on it. Entries flatten to a tab-delimited
+ * line via Entry.encode for client sync (see CustomLanguageSync); Entry.decode must stay in lockstep
+ * with that 5-field layout.
  */
 public class LanguageConceptOverrideLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "language_concepts";

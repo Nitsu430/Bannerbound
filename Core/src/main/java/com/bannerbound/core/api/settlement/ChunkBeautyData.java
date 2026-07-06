@@ -13,13 +13,12 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.saveddata.SavedData;
 
 /**
- * {@link SavedData} holding per-chunk appeal state ({@link ChunkAppealData}) for every tracked
- * chunk — a settlement's claimed chunks plus their 8-neighbour ring. Kept separate from
- * {@link SettlementData} so the per-chunk reference arrays and count maps don't bloat the
- * frequently-saved settlement blob.
- *
- * <p>The <i>set</i> of tracked chunks is not persisted — it is rebuilt from {@link SettlementData}
- * by {@link ChunkBeautyManager#recomputeTrackedSet}. Only the scan results are saved.
+ * SavedData holding per-chunk appeal state ({@link ChunkAppealData}) for every tracked chunk -
+ * a settlement's claimed chunks plus their 8-neighbour ring. Kept separate from SettlementData
+ * so the per-chunk reference arrays and count maps don't bloat the frequently-saved settlement
+ * blob. Only scan results are persisted: the set of tracked chunks itself is rebuilt from
+ * SettlementData by ChunkBeautyManager.recomputeTrackedSet, and a newly tracked entry starts
+ * unscanned until the manager's first scan once the chunk is loaded.
  */
 @ApiStatus.Internal
 public class ChunkBeautyData extends SavedData {
@@ -46,15 +45,12 @@ public class ChunkBeautyData extends SavedData {
         return chunks.get(packedChunk);
     }
 
-    /** Begins tracking {@code packedChunk} if not already tracked. The new entry is unscanned —
-     *  {@link ChunkBeautyManager} performs its first scan once the chunk is loaded. */
     public void track(long packedChunk) {
         if (chunks.putIfAbsent(packedChunk, new ChunkAppealData()) == null) {
             setDirty();
         }
     }
 
-    /** Stops tracking {@code packedChunk} (settlement unclaimed it / disbanded). */
     public void untrack(long packedChunk) {
         if (chunks.remove(packedChunk) != null) {
             setDirty();

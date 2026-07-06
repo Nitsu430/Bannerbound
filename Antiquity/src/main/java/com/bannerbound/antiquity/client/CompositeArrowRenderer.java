@@ -21,18 +21,20 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Renders the modular arrow as a vanilla-arrow-shaped projectile in THREE layers — back, then shaft,
- * then tip — each from its own {@code textures/projectiles/*.png}, picked from the parts on the
- * entity's pickup stack. The three part textures are designed to be pixel-DISJOINT (verified: their
- * union is the full arrow and no two paint the same texel), so each layer just draws the complete
- * vanilla arrow geometry and the cutout shader discards the texels it doesn't own — no UV splitting and
- * no z-fight offset are needed (unlike the {@link BlowdartRenderer}, whose poison layer repaints the
- * shaft's texels and so had to be lifted). Geometry mirrors vanilla {@code ArrowRenderer}.
+ * Renders the modular arrow as a vanilla-arrow-shaped projectile in THREE layers -- back, then
+ * shaft, then tip -- each from its own data-driven {@code textures/projectiles} PNG, picked from the
+ * parts on the entity's pickup stack (a part with no projectile texture contributes no layer). The
+ * three part textures are designed to be pixel-DISJOINT (verified: their union is the full arrow and
+ * no two paint the same texel), so each layer just draws the complete vanilla arrow geometry (head
+ * cross + four fins, mirroring vanilla ArrowRenderer) and the cutout shader discards the texels it
+ * doesn't own -- no UV splitting and no z-fight offset needed (unlike {@link BlowdartRenderer},
+ * whose poison layer repaints the shaft's texels and so had to be lifted), and layer order is purely
+ * cosmetic. FALLBACK exists only to satisfy the abstract getTextureLocation; the real textures are
+ * bound per layer in render().
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class CompositeArrowRenderer extends EntityRenderer<CompositeArrowEntity> {
-    /** Fallback for the abstract method only — actual layer textures come from the part registry. */
     private static final ResourceLocation FALLBACK = ResourceLocation.fromNamespaceAndPath(
         BannerboundAntiquity.MODID, "textures/projectiles/flint_arrow_tip.png");
 
@@ -42,7 +44,7 @@ public class CompositeArrowRenderer extends EntityRenderer<CompositeArrowEntity>
 
     @Override
     public ResourceLocation getTextureLocation(CompositeArrowEntity entity) {
-        return FALLBACK; // layers bind their own data-driven textures in render(); satisfies the abstract method
+        return FALLBACK;
     }
 
     @Override
@@ -60,11 +62,8 @@ public class CompositeArrowRenderer extends EntityRenderer<CompositeArrowEntity>
         poseStack.scale(0.05625F, 0.05625F, 0.05625F);
         poseStack.translate(-4.0F, 0.0F, 0.0F);
 
-        // Back first (lowest), then shaft, then tip on top — though disjoint texels mean order is
-        // cosmetic. The entity BufferSource shares one builder across cutout layers, so each layer's
-        // geometry must be written FULLY before the next layer's buffer is fetched (fetching the next
-        // ends the current builder → "Not building" crash). Textures are data-driven; a part with no
-        // projectile texture simply contributes no layer.
+        // The shared entity buffer builder must finish each cutout layer FULLY before the next
+        // getBuffer call, or the builder ends mid-layer -> "Not building" crash.
         renderLayer(poseStack, buffer, packedLight,
             ArrowParts.projectileTexture(ArrowPart.SLOT_BACK, entity.back()));
         renderLayer(poseStack, buffer, packedLight,
@@ -76,14 +75,11 @@ public class CompositeArrowRenderer extends EntityRenderer<CompositeArrowEntity>
         super.render(entity, entityYaw, partialTicks, poseStack, buffer, packedLight);
     }
 
-    /** Draws the full vanilla arrow geometry (head cross + four fins) from one part texture; the cutout
-     *  shader keeps only the texels that texture actually paints. */
     private void renderLayer(PoseStack poseStack, MultiBufferSource buffer, int light,
                              ResourceLocation texture) {
-        if (texture == null) return; // an undefined part contributes no layer
+        if (texture == null) return;
         VertexConsumer vc = buffer.getBuffer(RenderType.entityCutout(texture));
         PoseStack.Pose ph = poseStack.last();
-        // Arrowhead cross (two opposed faces near the point).
         vertex(ph, vc, -7, -2, -2, 0.0F, 0.15625F, -1, 0, 0, light);
         vertex(ph, vc, -7, -2, 2, 0.15625F, 0.15625F, -1, 0, 0, light);
         vertex(ph, vc, -7, 2, 2, 0.15625F, 0.3125F, -1, 0, 0, light);
@@ -92,7 +88,7 @@ public class CompositeArrowRenderer extends EntityRenderer<CompositeArrowEntity>
         vertex(ph, vc, -7, 2, 2, 0.15625F, 0.15625F, 1, 0, 0, light);
         vertex(ph, vc, -7, -2, 2, 0.15625F, 0.3125F, 1, 0, 0, light);
         vertex(ph, vc, -7, -2, -2, 0.0F, 0.3125F, 1, 0, 0, light);
-        // Four fins (the shaft strip) — the loop rotates 4×90° = 360°, leaving the pose as it began.
+        // Fin loop rotates 4 x 90deg = 360deg, leaving the pose exactly as it began (no push/pop).
         for (int j = 0; j < 4; j++) {
             poseStack.mulPose(Axis.XP.rotationDegrees(90.0F));
             PoseStack.Pose pf = poseStack.last();

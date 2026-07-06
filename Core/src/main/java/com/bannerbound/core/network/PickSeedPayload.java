@@ -13,9 +13,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server. Player has chosen a seed for the farmer selection identified by {@code rodId}.
- * Empty {@code seedItemId} means "skip" — the selection stays awaiting-seed and the prompt will
- * be re-queued on the next applicable trigger.
+ * Client -> server. Player has chosen a seed for the farmer selection identified by rodId. An empty
+ * seedItemId means "skip" - the selection stays awaiting-seed and the prompt is re-queued on the
+ * next applicable trigger.
  */
 @ApiStatus.Internal
 public record PickSeedPayload(UUID rodId, String seedItemId) implements CustomPacketPayload {

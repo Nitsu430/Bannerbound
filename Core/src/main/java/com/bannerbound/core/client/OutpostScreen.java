@@ -19,13 +19,17 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The Outpost Banner's management screen, v3: a "Site" status block with item icons (the deposit's
- * yield, the storage chest, the lodging bed) and a colour-coded VEIN BAR (ready faces vs the
- * deposit's total — the at-a-glance "is there work right now?"), then a divided "Workforce"
- * section naming the appointed miner with Appoint/Unassign controls. The banner — not the
- * Foreman's Rod — owns the deposit marker; every action round-trips and the server replies with a
- * fresh payload, so the screen live-updates. All prose wraps ({@link PolishedScreen#drawWrapped})
- * and the panel height is computed from wrapped line counts.
+ * The Outpost Banner's management screen: a "Site" status block with item icons (the deposit's
+ * yield, the storage chest, the lodging bed) and a colour-coded vein bar (ready faces vs the
+ * deposit's total -- the at-a-glance "is there work right now?"), then a divided "Workforce"
+ * section naming the appointed miner with Appoint/Recall controls. The banner, not the Foreman's
+ * Rod, owns the deposit marker; every action round-trips and the server replies with a fresh
+ * {@link OpenOutpostScreenPayload}, so the screen live-updates. All prose wraps
+ * ({@link PolishedScreen#drawWrapped}) and the panel height is computed from wrapped line counts,
+ * so each init()'s height-math pass must mirror its draw pass exactly or rows overlap or clip.
+ * initEstablish() is the "place then confirm" variant for a valid-but-unclaimed site; its
+ * Establish button is shown disabled (not hidden) at the outpost cap so the limit reads as a wall,
+ * not a missing UI. Richness tints the deposit line (poor gray, rich gold) as scouting intel.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -37,7 +41,6 @@ public class OutpostScreen extends PolishedScreen {
     private static final int VEIN_BAR_H = 5;
     private static final int BTN_ROW_H = 24;
 
-    /** One icon-plus-text status row. Icon may be empty (plain text row). */
     private record Row(ItemStack icon, Component text) {}
 
     private final OpenOutpostScreenPayload data;
@@ -53,14 +56,13 @@ public class OutpostScreen extends PolishedScreen {
             initEstablish();
             return;
         }
-        final int textX0 = 12;                       // panel-relative text margin
-        final int iconTextDX = 20;                   // text offset on icon rows
+        final int textX0 = 12;
+        final int iconTextDX = 20;
         final int textW = PANEL_WIDTH - textX0 * 2;
         final int lineH = this.font.lineHeight + 1;
         final boolean hasWorker = !data.assignedName().isEmpty() || data.markerOpen();
         final boolean showVein = data.veinReady() >= 0 && data.veinTotal() > 0;
 
-        // ── "Site" rows ─────────────────────────────────────────────────────────────────────────
         final List<Row> site = new ArrayList<>();
         Component resource = data.resourceName().isEmpty()
             ? Component.translatable("bannerbound.outpost.ui.no_resource").withStyle(ChatFormatting.DARK_GRAY)
@@ -68,7 +70,6 @@ public class OutpostScreen extends PolishedScreen {
                 .withStyle(ChatFormatting.AQUA);
         Component depositLine = Component.translatable("bannerbound.outpost.ui.resource", resource)
             .withStyle(ChatFormatting.GRAY);
-        // Richness suffix — scouting intel: a poor vein reads gray, a rich one gold.
         if (data.richness() == 0) {
             depositLine = depositLine.copy().append(" ").append(
                 Component.translatable("bannerbound.outpost.ui.poor").withStyle(ChatFormatting.DARK_GRAY));
@@ -107,7 +108,7 @@ public class OutpostScreen extends PolishedScreen {
                 .withStyle(ChatFormatting.GREEN);
         }
 
-        // ── Height math (must mirror the draw pass below exactly) ──────────────────────────────
+        // Height math: must mirror the draw pass below exactly or rows overlap/clip.
         int siteH = 0;
         for (Row r : site) siteH += rowHeight(r, textW, iconTextDX, lineH);
         final int veinH = veinText == null ? 0
@@ -119,7 +120,6 @@ public class OutpostScreen extends PolishedScreen {
             + (hasWorker ? BTN_ROW_H : 2) + HEADER_H + candidateRows * BTN_ROW_H + 34;
         final int panelX = (this.width - PANEL_WIDTH) / 2;
         final int panelY = (this.height - panelH) / 2;
-        // Y landmarks shared by the draw pass and button placement.
         final int workforceTop = panelY + 28 + siteH + veinH;
         final int assignedTop = workforceTop + HEADER_H;
         final int unassignTop = assignedTop + assignedH;
@@ -145,7 +145,6 @@ public class OutpostScreen extends PolishedScreen {
             }
             if (veinText != null) {
                 y = drawWrapped(graphics, this.font, veinText, x, y, textW, 0xFFFFFFFF) + 2;
-                // The vein bar: green = mineable faces, dark = worked out and waiting on a wave.
                 int barW = textW;
                 int fillW = (int) (barW * (data.veinReady() / (float) data.veinTotal()));
                 graphics.fill(x, y, x + barW, y + VEIN_BAR_H, 0xFF2A2A2A);
@@ -208,12 +207,6 @@ public class OutpostScreen extends PolishedScreen {
             .build());
     }
 
-    /**
-     * The "place then confirm" variant: this banner stands on a valid but not-yet-claimed outpost
-     * site, so we show the site readout (resource / storage / lodging / slots) and a single
-     * "Establish outpost here" button. Confirming sends {@link EstablishOutpostPayload}; the server
-     * grants the claim and replies with the full management screen.
-     */
     private void initEstablish() {
         final int textX0 = 12;
         final int iconTextDX = 20;
@@ -278,7 +271,6 @@ public class OutpostScreen extends PolishedScreen {
             .bounds(panelX + textX0, panelY + 28 + siteH + hintH, PANEL_WIDTH - textX0 * 2, 20)
             .accent(primaryAccent())
             .build();
-        // Cap reached → the button is shown disabled so the limit reads as a wall, not a missing UI.
         establish.active = !full;
         this.addRenderableWidget(establish);
 
@@ -290,7 +282,6 @@ public class OutpostScreen extends PolishedScreen {
             .build());
     }
 
-    /** Section header: small gray label with a divider line running to the panel edge. */
     private void drawSectionHeader(net.minecraft.client.gui.GuiGraphics graphics,
                                    int panelX, int y, Component label) {
         int x = panelX + 12;
@@ -299,13 +290,11 @@ public class OutpostScreen extends PolishedScreen {
         graphics.fill(lineX, y + 6, panelX + PANEL_WIDTH - 12, y + 7, 0xFF3A3A3A);
     }
 
-    /** Row height: at least the icon's 18px, or however many wrapped lines the text needs. */
     private int rowHeight(Row r, int textW, int iconTextDX, int lineH) {
         int w = r.icon().isEmpty() ? textW : textW - iconTextDX;
         return Math.max(ICON_ROW_MIN_H, wrappedLineCount(this.font, r.text(), w) * lineH + 6) + ROW_GAP;
     }
 
-    /** Icon for the deposit row: the chunk's actual yield item (raw copper, raw tin, calcite...). */
     private ItemStack depositIcon() {
         if (data.resourceName().isEmpty()) return ItemStack.EMPTY;
         try {
@@ -328,7 +317,6 @@ public class OutpostScreen extends PolishedScreen {
         return new ItemStack(Items.STONE_PICKAXE);
     }
 
-    /** Lodging icon: the Antiquity thatch bed when present, else a vanilla bed. */
     private static ItemStack bedIcon() {
         Item thatch = net.minecraft.core.registries.BuiltInRegistries.ITEM.getOptional(
             net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(

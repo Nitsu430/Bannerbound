@@ -10,8 +10,8 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: a Yes/No on an in-flight council chat vote, clicked in the Town Hall "Votes" tab. (The
- *  chat [Yes]/[No] route runs {@code /bannerbound vote <id> yes|no} instead — same server path.) */
+/** C->S: a Yes/No on an in-flight council chat vote, clicked in the Town Hall "Votes" tab. (The
+ *  chat [Yes]/[No] route runs {@code /bannerbound vote <id> yes|no} instead - same server path.) */
 @ApiStatus.Internal
 public record CastChatVotePayload(int voteId, boolean yes) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<CastChatVotePayload> TYPE =

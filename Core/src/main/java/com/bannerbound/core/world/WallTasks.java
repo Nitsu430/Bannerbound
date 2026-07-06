@@ -22,20 +22,24 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * The builders' task board (WALLS_PLAN.md Phase 4) — DERIVED STATE, never persisted (stocker
- * lesson): tasks are regenerated from "the blueprint/demolition-queue says X at pos P, the
- * world disagrees", so the board self-heals and player hand-building simply makes tasks
- * disappear. Regeneration is LAZY — it happens when a builder asks and the board is stale —
- * so settlements without builders pay nothing.
+ * The builders' task board (WALLS_PLAN.md Phase 4) -- DERIVED STATE, never persisted (stocker
+ * lesson): tasks are regenerated from "the blueprint/demolition queue says X at pos P, the world
+ * disagrees", so the board self-heals and player hand-building simply makes tasks disappear.
+ * Regeneration is LAZY -- it runs when a builder asks (claim) and the board is stale (older than
+ * REGEN_INTERVAL_TICKS) -- so settlements without builders pay nothing.
  *
- * <p>Task kinds: PLACE (blueprint position empty/replaceable), CLEAR (clearable vegetation/
- * decor in the footprint — logs are banked to the depot), DEMOLISH (a position in the plan's
- * obsolete queue still holding a block — broken and refunded). Non-terrain STRUCTURES in the
- * footprint never become tasks: red ghosts mark them, removal is the player's call.
+ * <p>Task kinds: PLACE (blueprint position empty/replaceable; Task.expected holds the wanted state,
+ * null for the others), CLEAR (clearable vegetation/decor in the footprint -- logs bank to the
+ * depot), DEMOLISH (an obsolete-queue position still holding a block -- broken and refunded).
+ * Non-terrain STRUCTURES in the footprint never become tasks: red ghosts mark them, removal is the
+ * player's call.
  *
- * <p>Claims are per-citizen with a timeout (multiple builders = automatic load split). Tasks a
- * builder reports unreachable or unsupplied are skipped until the next regeneration, and the
- * counts surface in {@code /bannerbound walls status} so a stalled site is diagnosable.
+ * <p>claim() picks the best open task for one builder: CLEAR/DEMOLISH first (the site must be tidy
+ * before courses rise), then PLACE bottom-up and nearest first so courses complete visibly. Claims
+ * are per-citizen with CLAIM_TIMEOUT_TICKS (multiple builders = automatic load split). A task a
+ * builder reports unreachable (can't path) or unsupplied (material in neither depot nor stockpile)
+ * is skipped until the next regen, and counts() surfaces [open, unsupplied, unreachable] in
+ * "/bannerbound walls status" so a stalled site is diagnosable.
  */
 @ApiStatus.Internal
 public final class WallTasks {
@@ -45,7 +49,6 @@ public final class WallTasks {
     public static final class Task {
         public final long pos;
         public final Kind kind;
-        /** Expected state for PLACE; null for CLEAR/DEMOLISH. */
         @Nullable
         public final BlockState expected;
         @Nullable
@@ -67,9 +70,7 @@ public final class WallTasks {
 
     private static final class Board {
         final List<Task> tasks = new ArrayList<>();
-        /** -1 = never regenerated. NOT Long.MIN_VALUE — {@code now - MIN_VALUE} overflows
-         *  negative and the staleness check would never fire (playtest bug 2026-06-11). */
-        long lastRegenTick = -1L;
+        long lastRegenTick = -1L; // -1 not Long.MIN_VALUE: now - MIN_VALUE overflows negative so staleness never fires (2026-06-11 bug)
     }
 
     private static final Map<UUID, Board> BOARDS = new HashMap<>();
@@ -79,10 +80,6 @@ public final class WallTasks {
     private WallTasks() {
     }
 
-    /**
-     * Claims the best open task for {@code citizenId}: CLEAR/DEMOLISH first (the site must be
-     * tidy before courses rise), then PLACE bottom-up, nearest first. Null = nothing workable.
-     */
     @Nullable
     public static synchronized Task claim(ServerLevel level, Settlement settlement,
                                           UUID citizenId, BlockPos near) {
@@ -101,7 +98,6 @@ public final class WallTasks {
             }
             BlockPos pos = task.blockPos();
             if (!level.hasChunk(pos.getX() >> 4, pos.getZ() >> 4)) continue;
-            // CLEAR/DEMOLISH outrank PLACE; PLACE sorts bottom-up so courses complete visibly.
             double score = (task.kind == Kind.PLACE ? 1_000_000.0 + pos.getY() * 10_000.0 : 0.0)
                 + near.distSqr(pos);
             if (score < bestScore) {
@@ -120,13 +116,11 @@ public final class WallTasks {
         task.claimedBy = null;
     }
 
-    /** Builder couldn't path to it — skip until the next regeneration. */
     public static synchronized void markUnreachable(UUID settlementId, Task task) {
         task.unreachable = true;
         task.claimedBy = null;
     }
 
-    /** PLACE task whose material is in neither the depot nor the stockpiles. */
     public static synchronized void markUnsupplied(UUID settlementId, Task task) {
         task.unsupplied = true;
         task.claimedBy = null;
@@ -139,7 +133,6 @@ public final class WallTasks {
         }
     }
 
-    /** [open, unsupplied, unreachable] — the walls status line. */
     public static synchronized int[] counts(UUID settlementId) {
         Board board = BOARDS.get(settlementId);
         if (board == null) return new int[]{0, 0, 0};
@@ -171,13 +164,12 @@ public final class WallTasks {
             if (!level.hasChunk(cursor.getX() >> 4, cursor.getZ() >> 4)) continue;
             BlockState actual = level.getBlockState(cursor);
             BlockState expected = entry.getValue();
-            if (actual.is(expected.getBlock())) continue;            // satisfied
+            if (actual.is(expected.getBlock())) continue;
             if (actual.isAir() || actual.canBeReplaced()) {
                 board.tasks.add(new Task(packed, Kind.PLACE, expected));
             } else if (WallLayoutEngine.isClearableBlock(level, cursor, actual)) {
                 board.tasks.add(new Task(packed, Kind.CLEAR, null));
             }
-            // else: structure obstacle — red ghost, player's decision, never a task.
         }
         LongIterator obsolete = plan.obsolete().iterator();
         while (obsolete.hasNext()) {

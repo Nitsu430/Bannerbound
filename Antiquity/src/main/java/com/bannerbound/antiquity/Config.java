@@ -12,8 +12,23 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.fml.event.config.ModConfigEvent;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
-// An example config class. This is not required, but it's a good idea to have one to keep your config organized.
-// Demonstrates how to use Neo's config APIs
+/**
+ * Antiquity's server-side NeoForge {@link ModConfigSpec}: every tunable knob for the mod's
+ * immersive systems, grouped into three pushed sections ("hunting", "fletching", "poison").
+ * The {@code .comment(...)} strings are the player-facing TOML docs (they are code, not source
+ * comments); this class just wires field <-> spec entry <-> default/range and builds SPEC once
+ * after the static block.
+ *
+ * Hunting: smarter, warier vanilla-animal AI for the stone-age hunting loop (flee/alarm/charge,
+ * stamina run-down, bleeding, blood + footprint decals), all server-side. The per-tier flee
+ * speeds (cow/prey/horse/fast walk+sprint) were retuned ~1.45x faster than the original feel
+ * because animals felt too slow; keep cow the slowest tier and the walk < sprint ordering.
+ * Each footprint species needs a textures/item/<name>_footprint.png or no track renders.
+ *
+ * Poison: generic per-poison behaviour lives in PoisonType; the knobs here are the shared ones
+ * (stage-advance clock, DoT interval, non-lethal floor, curare stun/out timers, oleander clock).
+ * The leading LOG_DIRT_BLOCK / MAGIC_NUMBER entries are leftover mod-template examples.
+ */
 public class Config {
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
@@ -29,13 +44,10 @@ public class Config {
             .comment("What you want the introduction message to be for the magic number")
             .define("magicNumberIntroduction", "The magic number is... ");
 
-    // a list of strings that are treated as resource locations for items
     public static final ModConfigSpec.ConfigValue<List<? extends String>> ITEM_STRINGS = BUILDER
             .comment("A list of items to log on common setup.")
             .defineListAllowEmpty("items", List.of("minecraft:iron_ingot"), () -> "", Config::validateItemName);
 
-    // ── Immersive hunting ───────────────────────────────────────────────────────────────────
-    // Smarter, warier vanilla-animal AI for the stone-age hunting loop. All server-side.
     public static final ModConfigSpec.BooleanValue HUNTING_ENABLED;
     public static final ModConfigSpec.IntValue FLEE_RANGE;
     public static final ModConfigSpec.IntValue FLEE_RANGE_SNEAK;
@@ -45,7 +57,6 @@ public class Config {
     public static final ModConfigSpec.IntValue HERD_ALARM_RADIUS;
     public static final ModConfigSpec.IntValue MINING_NOISE_RADIUS;
     public static final ModConfigSpec.BooleanValue LURE_FOOD_CANCELS;
-    // Flee speed multipliers (nav speed = base attribute × multiplier). Cow < player < others.
     public static final ModConfigSpec.DoubleValue COW_WALK_SPEED;
     public static final ModConfigSpec.DoubleValue COW_SPRINT_SPEED;
     public static final ModConfigSpec.DoubleValue PREY_WALK_SPEED;
@@ -54,7 +65,6 @@ public class Config {
     public static final ModConfigSpec.DoubleValue HORSE_SPRINT_SPEED;
     public static final ModConfigSpec.DoubleValue FAST_WALK_SPEED;
     public static final ModConfigSpec.DoubleValue FAST_SPRINT_SPEED;
-    // Pig boar charge.
     public static final ModConfigSpec.DoubleValue BOAR_CHARGE_CHANCE;
     public static final ModConfigSpec.IntValue BOAR_WINDUP_TICKS;
     public static final ModConfigSpec.IntValue BOAR_CHARGE_TICKS;
@@ -63,45 +73,35 @@ public class Config {
     public static final ModConfigSpec.DoubleValue BOAR_CHARGE_DAMAGE;
     public static final ModConfigSpec.DoubleValue BOAR_IMPACT_REACH;
     public static final ModConfigSpec.IntValue BOAR_CHARGE_CLAIM_TICKS;
-    // Predators + babies.
     public static final ModConfigSpec.BooleanValue WILD_WOLVES_HOSTILE;
     public static final ModConfigSpec.BooleanValue OCELOTS_HOSTILE;
     public static final ModConfigSpec.BooleanValue PREDATORS_PACIFIED_BY_FOOD;
     public static final ModConfigSpec.BooleanValue BABIES_FLEE;
     public static final ModConfigSpec.BooleanValue BABIES_CHARGE;
-    // Persistence hunting (stamina).
     public static final ModConfigSpec.DoubleValue STAMINA_MAX;
     public static final ModConfigSpec.DoubleValue STAMINA_DRAIN_PER_TICK;
     public static final ModConfigSpec.DoubleValue STAMINA_REGEN_PER_TICK;
     public static final ModConfigSpec.DoubleValue STAMINA_TIRED_THRESHOLD;
     public static final ModConfigSpec.DoubleValue TIRED_SPEED_MULT;
-    // Hostile predator buffs (wild wolves / ocelots).
     public static final ModConfigSpec.DoubleValue HOSTILE_SPEED_MULT;
     public static final ModConfigSpec.DoubleValue HOSTILE_ATTACK_BONUS;
-    // Bleeding.
     public static final ModConfigSpec.BooleanValue BLEED_ENABLED;
     public static final ModConfigSpec.IntValue BLEED_DURATION_TICKS;
     public static final ModConfigSpec.IntValue BLEED_INTERVAL_TICKS;
     public static final ModConfigSpec.DoubleValue BLEED_DAMAGE_PER_TICK;
     public static final ModConfigSpec.DoubleValue BLEED_SPEED_MULT;
-    // Ground blood-splat decals.
     public static final ModConfigSpec.BooleanValue BLOOD_SPLAT_ENABLED;
     public static final ModConfigSpec.IntValue BLOOD_SPLAT_LIFETIME_TICKS;
     public static final ModConfigSpec.DoubleValue BLOOD_SPLAT_CHANCE;
-    // Footprint tracks (only species that have a <species>_footprint.png).
     public static final ModConfigSpec.BooleanValue FOOTPRINTS_ENABLED;
     public static final ModConfigSpec.IntValue FOOTPRINT_LIFETIME_TICKS;
     public static final ModConfigSpec.DoubleValue FOOTPRINT_SPACING;
     public static final ModConfigSpec.DoubleValue FOOTPRINT_SPEED_STRETCH;
     public static final ModConfigSpec.DoubleValue FOOTPRINT_CHANCE;
     public static final ModConfigSpec.ConfigValue<List<? extends String>> FOOTPRINT_SPECIES;
-    // Spear fishing — a thrown spear that kills a fish leaves a floating spear-with-fish catch.
     public static final ModConfigSpec.BooleanValue SPEAR_FISHING_ENABLED;
     public static final ModConfigSpec.IntValue SPEAR_CATCH_LIFETIME_TICKS;
-    // Fletching minigame.
     public static final ModConfigSpec.BooleanValue FLETCHING_FOV_EFFECT;
-    // ── Poison (blowdart / herb poisons) ────────────────────────────────────────────────────
-    // Generic, per-poison behaviour is coded in PoisonType; these are the shared knobs.
     public static final ModConfigSpec.BooleanValue POISON_ENABLED;
     public static final ModConfigSpec.IntValue POISON_STAGE_ADVANCE_TICKS;
     public static final ModConfigSpec.IntValue POISON_DOT_INTERVAL_TICKS;
@@ -137,7 +137,6 @@ public class Config {
         LURE_FOOD_CANCELS = BUILDER.comment("Holding an animal's favourite food stops it fleeing/charging you.")
             .define("lureFoodCancels", true);
 
-        // ~1.45× faster across the board (animals felt too slow). Cow stays the slowest tier.
         COW_WALK_SPEED = BUILDER.defineInRange("cowWalkSpeed", 1.89, 0.1, 8.0);
         COW_SPRINT_SPEED = BUILDER.defineInRange("cowSprintSpeed", 2.18, 0.1, 8.0);
         PREY_WALK_SPEED = BUILDER.defineInRange("preyWalkSpeed", 2.32, 0.1, 8.0);

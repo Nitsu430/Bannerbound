@@ -38,25 +38,33 @@ import net.minecraft.world.level.block.Blocks;
  * The Carpenter NPC's craft driver at a Carpenter's Table. The player path is the headline (the
  * budget + build list + saw minigame); this is the "hook now, build later" delegation layer: the
  * carpenter withdraws a wood family's canonical logs from workshop storage and produces a building
- * block at the data-driven {@code log_cost → yield}, or builds an assembly recipe (wooden tools,
- * sticks, ladder, bowl) from stocked planks/sticks. Carpentry has <b>no quality</b>, so {@code finish}
- * returns the plain result — no roll, no {@code TOOL_QUALITY} component. Wood families are limited to
- * the common overworld set for the NPC so its min-stock rows stay manageable; the player picker is
- * unrestricted.
+ * block at the data-driven log_cost -> yield, or builds an assembly recipe (wooden tools, sticks,
+ * ladder, bowl) from stocked planks/sticks. Carpentry has NO quality, so {@code finish} returns the
+ * plain result - no roll, no TOOL_QUALITY component. {@code FAMILIES} limits the NPC to the common
+ * overworld woods so its min-stock rows stay manageable; the player picker is unrestricted.
+ * {@code chooseCraft} runs the standard two passes: queued orders FIFO first, then min-stock
+ * deficits. {@code XP_KEY} is this profession's bucket in Core's jobXp map.
  *
- * <p>It participates in the settlement's production chain via the Stocker surfaces
- * ({@link #missingInputs} = "haul me logs/planks/sticks for what I want to craft",
- * {@link #retainedItems} = "don't haul those back out"); because {@link #possibleOutputs} already
- * lists planks etc., a downstream workshop wanting planks auto-orders them onto this carpenter.
+ * <p>Stocker surfaces wire it into the production chain. {@link #missingInputs} (the haul surface,
+ * "haul me logs/planks/sticks for what I want to craft") buffers raws: inputs pre-stocked to
+ * {@code INPUT_BUFFER_CRAFTS} crafts per wanted min-stock product, plus exact order needs.
+ * {@link #trueInputDemand} deliberately skips that buffer - a chain-crafted input (e.g. planks for
+ * an assembly this same carpenter makes) is ordered at the true need (orders + min-stock deficit)
+ * so buffers never cascade. The haul system is item-keyed, so a tag ingredient ({@code #planks})
+ * resolves to one concrete item via {@code supplyTarget}: the candidate storage holds the most of
+ * (top it up), else the first candidate as a deterministic default; {@code resolveInputs} likewise
+ * picks the first stocked candidate when actually crafting. {@link #retainedItems} (the KEEP
+ * surface, "don't haul these back out") keeps every input a wanted craft consumes, and for tag
+ * ingredients keeps every candidate the storage actually holds so a half-stack of, say, birch
+ * planks isn't yanked. Because {@link #possibleOutputs} lists planks etc., a downstream workshop
+ * wanting planks auto-orders them onto this carpenter.
  */
 @ApiStatus.Internal
 public class CarpenterExecutor implements WorkExecutor {
-    /** XP key — per-profession bucket (Core jobXp map). */
     public static final String XP_KEY = "carpentry";
     private static final int TICKS_PER_BEAT = 30;
     private static final int BEATS = 3;
 
-    /** Wood families the NPC will work (canonical logs). The player picker has no such limit. */
     private static final String[] FAMILIES = {
         "minecraft:oak", "minecraft:spruce", "minecraft:birch", "minecraft:jungle",
         "minecraft:acacia", "minecraft:dark_oak", "minecraft:mangrove", "minecraft:cherry"
@@ -77,8 +85,6 @@ public class CarpenterExecutor implements WorkExecutor {
         return null;
     }
 
-    /** Finds a family + output row that yields {@code wanted} and whose logs storage holds, or an
-     *  assembly recipe (wooden tools etc.) whose planks/sticks storage holds. */
     @Nullable
     private static Craft tryCraftFor(ServerLevel sl, Workshop workshop, BlockPos workBlock, Item wanted) {
         for (String key : FAMILIES) {
@@ -105,8 +111,6 @@ public class CarpenterExecutor implements WorkExecutor {
         return null;
     }
 
-    /** Resolves an assembly recipe's ingredients to concrete stacks the storage holds enough of
-     *  (e.g. {@code #planks} → the first stocked plank type), or {@code null} if any is short. */
     @Nullable
     private static List<ItemStack> resolveInputs(ServerLevel sl, Workshop workshop, CarpentryAssembly a) {
         List<ItemStack> inputs = new ArrayList<>(a.ingredients().size());
@@ -145,26 +149,14 @@ public class CarpenterExecutor implements WorkExecutor {
         return out;
     }
 
-    // ── Stocker surfaces (production chain) ──────────────────────────────────────────────────────
-
-    /** Per-wanted-recipe input buffer the stocker tops the workshop up to (≈ this many crafts). */
     private static final int INPUT_BUFFER_CRAFTS = 4;
 
-    /** True if {@code result} is something this workshop currently wants to craft: a queued order or
-     *  auto-order ({@code ordered}), or a positive min-stock deficit. Mirrors the canonical
-     *  {@code wantedRecipes} gate (FletcherExecutor). */
     private static boolean wants(ServerLevel sl, Settlement settlement, Workshop workshop,
                                  Item result, Set<Item> ordered) {
         return ordered.contains(result)
             || Workshops.wantedByMinStock(sl, settlement, workshop, new ItemStack(result));
     }
 
-    /**
-     * The Stocker's SUPPLY surface: for every craft this carpenter currently WANTS, the deficit
-     * between a small input buffer and what storage holds — logs for family outputs, the stocked (or
-     * default) plank/stick for assembly recipes. Concrete items only (the haul system is item-keyed,
-     * so a {@code #planks} ingredient resolves to a concrete plank via {@link #supplyTarget}).
-     */
     @Override
     public List<ItemStack> missingInputs(ServerLevel sl, Settlement settlement, Workshop workshop,
                                          BlockPos workBlock) {
@@ -174,15 +166,9 @@ public class CarpenterExecutor implements WorkExecutor {
     @Override
     public List<ItemStack> trueInputDemand(ServerLevel sl, Settlement settlement, Workshop workshop,
                                            BlockPos workBlock) {
-        // Production sizing: no rolling buffer — a chain-crafted input (e.g. planks for an assembly,
-        // which this same carpenter makes) is ordered at the true need, never a buffer's worth.
         return demandStacks(sl, settlement, workshop, workBlock, false);
     }
 
-    /** Per-input deficit for every wanted output/assembly. {@code bufferRaws} = the haul surface
-     *  (logs/planks pre-stocked to {@link #INPUT_BUFFER_CRAFTS} crafts of a min-stock product);
-     *  without it inputs are sized at the TRUE need (orders + min-stock deficit) for chain
-     *  production. */
     private List<ItemStack> demandStacks(ServerLevel sl, Settlement settlement, Workshop workshop,
                                          BlockPos workBlock, boolean bufferRaws) {
         Map<Item, Integer> desired = new LinkedHashMap<>();
@@ -247,8 +233,6 @@ public class CarpenterExecutor implements WorkExecutor {
         return deficit;
     }
 
-    /** The concrete item to request for a tag/item ingredient: the candidate the storage already
-     *  holds the most of (top it up), else the first candidate as a deterministic default. */
     @Nullable
     private static Item supplyTarget(ServerLevel sl, Workshop workshop, CarpentryAssembly.Ingredient in) {
         List<Item> candidates = in.candidates();
@@ -265,11 +249,6 @@ public class CarpenterExecutor implements WorkExecutor {
         return best != null ? best : candidates.get(0);
     }
 
-    /**
-     * The Stocker's KEEP surface: every input the carpenter's wanted crafts consume — so the stocker
-     * never hauls them back out. For an assembly tag ingredient ({@code #planks}) this keeps every
-     * candidate the storage actually holds (so a half-stack of, say, birch planks isn't yanked).
-     */
     @Override
     public Set<Item> retainedItems(ServerLevel sl, Settlement settlement, Workshop workshop,
                                    BlockPos workBlock) {
@@ -309,6 +288,6 @@ public class CarpenterExecutor implements WorkExecutor {
     public ItemStack finish(ServerLevel sl, CitizenEntity citizen, BlockPos workBlock, Craft craft) {
         sl.playSound(null, workBlock, BannerboundAntiquity.SAW_DONE_SOUND.get(),
             SoundSource.BLOCKS, 0.9F, 1.0F);
-        return craft.result(); // carpentry has no quality — plain result
+        return craft.result();
     }
 }

@@ -12,23 +12,22 @@ import net.minecraft.world.level.ChunkPos;
 
 /**
  * Walks an outpost-assigned worker the long haul from the settlement out to its remote work site,
- * then hands off to the local work / sleep / idle goals once on site. The actual travel — short,
- * vanilla-pathable hops instead of one truncating 128-block {@code moveTo}, plus an off-screen
- * abstract-step rescue — lives in the shared {@link LongHaulWalker}; this goal just owns the
- * lifecycle (when to start/stop) and the arrival hand-off.
+ * then hands off to the local work/sleep/idle goals once within ARRIVE (12 blocks horizontally).
+ * The actual travel -- short vanilla-pathable hops instead of one truncating 128-block moveTo,
+ * plus an off-screen abstract-step rescue -- lives in the shared {@link LongHaulWalker}; this goal
+ * only owns the lifecycle (when to start/stop) and the arrival hand-off.
  *
- * <p><b>Priority 2, registered before SleepGoal</b> (see {@link CitizenEntity#registerGoals}): same
- * priority means a worker mid-commute at nightfall isn't preempted into a doomed single 128-block
- * walk to a far outpost bed — it finishes the hop-walk to the site first, then SleepGoal beds it
- * down on arrival. Inert (one cheap null check) for any citizen without an outpost assignment, since
- * only the outpost work goals ever set {@link CitizenEntity#getOutpostSite()}.
- *
- * @see LongHaulWalker
- * @see SettlementPatrolGoal SettlementPatrolGoal — idles the worker around the site once arrived
+ * <p>Registered at priority 2, before SleepGoal (see {@link CitizenEntity#registerGoals}): the
+ * shared priority means a worker mid-commute at nightfall isn't preempted into a doomed single
+ * 128-block walk to a far outpost bed -- it finishes the hop-walk to the site first, then SleepGoal
+ * beds it down on arrival. Inert (one cheap null check) for any citizen without an outpost
+ * assignment, since only the outpost work goals ever set {@link CitizenEntity#getOutpostSite()}.
+ * liveSite() gates on the site still being a working claim so a fallen/moved outpost ends the
+ * commute. canUse starts only on a think tick, spreading the fleet's first pathfinds across ticks.
+ * {@link SettlementPatrolGoal} idles the worker around the site once arrived.
  */
 @ApiStatus.Internal
 public class OutpostCommuteGoal extends Goal {
-    /** Horizontal distance to the site at which we hand off to the local work/idle/sleep goals. */
     private static final double ARRIVE = 12.0;
     private static final double ARRIVE_SQ = ARRIVE * ARRIVE;
 
@@ -49,8 +48,8 @@ public class OutpostCommuteGoal extends Goal {
         if (!citizen.isAiActive()) return false;
         BlockPos s = liveSite();
         if (s == null) return false;
-        if (horizDistSq(s) <= ARRIVE_SQ) return false;   // already there — local goals take over
-        if (!citizen.isThinkTick()) return false;        // stagger the first pathfind like other goals
+        if (horizDistSq(s) <= ARRIVE_SQ) return false;
+        if (!citizen.isThinkTick()) return false;
         this.site = s;
         return true;
     }
@@ -76,13 +75,10 @@ public class OutpostCommuteGoal extends Goal {
     @Override
     public void tick() {
         if (site != null) {
-            // ARRIVED is handled by canContinueToUse going false (which runs stop()); WALKING /
-            // WAITING just keep the goal alive while the walker drives navigation.
             walker.stepToward(citizen, site, speedModifier, ARRIVE, true);
         }
     }
 
-    /** The outpost site IF it's still a live working claim of the worker's settlement, else null. */
     private BlockPos liveSite() {
         BlockPos s = citizen.getOutpostSite();
         if (s == null) return null;
@@ -91,7 +87,6 @@ public class OutpostCommuteGoal extends Goal {
         return s;
     }
 
-    /** Horizontal (XZ) squared distance from the worker to {@code p}'s column centre. */
     private double horizDistSq(BlockPos p) {
         double dx = (p.getX() + 0.5) - citizen.getX();
         double dz = (p.getZ() + 0.5) - citizen.getZ();

@@ -14,6 +14,14 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/**
+ * S->C full snapshot of a settlement's research/insight state: completed nodes, the active node,
+ * per-node progress, science/sec, capacity, unlocked item ids, the queued node ids, insight
+ * progress, and fired insights. Drives the client research tree UI. Hand-serialized field-by-field
+ * so encode and decode order must stay in lockstep. The nested {@link ProgressEntry} record pairs a
+ * research id with its progress; {@link #flattenProgress} converts a server-side id->progress map
+ * into the wire list.
+ */
 @ApiStatus.Internal
 public record ResearchStateSyncPayload(
     List<String> completed,

@@ -13,6 +13,10 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/**
+ * Server -> client: the active OreDisguise list, so the client keeps disguised ore rendered as its
+ * cover block until the relevant research reveals it.
+ */
 @ApiStatus.Internal
 public record OreDisguisesSyncPayload(List<OreDisguise> disguises) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<OreDisguisesSyncPayload> TYPE =

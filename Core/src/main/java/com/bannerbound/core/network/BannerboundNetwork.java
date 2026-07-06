@@ -12,13 +12,18 @@ import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 
 /**
- * Single registration point for every {@link net.minecraft.network.protocol.common.custom.CustomPacketPayload}
- * the mod sends. Server→client payloads are gated behind {@code FMLEnvironment.dist == Dist.CLIENT}
- * with no-op handlers on the server side — required so dedicated servers can encode a payload
- * but never class-load the client-only handler that references {@code Minecraft.getInstance()}.
- * <p>
- * Adding a payload: create the record + StreamCodec, then add one {@code registrar.playToServer}
- * or matching pair of {@code playToClient} lines here.
+ * Single registration point for every CustomPacketPayload the mod sends, invoked once from
+ * RegisterPayloadHandlersEvent. C->S payloads register unconditionally against ServerPayloadHandler
+ * (or inline enqueueWork lambdas for the WorkshopMenu family). S->C payloads must be registered on
+ * BOTH dists: on the client the real handlers live in ClientPayloadHandler, which is @OnlyIn(CLIENT)
+ * and references Minecraft/screens, while a dedicated server still has to know each TYPE + STREAM_CODEC
+ * so it can encode outgoing packets -- hence the dist-guarded if/else where the server branch
+ * registers identical no-op handlers. Registering the real client handler unconditionally would
+ * class-load Minecraft on a dedicated server and trip the runtime dist cleaner; dropping the
+ * server-side no-op branch means the server cannot encode that payload at all. The two branches must
+ * stay in sync -- every playToClient in the client branch needs a no-op twin in the server branch.
+ * Adding a payload: create the record + StreamCodec, then add one playToServer line, or a matching
+ * pair of playToClient lines (real handler in the client branch, no-op in the server branch).
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -360,7 +365,6 @@ public final class BannerboundNetwork {
             AssignCitizenToWorkstationPayload.STREAM_CODEC,
             ServerPayloadHandler::handleAssignWorkstation
         );
-        // ── Job tab (per-citizen employment) ──
         registrar.playToServer(
             AssignCitizenJobPayload.TYPE,
             AssignCitizenJobPayload.STREAM_CODEC,
@@ -491,7 +495,6 @@ public final class BannerboundNetwork {
             AssignCitizenToHomePayload.STREAM_CODEC,
             ServerPayloadHandler::handleAssignCitizenToHome
         );
-        // ── Workshops (CRAFTER_PLAN.md) ──
         registrar.playToServer(
             RenameWorkshopPayload.TYPE,
             RenameWorkshopPayload.STREAM_CODEC,
@@ -562,12 +565,7 @@ public final class BannerboundNetwork {
             ServerPayloadHandler::handleRequestBannerCopy
         );
 
-        // Client-bound payloads. The real handlers live in ClientPayloadHandler, which
-        // is @OnlyIn(Dist.CLIENT) and references Minecraft/SettleScreen. The runtime
-        // dist cleaner refuses to load that class on a dedicated server, so we keep
-        // the method references inside a dist-guarded branch. The server still needs
-        // to register TYPE + CODEC so it can encode these when sending, hence the
-        // no-op handlers on the server side.
+        // S->C: real handlers are CLIENT-only (they touch Minecraft); the else branch registers no-op twins so the server can still encode.
         if (FMLEnvironment.dist == Dist.CLIENT) {
             registrar.playToClient(
                 OpenSettleScreenPayload.TYPE,

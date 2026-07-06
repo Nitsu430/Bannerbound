@@ -13,15 +13,13 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: open the "Tribe vote" reveal screen. Sent to every settlement member
- * when a chief election ends in a tie and the citizens are about to break it. Each row in
- * the parallel lists {@code voterNames} / {@code candidateNames} is one citizen's vote,
- * ordered the way they'll appear (the client reveals them one at a time with an
- * exponentially-shortening delay — first vote slow, last vote fast, "ta...ta..ta.ta.tatata").
- *
- * <p>The screen is purely cosmetic — the actual chief-enactment is server-scheduled to fire
- * after the reveal completes. Players who closed the screen still see the chat broadcast and
- * the elected Chief takes effect identically.
+ * Server -> client: open the "Tribe vote" reveal screen, sent to every settlement member when a
+ * chief election ends in a tie and the citizens are about to break it. Each row in the parallel
+ * lists voterNames / candidateNames is one citizen's vote, ordered the way they will appear (the
+ * client reveals them one at a time with an exponentially-shortening delay - first vote slow, last
+ * vote fast). The screen is purely cosmetic: the actual chief-enactment is server-scheduled to fire
+ * after the reveal completes, so players who closed the screen still see the chat broadcast and the
+ * elected Chief takes effect identically.
  */
 @ApiStatus.Internal
 public record OpenTribeVoteScreenPayload(

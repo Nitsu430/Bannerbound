@@ -5,8 +5,16 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
- * Public registry describing how insight trigger counters are evaluated. Expansion mods may
- * register a type during common setup, then call {@link InsightManager#recordEvent} when it occurs.
+ * Public registry describing how insight trigger counters are evaluated, and the source of truth
+ * for the built-in trigger types. Expansion mods register a type during common setup, then call
+ * {@link InsightManager#recordEvent} when it occurs. Kind decides accumulation: COUNT/EVENT
+ * increments per occurrence; LEVEL stores a live "have >=N now" reading and is sticky once the
+ * threshold is hit. obtain_item is LEVEL because it is a holdings poll (InsightManager#pollObtain
+ * sums settlement storage + online members' inventories), NOT an event - so it counts items
+ * however they were obtained and stamps nothing on items; it replaced the old craft_item trigger,
+ * which could not see crafts at the mod's many custom workstations. targetRequired gates whether a
+ * target must be authored; breed_animal takes an optional target ("" = any animal, else id/#tag).
+ * Re-registering an id with different kind/targetRequired throws.
  */
 public final class InsightTriggerRegistry {
     public enum Kind { COUNT, LEVEL, EVENT }
@@ -21,14 +29,7 @@ public final class InsightTriggerRegistry {
         register("place_block", Kind.COUNT, true);
         register("claim_chunk", Kind.COUNT, false);
         register("reach_population", Kind.LEVEL, false);
-        // "The settlement has ≥N of an item right now." A holdings poll (InsightManager#pollObtain),
-        // NOT an event — it sums settlement storage + online members' inventories, so it counts items
-        // however they were obtained (picked up, crafted, pulled out of a custom workstation like a
-        // drying rack, taken from a chest) and stamps nothing on items (they stack normally). LEVEL
-        // semantics like reach_population: sticky once the threshold is hit. Replaced the old
-        // craft_item trigger, which could not see crafts at the mod's many custom workstations.
         register("obtain_item", Kind.LEVEL, true);
-        // Fires when an animal is bred. Target optional: "" matches any animal, or an entity id/#tag.
         register("breed_animal", Kind.COUNT, false);
     }
 

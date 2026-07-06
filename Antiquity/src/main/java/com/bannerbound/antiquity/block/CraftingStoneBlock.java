@@ -32,24 +32,22 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * Crafting Stone — a knapping workbench carved out of cobblestone/sandstone/red_sandstone by a
- * flint knife. Items are placed on it one at a time (mixed types allowed), held by the
- * {@link CraftingStoneBlockEntity}. When the pile matches a recipe, a floating spinning result
- * shows above it; shift-right-click crafts.
- * <ul>
- *   <li>Right-click with an item → add ONE of it to the pile.</li>
- *   <li>Right-click empty-handed → take the last item back out.</li>
- *   <li>Shift-right-click → craft (when a recipe is matched).</li>
- * </ul>
+ * Crafting Stone -- a knapping workbench carved out of cobblestone/sandstone/red_sandstone by a
+ * flint knife. Items are piled on it one at a time (mixed types allowed), held by the
+ * {@link CraftingStoneBlockEntity}; when the pile matches a recipe a floating spinning result shows
+ * above it. Right-click with an item adds ONE to the pile; an empty-handed click takes the last item
+ * back out; ONLY shift-right-click crafts -- a plain click never does, so a finished pile is never
+ * consumed by accident (the floating ghost preview is the no-shift feedback). Both interaction paths
+ * check {@code WorkBlockLocks}: a citizen mid-craft owns the stone, so players cannot insert into or
+ * pull the pile out from under them. The MATERIAL property records which rock the stone was carved
+ * from and drives its texture variant + what it drops; SHAPE hugs the model's main stone (4-12
+ * across, 0-7 high) so collision/selection match what is drawn.
  */
 public class CraftingStoneBlock extends HorizontalDirectionalBlock implements EntityBlock {
     public static final MapCodec<CraftingStoneBlock> CODEC = simpleCodec(CraftingStoneBlock::new);
-    /** Hugs the model's main stone (4–12, 0–7) so collision/selection match what's drawn. */
     public static final VoxelShape SHAPE = Block.box(4.0, 0.0, 4.0, 12.0, 7.0, 12.0);
-    /** Which rock the stone was carved from — drives its texture variant + what it drops. */
     public static final EnumProperty<Material> MATERIAL = EnumProperty.create("material", Material.class);
 
-    /** The carveable rocks, each with its own crafting-stone skin + drop. */
     public enum Material implements StringRepresentable {
         STONE("stone"),
         SANDSTONE("sandstone"),
@@ -94,11 +92,7 @@ public class CraftingStoneBlock extends HorizontalDirectionalBlock implements En
         return SHAPE;
     }
 
-    /**
-     * The carved stone isn't a full block, so vanilla classifies the cell as walkable and citizens path
-     * onto the workstation (standing on it, or snagging). Mark it un-pathfindable so the pathfinder routes
-     * around it and the crafter stands beside it instead.
-     */
+    // Non-full collision box reads as walkable to vanilla nav and citizens snag; must stay un-pathfindable.
     @Override
     protected boolean isPathfindable(BlockState state,
                                      net.minecraft.world.level.pathfinder.PathComputationType type) {
@@ -124,8 +118,6 @@ public class CraftingStoneBlock extends HorizontalDirectionalBlock implements En
         if (!(level.getBlockEntity(pos) instanceof CraftingStoneBlockEntity be)) {
             return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
         }
-        // Crafting on the block requires SHIFT (a plain click only adds/removes items, so finishing a
-        // pile by accident no longer consumes it). The floating ghost preview is the no-shift craft.
         if (player.isSecondaryUseActive() && tryCraft(level, pos, be)) {
             return ItemInteractionResult.sidedSuccess(level.isClientSide);
         }
@@ -147,7 +139,6 @@ public class CraftingStoneBlock extends HorizontalDirectionalBlock implements En
         if (!(level.getBlockEntity(pos) instanceof CraftingStoneBlockEntity be)) {
             return InteractionResult.PASS;
         }
-        // A citizen mid-craft owns the stone — players can't pull the pile out from under them.
         if (!level.isClientSide
                 && com.bannerbound.core.api.workshop.WorkBlockLocks.isLockedByOther(pos, player.getUUID())) {
             player.displayClientMessage(
@@ -156,8 +147,6 @@ public class CraftingStoneBlock extends HorizontalDirectionalBlock implements En
                     .withStyle(net.minecraft.ChatFormatting.YELLOW), true);
             return InteractionResult.CONSUME;
         }
-        // SHIFT + empty-handed crafts a completed recipe. A plain empty-handed click never crafts —
-        // it pulls the last item back off the stone, so a finished pile is never consumed by accident.
         if (player.isSecondaryUseActive() && tryCraft(level, pos, be)) {
             return InteractionResult.sidedSuccess(level.isClientSide);
         }
@@ -168,7 +157,6 @@ public class CraftingStoneBlock extends HorizontalDirectionalBlock implements En
         return InteractionResult.sidedSuccess(level.isClientSide);
     }
 
-    /** Crafts when the stone has a valid result: consumes the pile, pops the result above. */
     private static boolean tryCraft(Level level, BlockPos pos, CraftingStoneBlockEntity be) {
         if (be.getResult().isEmpty()) return false;
         if (!level.isClientSide) {

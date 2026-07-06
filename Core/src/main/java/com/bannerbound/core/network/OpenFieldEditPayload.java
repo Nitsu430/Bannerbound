@@ -15,12 +15,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client. Opens the field-edit UI for a farmer selection ({@code rodId}) when the player
- * shift-right-clicks the field with the Foreman's Rod. Carries everything the screen needs, computed
- * server-side: the candidate seeds, the field's current crop + assigned worker, and the roster of
- * this settlement's farmers (parallel {@code farmerIds}/{@code farmerNames}) to populate the worker
- * dropdown. {@link #currentWorker} is {@code BlockSelection.NO_CITIZEN} (zero UUID) when the field
- * is open to all farmers.
+ * S->C: opens the field-edit UI for a farmer selection (rodId) when the player shift-right-clicks
+ * the field with the Foreman's Rod. Carries everything the screen needs, computed server-side: the
+ * candidate seeds, the field's current crop + assigned worker, and the roster of this settlement's
+ * farmers (parallel farmerIds / farmerNames) to populate the worker dropdown. currentWorker is
+ * BlockSelection.NO_CITIZEN (zero UUID) when the field is open to all farmers.
  */
 @ApiStatus.Internal
 public record OpenFieldEditPayload(UUID rodId, List<String> candidateSeeds, String currentSeed,

@@ -11,8 +11,11 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Ponder storyboards for the Mortar &amp; Pestle — a single block that grinds ingredients into dyes,
- * inks and pastes. Scenes registered under {@code bannerboundantiquity:mortar_and_pestle}.
+ * Ponder storyboards for the Mortar &amp; Pestle - a single block that grinds ingredients into
+ * dyes, inks and pastes via the press-and-grind minigame (gated by Herbalism research; four
+ * crushes finish a batch). Scenes registered under {@code bannerboundantiquity:mortar_and_pestle}.
+ * Built at runtime on the shared blank platform (see PonderUtil.basePlate); liquid, ingredient and
+ * mixing states are faked by rewriting the BE's Liquid / Ingredient / MixAnimTicks NBT.
  */
 @OnlyIn(Dist.CLIENT)
 public final class MortarScenes {
@@ -46,7 +49,6 @@ public final class MortarScenes {
         scene.world().setBlock(pos, BannerboundAntiquity.MORTAR_AND_PESTLE.get().defaultBlockState(), false);
         scene.idle(10);
 
-        // Add water.
         scene.overlay().showControls(util.vector().topOf(pos), Pointing.DOWN, 40)
             .rightClick().withItem(PonderUtil.stack("minecraft:potion"));
         scene.idle(5);
@@ -59,7 +61,6 @@ public final class MortarScenes {
             .placeNearTarget();
         scene.idle(70);
 
-        // Add ingredient.
         scene.overlay().showControls(util.vector().topOf(pos), Pointing.DOWN, 40)
             .rightClick().withItem(PonderUtil.stack("minecraft:poppy"));
         scene.idle(5);
@@ -72,7 +73,6 @@ public final class MortarScenes {
             .placeNearTarget();
         scene.idle(80);
 
-        // Grind it (press-and-grind minigame). Gated by Herbalism; finishes the batch in four crushes.
         scene.overlay().showControls(util.vector().centerOf(pos), Pointing.DOWN, 40).rightClick();
         scene.idle(5);
         modify(scene, util, tag -> {
@@ -88,7 +88,6 @@ public final class MortarScenes {
             .placeNearTarget();
         scene.idle(100);
 
-        // Use the finished dye on an item.
         scene.overlay().showControls(util.vector().topOf(pos), Pointing.DOWN, 40)
             .rightClick().withItem(PonderUtil.stack("minecraft:leather_chestplate"));
         scene.idle(5);

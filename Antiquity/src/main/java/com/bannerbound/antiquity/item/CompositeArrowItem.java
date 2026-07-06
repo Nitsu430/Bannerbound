@@ -20,12 +20,18 @@ import net.minecraft.world.item.TooltipFlag;
 import net.minecraft.world.level.Level;
 
 /**
- * The modular arrow — ONE bow-ammo item assembled from three interchangeable parts (tip / shaft / back),
- * each stored as a data component (see {@link ArrowParts}). The tip and shaft metal weight scale the
- * shot's damage; the back scales accuracy (handled by {@code PrimitiveBowItem}); craftsmanship quality
- * scales on top. The inventory icon picks a layered combo model from the parts (the {@code arrow_combo}
- * property), and the in-flight {@link CompositeArrowEntity} carries the parts for the 3-layer render.
- * Replaces the old per-material flint/copper/tin/bronze arrow items.
+ * The modular arrow - ONE bow-ammo item assembled from three interchangeable parts (tip / shaft /
+ * back), each stored as a data component (see {@link ArrowParts}); replaces the old per-material
+ * flint/copper/tin/bronze arrow items. The tip and shaft metal weight scale the shot's damage,
+ * the back scales accuracy (handled by {@code PrimitiveBowItem}), and craftsmanship quality
+ * scales on top. The inventory icon is composited at render time by a BEWLR from the data-driven
+ * part textures, so a modpack-added material's icon needs no model files; the in-flight
+ * {@link CompositeArrowEntity} carries the parts for the 3-layer render. Display: an assembled
+ * arrow is named for its tip ("Bronze Arrow"), while a bare, un-stamped stack (the generic
+ * order/min-stock entry) is just "Arrow"; part names use a lang key with a humanized-id fallback
+ * so modpack materials read nicely ("Steel") without lang entries. The tooltip's 5-pip stat bars
+ * are scaled to indicative reference ranges (the bars are a feel, not exact numbers - real values
+ * live in the arrow_parts JSON), with accuracy shown as the inverse of the inaccuracy multiplier.
  */
 public class CompositeArrowItem extends ArrowItem {
 
@@ -33,11 +39,10 @@ public class CompositeArrowItem extends ArrowItem {
         super(properties);
     }
 
-    /** The icon is composited at render time from the data-driven part textures (BEWLR), so a
-     *  modpack-added material's icon works with no model files. Client-only; never run on a server. */
     @Override
     public void initializeClient(java.util.function.Consumer<
             net.neoforged.neoforge.client.extensions.common.IClientItemExtensions> consumer) {
+        // Client-only hook: client renderer classes stay fully-qualified/lazy so a dedicated server never classloads them.
         consumer.accept(new net.neoforged.neoforge.client.extensions.common.IClientItemExtensions() {
             private com.bannerbound.antiquity.client.CompositeArrowItemRenderer renderer;
             @Override
@@ -59,8 +64,6 @@ public class CompositeArrowItem extends ArrowItem {
         return arrow;
     }
 
-    /** Named for its tip once assembled ("Bronze Arrow", "Flint Arrow"); a bare, un-stamped stack
-     *  (the generic order/min-stock entry) is just "Arrow". */
     @Override
     public Component getName(ItemStack stack) {
         String tip = stack.get(com.bannerbound.antiquity.BannerboundAntiquity.ARROW_TIP.get());
@@ -70,8 +73,6 @@ public class CompositeArrowItem extends ArrowItem {
         return Component.translatable("bannerboundantiquity.arrow.named", materialName(tip));
     }
 
-    /** A part material's display name — its lang key if defined, else a humanized fallback of the id,
-     *  so a modpack-added material reads nicely ("Steel") even without a lang entry. */
     private static Component materialName(String material) {
         StringBuilder pretty = new StringBuilder();
         for (String word : material.split("_")) {
@@ -86,16 +87,12 @@ public class CompositeArrowItem extends ArrowItem {
     @Override
     public void appendHoverText(ItemStack stack, Item.TooltipContext context, List<Component> tooltip,
                                 TooltipFlag flag) {
-        // Parts line.
         tooltip.add(Component.translatable("bannerboundantiquity.arrow.parts",
                 materialName(ArrowParts.tip(stack)),
                 materialName(ArrowParts.shaft(stack)),
                 materialName(ArrowParts.back(stack)))
             .withStyle(ChatFormatting.GRAY));
-        // Visual stat bars (5 pips each), scaled to indicative reference ranges (data-driven parts so
-        // the bar is a feel, not an exact number — the real values live in the arrow_parts JSON).
         int damage = Mth.clamp((int) Math.round(ArrowParts.damageMultiplier(stack) / 1.6 * 5.0), 1, 5);
-        // Accuracy is the inverse of inaccuracy: a tighter (lower) multiplier fills more pips.
         float inacc = ArrowParts.inaccuracyMultiplier(stack);
         int accuracy = Mth.clamp((int) Math.round((1.6 - inacc) / 1.1 * 5.0), 1, 5);
         int weight = Mth.clamp((int) Math.round(ArrowParts.weightPoints(stack) / 6.0 * 5.0), 0, 5);

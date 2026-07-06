@@ -27,35 +27,46 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * The crafter's driver at a Crafting Stone ("General Crafts" workshops): picks any researched
- * crafting-stone recipe whose ingredients the workshop storage holds, places the real pile on the
- * stone, knaps through a few beats, and takes the recipe result.
+ * The crafter's driver at a Crafting Stone ("General Crafts" workshops). chooseCraft runs, in
+ * order: RACK-TAKE (lift a finished CRAFT-category dry off a workshop drying rack, ungated - it
+ * jams the slot until lifted; food slots belong to the Cook, the cured-hide "none" line to the
+ * Tannery) -> player orders (FIFO; orders outrank and ignore min-stock; an order missing
+ * ingredients is skipped, never blocking the queue) -> min-stock deficits -> RACK-HANG (start a
+ * new drying unit, gated on NET demand: hanging units count as in-flight per the
+ * Workshops.wantsAnother waiting-stage contract). Rack steps are identified structurally
+ * (RACK-TAKE = result with no inputs; RACK-HANG = the only resultless craft this executor makes),
+ * execute at the rack (workTarget) and touch the world only in finish(); a rack that raced full
+ * hands the input back, and the rack's own timer does the drying.
  *
- * <p><b>Quality is the NPC's edge here.</b> A player knapping at the stone gets the plain item —
- * there is no minigame, so no quality roll. The crafter NPC instead rolls the shared XP-driven
- * simulation ({@code QualityMath.simulateNpcTier}) and stamps it on any damageable output (bone
- * spears, knives, every bone tool). That makes staffing a General Crafts workshop a real
- * investment: a veteran's bone tools out-last anything a player can knap by hand.
+ * <p>handRecipes are the NPC equivalents of the player's two-rocks / hard-surface knapping
+ * gestures (AntiquityEvents.onKnapHardSurface): flint -> flint blade, bone -> 2 bone blades, the
+ * gravel sift at its deterministic expected rate (4 gravel -> 1 flint), and the six stone tool
+ * heads (one rock -> one head). They are modelled as {@link CraftingStoneRecipe}s ONLY so every
+ * planning surface (chooseCraft, possibleOutputs, the stocker's supply/keep views, min-stock rows)
+ * iterates them like the data-driven recipes - but they are NOT performed on the Crafting Stone:
+ * knapping is a HAND-CRAFT (KNAPPING_PLAN.md; the stone is for hafting/assembly only), so isKnap
+ * crafts show render-copy rocks in the crafter's hands (the crafter carries no real tool,
+ * toolRequired=false) instead of a pile. Stone crafts place the real pile and resolve via
+ * be.craft(), which runs the same gating recompute as the player path; if the pile was disturbed
+ * despite the lock, the planned result is used and the pile drained.
+ *
+ * <p>Quality is the NPC's edge: a player knapping at the stone gets the plain item (no minigame,
+ * no roll), but damageable outputs here get the shared XP-driven QualityMath.simulateNpcTier roll,
+ * keeping the HIGHER of the rolled tier and any tier the input carried (be.craft() transfers a
+ * hafted head's tier onto the result) so a player-knapped FINE head is never wasted. NPC-knapped
+ * heads stay plain; their quality is rolled at the haft step. Stocker surfaces: missingInputs
+ * buffers raws to INPUT_BUFFER_CRAFTS crafts, but chain intermediates (anything producedHere) are
+ * ALWAYS sized at TRUE need so one wanted sword pulls one blade, not four; trueInputDemand drops
+ * the buffer entirely; drying-input demand subtracts units already hanging in flight.
  */
 @ApiStatus.Internal
 public class GeneralCraftsExecutor implements WorkExecutor {
-    /** XP key — per-profession bucket (CrafterWorkGoal pays into the work block's typeId). */
     public static final String XP_KEY = "general_crafts";
     private static final int WORK_TICKS = 80;
     private static final int BEATS = 4;
 
-    /** The crafter's NPC equivalent of the player's two-rocks / hard-surface knapping gestures
-     *  (AntiquityEvents.onKnapHardSurface): flint → flint blade, bone → 2 bone blades, the gravel
-     *  sift at its expected 1-in-4 rate (4 gravel → 1 flint, deterministic), and the six stone tool
-     *  heads (one rock → one head). Modelled as {@link CraftingStoneRecipe}s ONLY so every planning
-     *  pipeline — chooseCraft, possibleOutputs, the stocker's supply/keep surfaces, min-stock rows —
-     *  iterates them like the data-driven recipes; they are NOT performed on the Crafting Stone.
-     *  Knapping is a HAND-CRAFT (two rocks, off the stone — KNAPPING_PLAN.md); the stone is for
-     *  hafting/assembly only. See {@link #isKnap} and onStart/onBeat/finish for the split. Built
-     *  lazily: the item holders aren't resolvable at class-init time. */
+    // Built lazily: the item holders are not resolvable at class-init time.
     private static List<CraftingStoneRecipe> handRecipes;
-    /** Result items of {@link #handRecipes} — a craft producing one of these is a hand-knap, not a
-     *  stone craft. Built alongside {@code handRecipes}. */
     private static java.util.Set<Item> knapResults;
 
     private static void ensureHandRecipes() {
@@ -70,8 +81,6 @@ public class GeneralCraftsExecutor implements WorkExecutor {
             new CraftingStoneRecipe(
                 List.of(new CraftingStoneRecipe.Ing(net.minecraft.world.item.Items.GRAVEL, 4)),
                 new ItemStack(net.minecraft.world.item.Items.FLINT), false),
-            // Stone tool heads — one rock → one head. NPC-only (not data recipes), so players still
-            // knap by hand; a knapped head's quality is rolled at the haft step (the head is plain).
             stoneHead(com.bannerbound.antiquity.BannerboundAntiquity.STONE_PICK_HEAD.get()),
             stoneHead(com.bannerbound.antiquity.BannerboundAntiquity.STONE_AXE_HEAD.get()),
             stoneHead(com.bannerbound.antiquity.BannerboundAntiquity.STONE_SHOVEL_HEAD.get()),
@@ -83,7 +92,6 @@ public class GeneralCraftsExecutor implements WorkExecutor {
         knapResults = set;
     }
 
-    /** Data-driven stone recipes + the knapping hand-recipes, one iteration surface. */
     private static List<CraftingStoneRecipe> allRecipes() {
         ensureHandRecipes();
         List<CraftingStoneRecipe> out = new ArrayList<>(CraftingStoneRecipeManager.all());
@@ -91,16 +99,11 @@ public class GeneralCraftsExecutor implements WorkExecutor {
         return out;
     }
 
-    /** True when {@code craft} is a hand-knap (produces a knapping output) rather than a stone
-     *  haft/assembly — drives the off-station hand-craft path in onStart/onBeat/finish/onAbort. */
     private static boolean isKnap(Craft craft) {
         ensureHandRecipes();
         return knapResults.contains(craft.result().getItem());
     }
 
-    /** True when {@code item} is something this workshop itself crafts (a recipe result) — i.e. a
-     *  chain intermediate, not a raw material. Such inputs are demanded at true count, never the
-     *  rolling input buffer, so a single wanted final doesn't over-produce its sub-assemblies. */
     private static boolean producedHere(Item item) {
         for (CraftingStoneRecipe r : allRecipes()) {
             if (r.result().getItem() == item) return true;
@@ -108,7 +111,6 @@ public class GeneralCraftsExecutor implements WorkExecutor {
         return false;
     }
 
-    /** One rock → one stone tool head (the crafter's NPC equivalent of player knapping). */
     private static CraftingStoneRecipe stoneHead(Item head) {
         return new CraftingStoneRecipe(
             List.of(new CraftingStoneRecipe.Ing(
@@ -120,9 +122,6 @@ public class GeneralCraftsExecutor implements WorkExecutor {
     @Nullable
     public Craft chooseCraft(ServerLevel sl, com.bannerbound.core.api.settlement.Settlement settlement,
                              Workshop workshop, BlockPos workBlock) {
-        // RACK-TAKE — ungated collect: a finished CRAFT-category slot on a workshop drying rack
-        // (plant fiber → thatch) jams the spot until lifted. Food slots belong to the Cook; the
-        // cured-hide leather line ("none") stays the Tannery's.
         List<BlockPos> racks = RackTending.racks(sl, workshop);
         if (!racks.isEmpty()) {
             BlockPos dry = RackTending.rackWithDry(sl, racks,
@@ -135,8 +134,6 @@ public class GeneralCraftsExecutor implements WorkExecutor {
                 }
             }
         }
-        // Player orders first (FIFO; orders outrank + ignore the min-stock governor; an order
-        // whose ingredients are missing is skipped, never blocking the rest of the queue).
         for (Item wanted : com.bannerbound.core.api.workshop.Workshops.orderedItems(workshop)) {
             for (CraftingStoneRecipe recipe : allRecipes()) {
                 if (recipe.result().getItem() != wanted) continue;
@@ -144,15 +141,12 @@ public class GeneralCraftsExecutor implements WorkExecutor {
                 if (c != null) return c;
             }
         }
-        // Then positive min-stock deficits.
         for (CraftingStoneRecipe recipe : allRecipes()) {
             if (!com.bannerbound.core.api.workshop.Workshops.wantedByMinStock(
                     sl, settlement, workshop, recipe.result())) continue;
             Craft c = tryCraft(sl, workshop, workBlock, recipe);
             if (c != null) return c;
         }
-        // RACK-HANG — start a new craft-category drying unit, gated on NET demand (hanging units
-        // count as in-flight — the Workshops.wantsAnother waiting-stage contract).
         if (!racks.isEmpty() && RackTending.rackWithRoom(sl, racks) != null) {
             for (boolean ordersOnly : new boolean[] { true, false }) {
                 for (var recipe : RackTending.recipes(
@@ -176,24 +170,18 @@ public class GeneralCraftsExecutor implements WorkExecutor {
         return null;
     }
 
-    /** Laying an input on a rack / lifting the dried result off it — quick handling. */
     private static final int RACK_HANDLE_TICKS = 30;
 
-    /** RACK-TAKE lifts a finished craft-category dry off a rack — result, no inputs withdrawn. */
     private static boolean isRackTake(Craft craft) {
         return !craft.result().isEmpty() && craft.inputs().isEmpty();
     }
 
-    /** RACK-HANG lays a dryable input out — the only resultless craft this executor makes. */
     private static boolean isRackHang(Craft craft) {
         return craft.result().isEmpty();
     }
 
-    /** Crafts the stocker keeps an input buffer for, per wanted recipe. */
     private static final int INPUT_BUFFER_CRAFTS = 4;
 
-    /** Recipes this workshop currently WANTS (queued orders + positive min-stock deficits),
-     *  gating applied, input availability ignored — the stocker's planning view. */
     private static List<CraftingStoneRecipe> wantedRecipes(ServerLevel sl,
             com.bannerbound.core.api.settlement.Settlement settlement,
             Workshop workshop, BlockPos workBlock) {
@@ -227,15 +215,9 @@ public class GeneralCraftsExecutor implements WorkExecutor {
     public List<ItemStack> trueInputDemand(ServerLevel sl,
             com.bannerbound.core.api.settlement.Settlement settlement,
             Workshop workshop, BlockPos workBlock) {
-        // Production sizing: no rolling buffer at all — a chain producer makes only what's needed.
         return demandStacks(sl, settlement, workshop, workBlock, false);
     }
 
-    /** The per-input deficit for every wanted recipe. {@code bufferRaws} = the haul surface (raws
-     *  pre-stocked to {@link #INPUT_BUFFER_CRAFTS} crafts); without it every input is sized at the
-     *  TRUE need (orders + min-stock deficit) for chain production. Crafted intermediates (inputs
-     *  this workshop itself produces) are ALWAYS true-sized, so a single wanted final never pulls a
-     *  buffer's worth of sub-assemblies (one sword → one blade, not four). */
     private List<ItemStack> demandStacks(ServerLevel sl,
             com.bannerbound.core.api.settlement.Settlement settlement,
             Workshop workshop, BlockPos workBlock, boolean bufferRaws) {
@@ -252,8 +234,6 @@ public class GeneralCraftsExecutor implements WorkExecutor {
                 desired.merge(e.getKey(), e.getValue() * crafts, Integer::sum);
             }
         }
-        // Craft-category drying (plant fiber → thatch): the input demand behind every wanted dried
-        // output, minus the units already hanging in flight on the workshop's racks.
         List<BlockPos> racks = RackTending.racks(sl, workshop);
         for (var r : RackTending.recipes(com.bannerbound.antiquity.recipe.DryingRackRecipe.CRAFT)) {
             ItemStack dried = r.result();
@@ -297,7 +277,6 @@ public class GeneralCraftsExecutor implements WorkExecutor {
         return keep;
     }
 
-    /** Gating + ingredient-availability check for one recipe; null when not craftable right now. */
     @Nullable
     private static Craft tryCraft(ServerLevel sl, Workshop workshop, BlockPos workBlock,
                                   CraftingStoneRecipe recipe) {
@@ -327,7 +306,6 @@ public class GeneralCraftsExecutor implements WorkExecutor {
         return out;
     }
 
-    /** Rack steps happen at the rack itself; everything else at the stone. */
     @Override
     public BlockPos workTarget(ServerLevel sl, com.bannerbound.core.api.settlement.Settlement settlement,
                                Workshop workshop, BlockPos workBlock, Craft craft) {
@@ -344,11 +322,9 @@ public class GeneralCraftsExecutor implements WorkExecutor {
     @Override
     public void onStart(ServerLevel sl, CitizenEntity citizen, BlockPos workBlock, Craft craft) {
         if (isRackTake(craft) || isRackHang(craft)) {
-            return;   // nothing on the stone — the rack is touched in finish()
+            return;
         }
         if (isKnap(craft)) {
-            // Hand-knap: two rocks in the hands, NO pile on the stone (KNAPPING_PLAN.md — the
-            // Crafting Stone is for hafting only). The rocks are a render copy, cleared on finish.
             holdRocks(citizen);
             return;
         }
@@ -369,8 +345,6 @@ public class GeneralCraftsExecutor implements WorkExecutor {
                 SoundSource.BLOCKS, 0.5F, 1.0F);
             return;
         }
-        // Knapping cracks in the worker's hands; hafting/assembly happens on the stone. Either way
-        // it's the same chip sound — only the origin moves so the effect tracks the actual action.
         double x, y, z;
         if (isKnap(craft)) {
             x = citizen.getX();
@@ -405,33 +379,22 @@ public class GeneralCraftsExecutor implements WorkExecutor {
             if (rack != null && sl.getBlockEntity(rack)
                     instanceof com.bannerbound.antiquity.block.entity.DryingRackBlockEntity be
                     && be.hang(craft.inputs().get(0))) {
-                return ItemStack.EMPTY;   // the rack's own timer dries it; RACK-TAKE collects
+                return ItemStack.EMPTY;
             }
-            return craft.inputs().get(0).copy();   // raced full — hand the input back
+            return craft.inputs().get(0).copy();
         }
         ItemStack out = craft.result().copy();
         if (isKnap(craft)) {
-            // Hand-knap: no pile to resolve — the goal already consumed the real inputs. Just put
-            // the rocks away and hand back the (plain) head/blade; its quality is rolled at hafting.
             clearHands(citizen);
         } else if (sl.getBlockEntity(workBlock) instanceof CraftingStoneBlockEntity be) {
-            // The pile exactly matches the recipe, so the stone's own craft() resolves it (and runs
-            // the same gating recompute the player path uses). Fallback to the planned result if the
-            // pile was disturbed despite the lock.
             ItemStack crafted = be.craft();
             if (!crafted.isEmpty()) {
                 out = crafted;
             } else {
                 while (!be.removeOne().isEmpty()) {
-                    // drain
                 }
             }
         }
-        // NPC-only quality: damageable outputs (bone tools/weapons, hafted stone tools) get the
-        // XP-driven tier roll players can't access at the stone. Non-damageable outputs (string,
-        // thatch, the bare heads) pass through. When the input carried a better quality than the
-        // crafter rolls — e.g. a player-knapped FINE stone head being hafted — keep the higher one
-        // (be.craft() already transferred the head's tier onto the result) so good heads aren't wasted.
         if (out.has(net.minecraft.core.component.DataComponents.MAX_DAMAGE)) {
             com.bannerbound.core.api.quality.QualityTier npcTier =
                 com.bannerbound.core.api.quality.QualityMath.simulateNpcTier(
@@ -448,30 +411,25 @@ public class GeneralCraftsExecutor implements WorkExecutor {
     @Override
     public void onAbort(ServerLevel sl, CitizenEntity citizen, BlockPos workBlock, Craft craft) {
         if (isRackTake(craft) || isRackHang(craft)) {
-            return;   // nothing world-side is committed before finish() on the rack steps
+            return;
         }
         if (isKnap(craft)) {
             clearHands(citizen);
             return;
         }
         if (sl.getBlockEntity(workBlock) instanceof CraftingStoneBlockEntity be) {
-            // Display copies only — the goal returns the withdrawn inputs to storage.
+            // Pile holds display copies; the goal returns the real withdrawn inputs -- drain, never drop.
             while (!be.removeOne().isEmpty()) {
-                // drain
             }
         }
     }
 
-    /** Show two rocks (hammerstone + core) in the crafter's hands for the duration of a hand-knap.
-     *  A render copy only — the goal withdrew/consumed the real rock from workshop storage. */
     private static void holdRocks(CitizenEntity citizen) {
         ItemStack rock = new ItemStack(BannerboundAntiquity.STONE_ROCK_ITEM.get());
         citizen.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, rock.copy());
         citizen.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND, rock.copy());
     }
 
-    /** Clear the render rocks once the knap finishes/aborts. The crafter carries no real tool
-     *  (toolRequired=false), so both hands return to empty. */
     private static void clearHands(CitizenEntity citizen) {
         citizen.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, ItemStack.EMPTY);
         citizen.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND, ItemStack.EMPTY);

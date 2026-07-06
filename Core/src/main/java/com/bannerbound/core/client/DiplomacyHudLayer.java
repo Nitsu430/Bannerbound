@@ -12,6 +12,12 @@ import net.minecraft.network.chat.Component;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
+/**
+ * Top-right HUD panel for the active diplomacy objective: a colored accent bar plus title and
+ * subtitle, sourced from {@link ClientDiplomacyState#objective()} (server-pushed via
+ * {@link DiplomacyObjectivePayload}). Registered as a {@link LayeredDraw.Layer}; renders nothing
+ * when the GUI is hidden, the player is absent, or no objective is active.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class DiplomacyHudLayer implements LayeredDraw.Layer {

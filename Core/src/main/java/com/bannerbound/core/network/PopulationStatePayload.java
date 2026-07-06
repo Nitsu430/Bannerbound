@@ -11,10 +11,18 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client snapshot of a settlement's immigration state. Broadcast once per second to
- * every member so the Town Hall screen can render live food/culture per second, stored progress,
- * the next-citizen cost, the (possibly-research-boosted) stockpile capacity, and the
- * {@code population / populationMax} display that drives the lovemaking gate.
+ * Server -> client snapshot of a settlement's immigration state, broadcast once per second to every
+ * member so the Town Hall screen can render live food/culture per second, stored progress, the
+ * next-citizen cost, the (possibly-research-boosted) stockpile capacity, and the population /
+ * populationMax display that drives the lovemaking gate. governmentOrdinal is a
+ * Settlement.Government ordinal that drives the client title (Tribe once a government is enacted,
+ * regardless of size). members are this settlement's player-member UUIDs, so the client can tell
+ * whether a given player (e.g. one who laced a food item) shares the viewer's settlement.
+ * foodConsumptionPerSecond is what the citizens eat (0 under anarchy) - the drain the food line must
+ * beat. foodSourceRates is per-source production (food-stuff/sec) keyed by "farming" / "fishing" /
+ * "livestock" for the Town Hall food tooltip. appealCulturePerSecond is the culture/sec from
+ * claimed-territory block appeal, already included in culturePerSecond and signed (attractive chunks
+ * add, ugly chunks subtract), broken out so the culture tooltip can show the territory-appeal share.
  */
 @ApiStatus.Internal
 public record PopulationStatePayload(
@@ -31,20 +39,10 @@ public record PopulationStatePayload(
     double nextCultureCost,
     double foodCap,
     double cultureCap,
-    /** Ordinal of {@link com.bannerbound.core.api.settlement.Settlement.Government} — drives
-     *  the client-side title (Tribe once a government is enacted, regardless of size). */
     int governmentOrdinal,
-    /** Player-member UUIDs of this settlement, so the client can tell whether a given player (e.g. the
-     *  one who laced a food item) currently shares the viewer's settlement. */
     java.util.List<java.util.UUID> members,
-    /** Food eaten per second by the citizens (0 under anarchy). The drain the food line must beat. */
     double foodConsumptionPerSecond,
-    /** Per-source production rate (food-stuff/sec) keyed by source ("farming"/"fishing"/"livestock"),
-     *  so the Town Hall food tooltip can show where the settlement's food is coming from. */
     java.util.Map<String, Double> foodSourceRates,
-    /** Culture/sec contributed by claimed-territory block appeal — already included in
-     *  {@code culturePerSecond}. Signed: attractive chunks add, ugly chunks subtract. Broken out so
-     *  the Town Hall culture tooltip can show how much of the culture rate comes from territory appeal. */
     double appealCulturePerSecond
 ) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<PopulationStatePayload> TYPE =

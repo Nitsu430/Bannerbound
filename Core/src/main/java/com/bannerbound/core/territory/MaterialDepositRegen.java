@@ -21,8 +21,12 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.LevelTickEvent;
 
 /**
- * Refresh waves for worked stone/clay/sand deposits. These are marker-driven like ore veins:
- * a deposit only refreshes while a settlement has actually marked it for a digger/quarryworker.
+ * Refresh waves for worked stone/clay/sand deposits -- the digger/quarryworker analogue of
+ * MinerVeinRegen. Marker-driven and loaded-only: a deposit swaps its worked source faces back to
+ * source state only while a settlement holds a digger workstation marker on it AND its chunk is
+ * loaded. Swept every SWEEP_INTERVAL_TICKS; each marker regenerates at most every
+ * REGEN_WAVE_INTERVAL_TICKS. Per-marker due-times live in a transient map that is cleared once no
+ * markers remain (harmless if, after a restart, every marker is immediately due once).
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal

@@ -9,6 +9,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/** C->S: the player requested a registration tablet be issued to them; empty (actor is the context player). */
 @ApiStatus.Internal
 public record GetRegistrationTabletPayload() implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<GetRegistrationTabletPayload> TYPE =

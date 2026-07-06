@@ -9,7 +9,18 @@ import com.bannerbound.core.api.settlement.WorkstationUnlocks;
 
 import net.minecraft.server.level.ServerPlayer;
 
-/** One Chronicle unlock condition. */
+/**
+ * One Chronicle unlock condition (a row in a codex entry's requirement list). A single record holds
+ * every possible operand (id/item/block/era/flag/advancement/job); the compact constructor trims
+ * nulls to "" and the valueXxx accessors fall back to the generic id when the typed field is blank,
+ * so authors can write either {"type":"flag","flag":"x"} or {"type":"flag","id":"x"}.
+ *
+ * type is matched case-insensitively (canonicalType). CodexTriggerRegistry lets other modules
+ * register custom condition handlers that override the built-in switch in all three predicates:
+ * isStateBased (satisfiable from settlement state alone vs event-only), matchesEvent (does a fired
+ * trigger satisfy this row) and isSatisfied (state OR event). job_unlocked resolves a job unit to
+ * its unlock flag via WorkstationUnlocks; era_reached compares Era ordinals.
+ */
 public record CodexCondition(
     String type,
     String id,

@@ -14,9 +14,11 @@ import net.minecraft.world.item.UseAnim;
 import net.minecraft.world.level.Level;
 
 /**
- * A remedy that cures exactly ONE poison (the cross-biome cure cycle — yarrow→wolfsbane,
- * marshmallow→belladonna, …). It grows in a different biome than the poison it treats, so a civ can
- * never brew the antidote to its own signature poison. Drinks like a potion.
+ * A remedy that cures exactly ONE poison (the cross-biome cure cycle - yarrow -> wolfsbane,
+ * marshmallow -> belladonna, ...). It grows in a different biome than the poison it treats, so a
+ * civ can never brew the antidote to its own signature poison. Drinks like a potion; on finish it
+ * clears only this antidote's poison, never others. {@link #cures()} drives both drinking it and
+ * shift-applying it to other entities.
  */
 public class AntidoteItem extends Item {
     private static final int DRINK_TICKS = 32;
@@ -28,7 +30,6 @@ public class AntidoteItem extends Item {
         this.cures = cures;
     }
 
-    /** The single poison this remedy treats (drives both drinking it and shift-applying it to others). */
     public PoisonType cures() {
         return cures;
     }
@@ -51,7 +52,7 @@ public class AntidoteItem extends Item {
     @Override
     public ItemStack finishUsingItem(ItemStack stack, Level level, LivingEntity entity) {
         if (!level.isClientSide) {
-            Poisons.cure(entity, cures); // only clears this antidote's poison
+            Poisons.cure(entity, cures);
         }
         if (!(entity instanceof Player player) || !player.getAbilities().instabuild) {
             stack.shrink(1);

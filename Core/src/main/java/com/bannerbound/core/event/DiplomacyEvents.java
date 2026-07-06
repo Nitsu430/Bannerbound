@@ -23,6 +23,14 @@ import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
+/**
+ * Server-side event surface for the diplomacy "stolen standard" capture mechanic; every hook is a
+ * thin forward into {@link DiplomacyManager}. It ticks the manager each server tick, force-drops any
+ * carried standards when the carrier logs out / changes dimension / dies, tags item entities as
+ * stolen standards, and refuses normal uses of a held standard (can't be placed as a block or used
+ * on an entity - only scored at the right block via tryScoreStandard). Dropped standard items get
+ * their despawn timer extended so a capture in progress does not silently vanish.
+ */
 @ApiStatus.Internal
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 public final class DiplomacyEvents {

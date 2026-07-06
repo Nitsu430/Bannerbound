@@ -11,32 +11,32 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * One spear embedded in a mob — the arrow-style replacement for a follow-entity. A mob carries a
+ * One spear embedded in a mob - the arrow-style replacement for a follow-entity. A mob carries a
  * {@code List<StuckSpear>} as a NeoForge data attachment ({@code BannerboundAntiquity.STUCK_SPEARS})
  * that is serialized to NBT (server) and natively synced to clients, so a render layer can draw the
- * stuck spears with no separate entity, no per-tick following, and no relog.
+ * stuck spears with no separate entity, no per-tick following, and no relog loss.
  *
- * <p>{@code local{X,Y,Z}} is the hit point in the renderer's MODEL-SPACE frame (blocks; Y is DOWN,
- * X is flipped, origin lifted to the model pivot, body yaw already applied — see
+ * <p>{@code local{X,Y,Z}} is the hit point in the renderer's MODEL-SPACE frame (blocks; Y is down,
+ * X is flipped, origin lifted to the model pivot, body yaw already applied - see
  * {@code SpearProjectile.addStuckSpear} for the capture math). {@code yaw}/{@code pitch} are the
  * spear's flight angles at impact (degrees), stored body-relative so the spear keeps pointing the
  * struck direction as the mob turns.
  *
  * <p>{@code recoverable} distinguishes a player's spear (pull-out + death-drop return the item)
- * from an NPC hunter's throwaway copy (pure visual — never extractable, or the citizen's reusable
+ * from an NPC hunter's throwaway copy (pure visual - never extractable, or the citizen's reusable
  * tool would be duplicated). Non-recoverable spears carry an {@code expireGameTime} and vanish off
  * the mob after a while, like a landed arrow despawning ({@code -1} = never, the player case).
+ * The synced list is capped on the wire at 8 spears; {@code STREAM_CODEC} is hand-written because
+ * eight fields outstrips {@code StreamCodec.composite}'s arities.
  */
 public record StuckSpear(ItemStack stack, float localX, float localY, float localZ,
                          float yaw, float pitch, boolean recoverable, long expireGameTime) {
 
-    /** Whether this spear has timed out (only ever true for NPC spears). */
     public boolean isExpired(long gameTime) {
         return expireGameTime >= 0L && gameTime > expireGameTime;
     }
 
-    /** Server-side NBT persistence (via the attachment's {@code serialize}). The two NPC fields are
-     *  optional with player-spear defaults, so spears saved before they existed keep loading. */
+    // "rec"/"exp" stay optional with player-spear defaults so pre-NPC saves keep loading.
     public static final Codec<StuckSpear> CODEC = RecordCodecBuilder.create(i -> i.group(
         ItemStack.OPTIONAL_CODEC.fieldOf("stack").forGetter(StuckSpear::stack),
         Codec.FLOAT.fieldOf("lx").forGetter(StuckSpear::localX),
@@ -49,8 +49,6 @@ public record StuckSpear(ItemStack stack, float localX, float localY, float loca
     ).apply(i, StuckSpear::new));
     public static final Codec<List<StuckSpear>> LIST_CODEC = CODEC.listOf();
 
-    /** Client sync (via the attachment's {@code sync}). ItemStack needs a RegistryFriendlyByteBuf.
-     *  Written by hand — eight fields outstrips {@code StreamCodec.composite}'s arities. */
     public static final StreamCodec<RegistryFriendlyByteBuf, StuckSpear> STREAM_CODEC = StreamCodec.of(
         (buf, s) -> {
             ItemStack.OPTIONAL_STREAM_CODEC.encode(buf, s.stack());
@@ -71,7 +69,6 @@ public record StuckSpear(ItemStack stack, float localX, float localY, float loca
             buf.readFloat(),
             buf.readBoolean(),
             buf.readVarLong()));
-    /** The synced list, capped on the wire at 8 spears. */
     public static final StreamCodec<RegistryFriendlyByteBuf, List<StuckSpear>> LIST_STREAM_CODEC =
         STREAM_CODEC.apply(ByteBufCodecs.list(8));
 }

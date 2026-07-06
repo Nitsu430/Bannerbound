@@ -16,18 +16,23 @@ import net.minecraft.world.level.ChunkPos;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Drives the throwaway {@code /bannerbound simulate} crowd-LOD stress test (see the plan
- * {@code look-at-our-mod-jaunty-hinton.md}). One session at a time: spawns a small bounded pool of
- * real near-band {@link CitizenEntity} (the genuine "workers"), broadcasts a tiny
- * {@link SimulationStatePayload} once per second so the client can render a deterministic decorative
- * crowd + believed-vs-rendered HUD, then discards everything when the duration elapses.
+ * Drives the throwaway {@code /bannerbound simulate} crowd-LOD stress test (plan:
+ * look-at-our-mod-jaunty-hinton.md). Static singleton, one session at a time: on start it spawns a
+ * bounded pool of real near-band {@link CitizenEntity} (the genuine "workers"), then broadcasts a
+ * tiny {@link SimulationStatePayload} once per second so the client can render a deterministic
+ * decorative crowd (generated client-side from the session seed) plus a believed-vs-rendered HUD,
+ * and discards everything when the duration elapses.
  *
- * <p>The headline thing this proves: a thousands-strong <em>believed</em> population costs the server
- * only a handful of synced numbers + a bounded entity count — TPS should barely move.
+ * <p>The point it proves: a thousands-strong believed population costs the server only a handful of
+ * synced numbers + a bounded entity count, so TPS barely moves. Real spawns are capped at
+ * min(realBudget, believedPopulation, MAX_REAL_BUDGET=64) so the rendered/entity count stays bounded
+ * while the believed number scales freely.
+ *
+ * <p>tickAll is wired into ResearchEvents.onServerTick. computeRadius bounds the crowd to the
+ * settlement's claimed footprint (chebyshev extent from the town-hall chunk, clamped to 32..192,
+ * default 48 when nothing is claimed).
  */
 public final class SimulationManager {
-    /** Hard ceiling on real near-band entities regardless of the requested budget — the whole point
-     *  is that the rendered/entity count stays bounded while the believed number scales freely. */
     private static final int MAX_REAL_BUDGET = 64;
 
     private static SimulationSession active;
@@ -38,12 +43,6 @@ public final class SimulationManager {
 
     public static boolean isActive() { return active != null; }
 
-    /**
-     * Starts (or restarts) a simulation in {@code s}. Spawns up to {@code min(realBudget,
-     * believedPopulation, MAX_REAL_BUDGET)} real citizens near the town hall, schedules the stop
-     * tick, and pushes the opening snapshot to every online player. Returns the number of real
-     * citizens actually spawned.
-     */
     public static int start(MinecraftServer server, Settlement s, int believedPopulation,
                             int realBudget, int durationSeconds) {
         if (server == null || s == null) return 0;
@@ -51,7 +50,7 @@ public final class SimulationManager {
         BlockPos townHall = s.townHallPos();
         if (townHall == null) return 0;
 
-        // Clear any prior session first (discards its entities) so budgets don't stack.
+        // Clear any prior session first (discards its entities) so real budgets don't stack.
         stop(server, false);
 
         int radius = computeRadius(s, townHall);
@@ -72,7 +71,6 @@ public final class SimulationManager {
         return session.spawned.size();
     }
 
-    /** Per-tick driver, wired into {@code ResearchEvents.onServerTick}. No-op when idle. */
     public static void tickAll(MinecraftServer server) {
         if (active == null || server == null) return;
         ServerLevel level = server.overworld();
@@ -85,8 +83,6 @@ public final class SimulationManager {
         }
     }
 
-    /** Ends the active session: discards every spawned citizen and (optionally) tells clients to
-     *  tear down their crowd + HUD. Safe to call when idle. */
     public static void stop(MinecraftServer server, boolean notifyClients) {
         SimulationSession session = active;
         active = null;
@@ -103,8 +99,6 @@ public final class SimulationManager {
         }
     }
 
-    /** Bounds the crowd to the settlement's claimed footprint (chebyshev extent from the town-hall
-     *  chunk), clamped to a sane band. Falls back to a default disc when nothing is claimed. */
     private static int computeRadius(Settlement s, BlockPos townHall) {
         ChunkPos thc = new ChunkPos(townHall);
         int maxCheb = 0;
@@ -144,7 +138,7 @@ public final class SimulationManager {
             remaining,
             mspt,
             session.eraOrdinal,
-            true   // debug session → show the on-screen profiler/overlay
+            true
         );
         sendToAll(server, payload);
     }

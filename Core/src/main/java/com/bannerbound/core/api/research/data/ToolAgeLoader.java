@@ -23,15 +23,15 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
 
 /**
- * Loads tool-age definitions from {@code data/<namespace>/tool_ages/<id>.json}. One file per age:
- * <pre>{@code
- * { "name": "Stone Age",
- *   "order": 1,
- *   "chop_ticks": 15,
- *   "tools": { "axe": "minecraft:stone_axe", "shovel": "minecraft:stone_shovel", ... } }
- * }</pre>
- * Modded ages drop in their own files — no merge logic required. Map is keyed by the file id
- * (path minus the {@code .json} suffix, namespace-prefixed via {@link ResourceLocation#getPath()}).
+ * Loads {@link ToolAge} definitions from {@code data/<namespace>/tool_ages/<id>.json}, one file
+ * per age (fields: name, order, optional chop_ticks/mine_speed/harvest_speed/weapon_damage/
+ * weapon_attack_speed, and a role->item {@code tools} map). Modded ages drop in their own files -
+ * no merge logic required. Map is keyed by the file id ({@link ResourceLocation#getPath()}, i.e.
+ * the path minus namespace and {@code .json}), so displayName resolves the lang key
+ * bannerbound.tool_age.&lt;id&gt; and falls back to the raw "name". Tool entries pointing at unknown
+ * items are dropped with a warning. {@code getByTool} reverse-looks-up the age that defines a
+ * given role's item so a worker's cadence reflects the tool actually in hand (a bone axe chops at
+ * bone speed even after the settlement unlocks a better age), not the settlement's best age.
  */
 public class ToolAgeLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "tool_ages";
@@ -47,7 +47,7 @@ public class ToolAgeLoader extends SimpleJsonResourceReloadListener {
         Map<String, ToolAge> map = new HashMap<>();
         for (Map.Entry<ResourceLocation, JsonElement> entry : resources.entrySet()) {
             ResourceLocation key = entry.getKey();
-            String id = key.getPath(); // e.g. "stone" for data/<ns>/tool_ages/stone.json
+            String id = key.getPath();
             try {
                 JsonObject obj = entry.getValue().getAsJsonObject();
                 String rawName = GsonHelper.getAsString(obj, "name", id);
@@ -55,19 +55,12 @@ public class ToolAgeLoader extends SimpleJsonResourceReloadListener {
                 OptionalInt chopTicks = obj.has("chop_ticks")
                     ? OptionalInt.of(GsonHelper.getAsInt(obj, "chop_ticks"))
                     : OptionalInt.empty();
-                // mine_speed: ticks per digger-mined block. Lower = faster. Parallel to
-                // chop_ticks; default lives on the work goal (80 ticks for bare-handed).
                 OptionalInt mineTicks = obj.has("mine_speed")
                     ? OptionalInt.of(GsonHelper.getAsInt(obj, "mine_speed"))
                     : OptionalInt.empty();
-                // harvest_speed: ticks per till/plant/harvest action for the farmer worker.
-                // Same semantics as mine_speed — lower = faster. Default 70 ticks bare-handed.
                 OptionalInt harvestTicks = obj.has("harvest_speed")
                     ? OptionalInt.of(GsonHelper.getAsInt(obj, "harvest_speed"))
                     : OptionalInt.empty();
-                // weapon_damage: half-hearts per swing when a citizen uses the age's sword in
-                // self-defence. weapon_attack_speed: swings per second; combat cooldown =
-                // 20 / value ticks. Defaults match the vanilla wooden-sword baseline.
                 double weaponDamage = obj.has("weapon_damage")
                     ? GsonHelper.getAsDouble(obj, "weapon_damage") : 4.0;
                 double weaponAttackSpeed = obj.has("weapon_attack_speed")
@@ -88,7 +81,6 @@ public class ToolAgeLoader extends SimpleJsonResourceReloadListener {
                     }
                 }
 
-                // Try the lang key bannerbound.tool_age.<id>; fall back to the raw "name" string.
                 Component displayName = Component.translatableWithFallback(
                     "bannerbound.tool_age." + id, rawName);
 
@@ -110,12 +102,6 @@ public class ToolAgeLoader extends SimpleJsonResourceReloadListener {
         return AGES.get(id);
     }
 
-    /**
-     * Finds the tool age whose {@code role} tool (e.g. {@code "axe"}, {@code "shovel"}) is exactly
-     * {@code item}, or {@code null} if no age defines that item for that role. Used so a worker's
-     * work cadence reflects the tool they were actually handed, not the settlement's best unlocked
-     * age — give them a bone axe and they chop at bone speed even after Wood Refining.
-     */
     public static ToolAge getByTool(String role, Item item) {
         if (item == null) return null;
         for (ToolAge age : AGES.values()) {

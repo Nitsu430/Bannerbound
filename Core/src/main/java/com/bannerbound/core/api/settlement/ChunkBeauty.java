@@ -5,16 +5,16 @@ import org.jetbrains.annotations.ApiStatus;
 /**
  * The nine beauty tiers a chunk can fall into, derived from its collective block-appeal score.
  * Each tier owns an inclusive score band, a culture-per-second contribution applied while the
- * chunk is <i>claimed</i>, and a translation key.
+ * chunk is claimed, and a translation key. Score bands (the design spec's +2 overlap is resolved
+ * as bland 0..1 / pleasant 2..5): &lt;=-15 atrocious, -14..-8 repulsive, -7..-4 disgusting,
+ * -3..-1 unappealing, 0..1 bland, 2..5 pleasant, 6..9 attractive, 10..14 stunning, &gt;=15
+ * breathtaking. fromScore rounds to the nearest int before banding, so a chunk at 1.6 reads as
+ * pleasant, not bland; the bands cover the whole int range.
  *
- * <p>This enum is deliberately free of client-only imports so it can be used on both the server
- * (culture math) and the client (expand-territory tooltip), the latter reached via
- * {@link #byNetworkId(int)} from a packet.
- *
- * <p>Score bands (the design spec's +2 overlap is resolved as bland 0–1 / pleasant 2–5):
- * {@code ≤-15} atrocious · {@code -14..-8} repulsive · {@code -7..-4} disgusting ·
- * {@code -3..-1} unappealing · {@code 0..1} bland · {@code 2..5} pleasant · {@code 6..9}
- * attractive · {@code 10..14} stunning · {@code ≥15} breathtaking.
+ * <p>tierIndex() maps the tier onto a -4..+4 scale (ATROCIOUS = -4, BLAND = 0, BREATHTAKING =
+ * +4) - via the adjacency layer each chunk lends this many score points to each neighbour. The
+ * enum is deliberately free of client-only imports so it can be used on both the server (culture
+ * math) and the client (expand-territory tooltip, reached via byNetworkId from a packet).
  */
 @ApiStatus.Internal
 public enum ChunkBeauty {
@@ -40,26 +40,20 @@ public enum ChunkBeauty {
         this.langKey = langKey;
     }
 
-    /** Maps a collective appeal score onto its tier. The score is rounded to the nearest int
-     *  before banding so a chunk at 1.6 reads as pleasant, not bland. */
     public static ChunkBeauty fromScore(double score) {
         int s = (int) Math.round(score);
         for (ChunkBeauty b : values()) {
             if (s >= b.minScore && s <= b.maxScore) return b;
         }
-        return BLAND; // unreachable — the bands cover the whole int range
+        return BLAND;
     }
 
-    /** Culture per second a claimed chunk of this tier adds to (or subtracts from) its settlement. */
     public double culturePerSecond() { return culturePerSecond; }
 
-    /** Tier index on the −4..+4 scale: ATROCIOUS = −4, BLAND = 0, BREATHTAKING = +4. Via the
-     *  adjacency layer each chunk lends this many score points to each of its neighbours. */
     public int tierIndex() { return ordinal() - 4; }
 
     public String langKey() { return langKey; }
 
-    /** Compact id for packets. */
     public byte networkId() { return (byte) ordinal(); }
 
     public static ChunkBeauty byNetworkId(int id) {

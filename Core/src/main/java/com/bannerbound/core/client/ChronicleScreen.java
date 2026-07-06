@@ -33,7 +33,24 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
-/** Player-facing Chronicle/codex screen opened with J. */
+/**
+ * Player-facing Chronicle/codex screen opened with J. Two independently scrolled panes: a
+ * sidebar listing entries grouped by category (locked entries render "???" and are inert) and
+ * an article pane rendering the selected entry's page elements (heading / items / link / clip /
+ * image / recipe / rich text). Unlock and read/unread state live in {@link ClientChronicleState};
+ * pin state in {@link ClientJournalState}.
+ * <p>
+ * Rich text supports {@code {entry:id|label}} inline links that word-wrap token by token and,
+ * when the target is unlocked, become clickable cross-references. applyAmp turns '&' into the
+ * section sign so entry text can carry vanilla formatting codes. The header pin and the auto-pin
+ * toggle round-trip through {@link ToggleCodexPinPayload}; the {@code <} / {@code >} buttons flip
+ * through unlocked entries in sidebar order honouring the search filter (the shipped browse model
+ * that replaced the older back/forward click history, whose stacks still exist here).
+ * <p>
+ * init() re-runs on every resize, so {@code announcedOpen} gates the one-shot
+ * {@link MenuOpenedPayload} (which fires the "menu_opened" tutorial trigger) to send exactly
+ * once per screen instance. Decoded image dimensions are cached in IMAGE_INFO across instances.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ChronicleScreen extends PolishedScreen {
@@ -84,8 +101,6 @@ public final class ChronicleScreen extends PolishedScreen {
         if (selectedId != null && ClientChronicleState.isUnlocked(selectedId)) {
             ClientChronicleState.markSeen(selectedId);
         }
-        // Tell the server the Chronicle is open (fires the "menu_opened" tutorial trigger). Once
-        // per screen instance — init() also runs on resize, which shouldn't re-announce.
         if (!announcedOpen) {
             announcedOpen = true;
             PacketDistributor.sendToServer(new MenuOpenedPayload("chronicle"));
@@ -109,7 +124,6 @@ public final class ChronicleScreen extends PolishedScreen {
         addRenderableWidget(searchBox);
 
         boolean autoPin = ClientChronicleState.autoPinTutorial();
-        // Clamp so the button can't cross the screen edge on very narrow windows.
         int autoPinW = Math.min(150, this.width - 2 * MARGIN);
         addRenderableWidget(PolishButton.polished(
                 Component.translatable(autoPin
@@ -535,9 +549,6 @@ public final class ChronicleScreen extends PolishedScreen {
         rebuildChronicleWidgets();
     }
 
-    /** Browse to the previous (dir &lt; 0) / next (dir &gt; 0) UNLOCKED entry in sidebar order,
-     *  honouring the current search filter. This is the playtest-requested "flip through every
-     *  available entry" behaviour, replacing the old click-history back/forward model. */
     private void navigateToAdjacent(int dir) {
         java.util.List<CodexSyncPayload.Entry> list = new java.util.ArrayList<>();
         for (CodexSyncPayload.Entry e
@@ -550,7 +561,7 @@ public final class ChronicleScreen extends PolishedScreen {
             if (list.get(i).id().equals(selectedId)) { idx = i; break; }
         }
         int next = idx < 0 ? (dir > 0 ? 0 : list.size() - 1) : idx + dir;
-        if (next < 0 || next >= list.size()) return; // at an end — stop
+        if (next < 0 || next >= list.size()) return;
         select(list.get(next).id(), false);
     }
 

@@ -17,22 +17,17 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: response to {@link RequestSettlementCitizensPayload}. Carries the settlement
- * colour and era (so the Citizens screen can pick the right per-era skin) plus one {@link Entry}
- * per citizen with live health, stamina and happiness snapshots so the screen can render the
- * roster without needing each entity client-side. The screen re-requests this payload on each
- * open for a fresh snapshot; live re-sync mid-screen isn't needed for this view.
+ * Server -> client: response to RequestSettlementCitizensPayload. Carries the settlement colour and
+ * era (so the Citizens screen picks the right per-era skin) plus one Entry per citizen with live
+ * health, stamina and happiness snapshots so the screen can render the roster without needing each
+ * entity client-side. The screen re-requests this payload on each open for a fresh snapshot; live
+ * re-sync mid-screen isn't needed for this view. Entry.jobTypeId is "" when unemployed / entity not
+ * loaded (drives the roster row's job label); Entry.jobIconItemId is the job tool-age icon item
+ * registry id (0 = none) as resolved by JobIcons#iconItemId, drawn so a worker's role is spottable.
  */
 @ApiStatus.Internal
 public record SettlementCitizensListPayload(SettlementColor color, Era era, List<Entry> entries)
         implements CustomPacketPayload {
-    /**
-     * @param jobTypeId     the citizen's job type id, or {@code ""} when unemployed / entity not
-     *                      loaded — drives the readable job label in the roster row.
-     * @param jobIconItemId registry id of the job's tool-age icon item ({@code 0} = none), exactly
-     *                      what {@link com.bannerbound.core.social.JobIcons#iconItemId} resolves —
-     *                      the roster row draws it so the player can spot a worker by role.
-     */
     public record Entry(UUID id, String name, float health, float maxHealth, int stamina,
                         int maxStamina, int happiness, int happinessMax,
                         String jobTypeId, int jobIconItemId) {}

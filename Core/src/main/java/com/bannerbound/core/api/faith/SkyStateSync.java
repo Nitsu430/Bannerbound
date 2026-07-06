@@ -8,9 +8,10 @@ import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * One place that assembles and sends the client sky state (seed + celestialSpeed
- * gamerule). Used on login, on {@code /bannerbound sky reroll}, and from the
- * {@code celestialSpeed} gamerule change callback.
+ * One place that assembles and sends the client sky state - sky seed plus the
+ * celestialSpeed/meteorAmount gamerules and the calendar month length. Used on login, on
+ * {@code /bannerbound sky reroll}, and from the gamerule change callbacks, so every client
+ * renders the same authoritative sky.
  */
 public final class SkyStateSync {
     private SkyStateSync() {

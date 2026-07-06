@@ -16,20 +16,18 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.biome.Biome;
 
 /**
- * Resolves a single "majority biome" for a settlement — the biome that most of its claimed
- * chunks fall under, used to pick which biome-specific cost ladder to apply when expanding
- * territory. Sampling is cheap: one biome read per claimed chunk at a fixed mid-Y position.
+ * Resolves a single "majority biome" for a settlement -- the biome most of its claimed chunks fall
+ * under, used to pick which biome-specific cost ladder applies when expanding territory. Cheap: one
+ * biome read per claimed chunk at chunk centre and a fixed SAMPLE_Y=64 (a sea-level-ish slice so most
+ * Overworld biomes resolve consistently regardless of terrain height). majorityBiome returns the
+ * winning biome's ResourceLocation, or null if the settlement is null or has no claims.
  */
 @ApiStatus.Internal
 public final class TerritoryBiomeResolver {
-    /** Y level sampled for biome at each chunk center. Picks a sea-level-ish slice so most
-     *  Overworld biomes resolve consistently regardless of terrain height. */
     private static final int SAMPLE_Y = 64;
 
     private TerritoryBiomeResolver() {}
 
-    /** Returns the resource location of the biome covering the largest share of the settlement's
-     *  claimed chunks. Null if the settlement has no claims. */
     public static ResourceLocation majorityBiome(ServerLevel level, Settlement settlement) {
         if (settlement == null || settlement.claimedChunks().isEmpty()) return null;
         Map<ResourceLocation, Integer> counts = new HashMap<>();

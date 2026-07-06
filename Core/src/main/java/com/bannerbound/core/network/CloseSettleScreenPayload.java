@@ -10,12 +10,12 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C signal: close the settlement-founding screen ({@code SettleScreen}) if the player has it
- * open. Broadcast to everyone the moment the last banner color is claimed — once the server is
+ * S->C signal: close the settlement-founding screen ({@code SettleScreen}) if the player has it
+ * open. Broadcast to everyone the moment the last banner color is claimed - once the server is
  * full no founding can succeed, so any open founding menu must be dismissed.
  *
  * <p>Deliberately narrower than {@link CloseSettlementScreensPayload}: that one closes every
- * settlement screen (town hall, citizens, research, …) for a player whose settlement disbanded.
+ * settlement screen (town hall, citizens, research, ...) for a player whose settlement disbanded.
  * This one targets <em>only</em> the founding screen, so broadcasting it to the whole server
  * doesn't collateral-close established settlements' town-hall menus.
  */

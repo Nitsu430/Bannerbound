@@ -11,8 +11,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: the open {@code TradeScreen}'s periodic live-refresh poll (mirrors the barter
- * screen's storage poll) — answered with a {@link TradeStoragePayload} for {@code targetId}.
+ * Client -> server: the open TradeScreen's periodic live-refresh poll (mirrors the barter screen's
+ * storage poll) -- answered with a TradeStoragePayload for targetId.
  */
 @ApiStatus.Internal
 public record RequestTradeStoragePayload(String targetId) implements CustomPacketPayload {

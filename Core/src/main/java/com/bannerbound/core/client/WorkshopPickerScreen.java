@@ -16,9 +16,14 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * The "where does this crafter work?" picker, opened when the Job tab assigns <i>Crafter</i>. One
- * row per settlement workshop — name (custom or derived type), type, occupancy — with full or
- * invalid workshops disabled. Picking one sends {@code AssignWorkshopWorkerPayload}, which performs
- * the real assignment and then opens that workshop's menu as confirmation.
+ * row per settlement workshop -- name (custom or derived type), type, occupancy -- with full,
+ * invalid, or unresearched workshops disabled. Picking one sends {@code AssignWorkshopWorkerPayload},
+ * which performs the real assignment and then opens that workshop's menu as confirmation.
+ *
+ * <p>A workshop whose craft isn't researched can't be staffed (mirrors the server gate), so its row
+ * is disabled with a tooltip -- a station built on old ruins is not a silent dead end. Such a
+ * workshop's derived-type name is masked as "Unknown Workshop"; a player-set custom name still
+ * shows, since it reveals nothing about the unresearched craft.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -53,8 +58,6 @@ public class WorkshopPickerScreen extends PolishedScreen {
             boolean valid = Workshop.Status.fromOrdinalOrDefault(data.statusOrdinals().get(i))
                 == Workshop.Status.VALID;
             boolean hasRoom = data.assignedCounts().get(i) < data.capacities().get(i);
-            // A workshop whose craft isn't researched can't be staffed (mirrors the server gate) —
-            // disabled here with a tooltip so a station built on old ruins isn't a silent dead end.
             boolean known = ClientResearchState.isWorkshopTypeKnown(data.typeIds().get(i));
             PolishButton.Builder rowBtn = PolishButton.polished(rowLabel(i, known),
                     b -> {
@@ -82,8 +85,6 @@ public class WorkshopPickerScreen extends PolishedScreen {
 
     private Component rowLabel(int i, boolean known) {
         String custom = data.customNames().get(i);
-        // Unknown craft: the derived-type name is hidden behind "Unknown Workshop" (a player-set
-        // custom name is still shown — it reveals nothing about the unresearched craft).
         Component name = !custom.isEmpty()
             ? Component.literal(custom)
             : known

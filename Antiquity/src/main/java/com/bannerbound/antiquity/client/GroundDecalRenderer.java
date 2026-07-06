@@ -25,19 +25,26 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Draws a {@link GroundDecalEntity} flat on the ground: a blood splat (random {@code blood_splat_N}
- * texture, rotated by variant, full opacity) or a footprint track ({@code <species>_footprint.png},
- * rotated to the animal's heading, ~50% opacity). Both fade out over their lifetime. When the decal
- * has been examined (right-clicked), it also draws a translucent white "search cone" pointing the way
- * the animal went — armed by the click and fading out client-side over ~3s (re-click re-arms it).
+ * Draws a {@link GroundDecalEntity} flat on the ground: a blood splat (random blood_splat_N
+ * texture, rotated by variant, full opacity) or a footprint track (<species>_footprint.png,
+ * rotated to point along the animal's travel heading, ~50% opacity). Both fade out over their
+ * config lifetime with a FADE_TICKS tail. Examined tracks (hunting_instincts research) lerp
+ * white->cyan by {@link FootprintHighlight#strength} so a whole trail reads as one animal. An
+ * examined decal also gets a translucent white "search cone": a ~150 degree wedge fanning toward
+ * where the animal went, armed by the right-click and fading client-side over CONE_FADE_TICKS
+ * (~3s; re-click re-arms). The cone is built pointing model-forward (-Z) and rotated by
+ * 180 - yaw, the vanilla entity-facing convention; its opacity fades hub->rim. Decal quads are
+ * emitted with both windings so they show from above and below. Blood textures are discovered
+ * from the resource pack once (every blood_splat_N.png) and sorted so a variant index maps to a
+ * stable texture.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class GroundDecalRenderer extends EntityRenderer<GroundDecalEntity> {
     private static final ResourceLocation FALLBACK =
         ResourceLocation.withDefaultNamespace("textures/misc/white.png");
-    private static final int FADE_TICKS = 40;   // lifetime fade-out tail for the decal quad
-    private static final float CONE_FADE_TICKS = 60.0F; // cone fades over ~3 seconds after a click
+    private static final int FADE_TICKS = 40;
+    private static final float CONE_FADE_TICKS = 60.0F;
     private static final float TRACK_OPACITY = 0.5F;
     private static List<ResourceLocation> bloodCache;
 
@@ -59,26 +66,22 @@ public class GroundDecalRenderer extends EntityRenderer<GroundDecalEntity> {
         float remaining = lifetime - (decal.tickCount + partialTick);
         if (remaining > 0.0F) {
             float lifeFade = remaining < FADE_TICKS ? remaining / FADE_TICKS : 1.0F;
-            // 1) The decal texture lying on the ground.
             if (track) {
                 String species = decal.getSpecies();
                 if (!species.isEmpty()) {
-                    // Examined tracks (with the hunting_instincts research) tint cyan to show the
-                    // whole trail belongs to one animal: lerp white→cyan by the highlight strength.
                     float tint = FootprintHighlight.strength(
                         decal.getGroupId(), decal.level().getGameTime(), partialTick);
-                    int red = Mth.clamp((int) ((1.0F - tint) * 255.0F), 0, 255); // 255 white → 0 cyan
+                    int red = Mth.clamp((int) ((1.0F - tint) * 255.0F), 0, 255);
                     drawQuad(pose, buffer, packedLight, footprintTexture(species), 0.4F,
-                        180.0F - decal.getHeading(), red, 255, 255, TRACK_OPACITY * lifeFade); // point along travel
+                        180.0F - decal.getHeading(), red, 255, 255, TRACK_OPACITY * lifeFade);
                 }
             } else {
                 List<ResourceLocation> textures = bloodTextures();
                 if (!textures.isEmpty()) {
                     drawQuad(pose, buffer, packedLight, textures.get(Math.floorMod(decal.getVariant(), textures.size())),
-                        0.5F, (decal.getVariant() * 47) % 360, 255, 255, 255, lifeFade); // varied rotation
+                        0.5F, (decal.getVariant() * 47) % 360, 255, 255, 255, lifeFade);
                 }
             }
-            // 2) The examine cone — points where the animal went, fades client-side over ~3s.
             drawDirectionCone(pose, buffer, decal.getHeading(), decal.getRevealTick(), decal.tickCount, partialTick);
         }
         super.render(decal, entityYaw, partialTick, pose, buffer, packedLight);
@@ -92,14 +95,13 @@ public class GroundDecalRenderer extends EntityRenderer<GroundDecalEntity> {
             return;
         }
         pose.pushPose();
-        pose.translate(0.0, 0.02, 0.0); // just above the surface, avoid z-fighting
+        pose.translate(0.0, 0.02, 0.0); // lift just above the surface or the quad z-fights the ground
         pose.mulPose(Axis.YP.rotationDegrees(rotationDeg));
         VertexConsumer vc = buffer.getBuffer(RenderType.entityTranslucentCull(texture));
         emitDoubleSidedQuad(vc, pose.last(), light, red, green, blue, a, half);
         pose.popPose();
     }
 
-    /** A horizontal quad emitted both windings so it shows whether viewed from above or below. */
     private static void emitDoubleSidedQuad(VertexConsumer vc, PoseStack.Pose pose, int light,
                                             int red, int green, int blue, int alpha, float h) {
         quadVertex(vc, pose, -h, -h, 0.0F, 0.0F, light, red, green, blue, alpha);
@@ -122,15 +124,10 @@ public class GroundDecalRenderer extends EntityRenderer<GroundDecalEntity> {
             .setNormal(pose, 0.0F, 1.0F, 0.0F);
     }
 
-    /**
-     * A soft white wedge fanning out toward {@code headingYaw}. Built pointing model-forward (−Z) and
-     * rotated by {@code 180 − yaw} (the vanilla entity-facing convention) so it opens in the heading
-     * direction. Opacity fades hub→rim and, over {@link #CONE_FADE_TICKS}, since the last reveal.
-     */
     private static void drawDirectionCone(PoseStack pose, MultiBufferSource buffer, float headingYaw,
                                           int revealTick, int tickCount, float partialTick) {
         if (revealTick < 0) {
-            return; // never examined
+            return;
         }
         float age = (tickCount - revealTick) + partialTick;
         if (age < 0.0F || age >= CONE_FADE_TICKS) {
@@ -141,16 +138,16 @@ public class GroundDecalRenderer extends EntityRenderer<GroundDecalEntity> {
             return;
         }
         pose.pushPose();
-        pose.translate(0.0, 0.03, 0.0); // sit just above the decal texture
+        pose.translate(0.0, 0.03, 0.0); // must sit above the 0.02 decal quad or they z-fight
         pose.mulPose(Axis.YP.rotationDegrees(180.0F - headingYaw));
         int segments = 24;
         float radius = 2.4F;
-        float halfArc = 75.0F; // ~150° wedge — a forward-facing semicircle
+        float halfArc = 75.0F;
         VertexConsumer vc = buffer.getBuffer(HuntingRenderTypes.BLOOD_CONE);
         for (int i = 0; i < segments; i++) {
             double a0 = Math.toRadians(-halfArc + 2.0F * halfArc * i / segments);
             double a1 = Math.toRadians(-halfArc + 2.0F * halfArc * (i + 1) / segments);
-            coneVertex(vc, pose.last(), 0.0F, 0.0F, hubAlpha); // hub
+            coneVertex(vc, pose.last(), 0.0F, 0.0F, hubAlpha);
             coneVertex(vc, pose.last(), (float) Math.sin(a0) * radius, -(float) Math.cos(a0) * radius, 0);
             coneVertex(vc, pose.last(), (float) Math.sin(a1) * radius, -(float) Math.cos(a1) * radius, 0);
         }
@@ -171,7 +168,6 @@ public class GroundDecalRenderer extends EntityRenderer<GroundDecalEntity> {
         return textures.isEmpty() ? FALLBACK : textures.get(Math.floorMod(variant, textures.size()));
     }
 
-    /** Discover every blood_splat_N texture in the pack once, sorted for a stable index. */
     private static List<ResourceLocation> bloodTextures() {
         if (bloodCache == null) {
             List<ResourceLocation> found = new ArrayList<>(

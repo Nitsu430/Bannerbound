@@ -13,15 +13,17 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 
 /**
- * All face decorations within one chunk: {@code BlockPos → (Direction → FaceDeco)}. Used both as the
- * server-side chunk {@linkplain net.neoforged.neoforge.attachment.AttachmentType attachment} value
- * (persisted via {@link #CODEC}) and as the client-side per-chunk cache. Mutable; empty faces are not
- * stored.
+ * All face decorations within one chunk: {@code BlockPos -> (Direction -> FaceDeco)}. Used both as
+ * the server-side chunk {@linkplain net.neoforged.neoforge.attachment.AttachmentType attachment}
+ * value and as the client-side per-chunk cache. Persisted via {@link #CODEC}, which serializes as a
+ * flat list of {@link FaceDecoEntry} (the chunk save format). Mutable; empty faces are never stored:
+ * set() with a null/empty deco clears the face and prunes the position, so isEmpty() stays accurate.
+ * appealAt() sums per-face plaster/trim appeal at one position; anyPlaster() drives the blast/break
+ * "sturdier" effects; forEachInYRange() (block Y within [minY, maxY)) feeds per-section rendering.
  */
 public class ChunkDecorations {
     private final Map<BlockPos, EnumMap<Direction, FaceDeco>> faces = new HashMap<>();
 
-    /** Serializes as a flat list of {@link FaceDecoEntry} (chunk save data). */
     public static final Codec<ChunkDecorations> CODEC =
         FaceDecoEntry.CODEC.listOf().xmap(ChunkDecorations::fromEntries, ChunkDecorations::toEntries);
 
@@ -31,7 +33,6 @@ public class ChunkDecorations {
         return d == null ? FaceDeco.EMPTY : d;
     }
 
-    /** Set (or clear, when {@code deco.isEmpty()}) the decoration on one face. Returns true if changed. */
     public boolean set(BlockPos pos, Direction dir, FaceDeco deco) {
         BlockPos key = pos.immutable();
         if (deco == null || deco.isEmpty()) {
@@ -53,13 +54,10 @@ public class ChunkDecorations {
         return faces.isEmpty();
     }
 
-    /** Remove and return every face decoration at {@code pos} (null if it had none). */
     public EnumMap<Direction, FaceDeco> removeAll(BlockPos pos) {
         return faces.remove(pos);
     }
 
-    /** Summed appeal at one position: {@code plasterEach} per plastered face + {@code trimEach} per
-     *  trimmed face. 0 if the position has no decorations. */
     public double appealAt(BlockPos pos, double plasterEach, double trimEach) {
         EnumMap<Direction, FaceDeco> m = faces.get(pos);
         if (m == null) {
@@ -77,7 +75,6 @@ public class ChunkDecorations {
         return s;
     }
 
-    /** True if any face of {@code pos} is plastered (drives the blast/break "sturdier" effects). */
     public boolean anyPlaster(BlockPos pos) {
         EnumMap<Direction, FaceDeco> m = faces.get(pos);
         if (m == null) {
@@ -95,7 +92,6 @@ public class ChunkDecorations {
         faces.forEach((pos, m) -> m.forEach((dir, deco) -> out.accept(new FaceDecoEntry(pos, dir, deco))));
     }
 
-    /** Entries whose block Y is within {@code [minY, maxY)} — for per-section rendering. */
     public void forEachInYRange(int minY, int maxY, Consumer<FaceDecoEntry> out) {
         faces.forEach((pos, m) -> {
             if (pos.getY() >= minY && pos.getY() < maxY) {

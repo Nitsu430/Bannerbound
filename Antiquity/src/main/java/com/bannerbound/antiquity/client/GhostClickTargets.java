@@ -25,38 +25,44 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Click/hover target geometry for a workstation's ghost-preview UI: the floating ghost result (fill)
- * plus, when there are ≥2 candidate recipes, two browse arrows flanking it. Arrows sit perpendicular
- * to the camera's view so they always read as screen-left/right of the result — both the renderer
- * (billboard positions + hover highlight) and the click handler ray-test through here, so what you
- * see is exactly what you can click.
+ * Single source of truth for the ghost-preview UI's click/hover geometry: the floating ghost
+ * result (FILL) plus, when a workstation has 2+ candidate recipes, two browse arrows flanking it
+ * (CYCLE_LEFT/RIGHT; a {@link Target}'s action is the {@link GhostActionPayload} action it sends).
+ * Both the renderer (billboard positions + hover highlight) and the click handler in
+ * GhostRecipeClientEvents ray-test through here, so what you see is exactly what you can click.
+ * Arrows sit horizontally perpendicular to the camera (screen-left/right of the result,
+ * pitch-flattened; the degenerate straight-down-with-rolled-camera case falls back to +X).
+ *
+ * <p>{@link #findHovered} scans SCAN_XZ/SCAN_Y blocks around the player for
+ * GhostRecipeWorkstations and is shared by the click handler and the green-crosshair affordance so
+ * they always agree on what's clickable. Conflict with vanilla targeting is resolved purely by
+ * distance: whatever the crosshair ray hits first wins, so a closer solid block (even the
+ * workstation itself) takes the click, while a result floating above a short block stays clickable
+ * when aimed down at from up close. {@link #targetsFor} is empty unless the ghost preview is
+ * showing, with one deliberate exception: the crafting stone's SOLID craftable result (exact
+ * match, no ghost) also gets a FILL target so players craft straight from the floating preview
+ * instead of the click falling through to the block (which now needs shift to craft). Compact
+ * stations (carpenter's table + mason's bench, which share the ghostPreviewY 1.62 picker band) use
+ * tighter arrow/result hitboxes.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class GhostClickTargets {
-    /** Horizontal distance from the floating result's center to each arrow. */
     private static final double ARROW_OFFSET = 0.55;
     private static final double ARROW_BOX = 0.32;
     private static final double RESULT_BOX = 0.5;
 
-    /** One clickable element; {@code action} is the {@link GhostActionPayload} action it sends. */
     public record Target(int action, Vec3 center, AABB box) {}
 
-    /** A ray-picked target and its squared distance from the ray origin. */
     public record Picked(Target target, double distSqr) {}
 
-    /** The workstation + target the crosshair is currently over. */
     public record Hover(BlockPos pos, Picked picked) {}
 
-    /** Horizontal / vertical block radius scanned for workstations with live ghost previews. */
     private static final int SCAN_XZ = 6;
     private static final int SCAN_Y = 4;
 
     private GhostClickTargets() {}
 
-    /** The ghost target the player is aiming at right now (nearest, and only when it beats the vanilla
-     *  block under the crosshair), or {@code null}. Shared by the click handler ({@code GhostClickEvents})
-     *  and the green-crosshair affordance so they always agree on what's clickable. */
     @Nullable
     public static Hover findHovered(Minecraft mc) {
         LocalPlayer player = mc.player;
@@ -81,10 +87,6 @@ public final class GhostClickTargets {
         }
         if (best == null) return null;
 
-        // Whatever the crosshair hits FIRST wins. If a solid block (even the workstation itself) is
-        // closer than the floating target, normal block interaction takes it; otherwise the floating
-        // target claims the click. Distance-based so a result floating above a short block (you're
-        // aiming down at it from up close) is still clickable rather than ceded to the block below.
         HitResult vanilla = mc.hitResult;
         if (vanilla != null && vanilla.getType() != HitResult.Type.MISS
                 && vanilla.getLocation().distanceToSqr(eye) < best.distSqr()) {
@@ -93,20 +95,12 @@ public final class GhostClickTargets {
         return new Hover(bestPos, best);
     }
 
-    /** This frame's targets for {@code be} (empty unless its ghost preview is showing). The ghost
-     *  preview can coexist with a solid result (locked recipe + incidental exact match floating
-     *  above it), so only the ghost matters here. */
     public static List<Target> targetsFor(BlockEntity be, Camera camera) {
         if (!(be instanceof GhostRecipeWorkstation ws)) return List.of();
         boolean hasGhost = !ws.getGhostResult().isEmpty();
-        // The crafting stone floats a SOLID craftable result (an exact match, no ghost) at the same
-        // spot — make THAT clickable too, so the player crafts straight from the floating preview
-        // instead of the click falling through to the block (which now needs shift to craft).
         boolean exactMatch = !hasGhost && be instanceof CraftingStoneBlockEntity cs
             && !cs.getResult().isEmpty();
         if (!hasGhost && !exactMatch) return List.of();
-        // The carpenter's table + mason's bench use the same compact picker band (ghostPreviewY 1.62),
-        // so they share the tighter arrow/result hitboxes.
         boolean compact = be instanceof WoodworkingTableBlockEntity
             || be instanceof com.bannerbound.antiquity.block.entity.MasonsBenchBlockEntity;
         double arrowOffset = compact ? 0.38 : ARROW_OFFSET;
@@ -118,8 +112,6 @@ public final class GhostClickTargets {
         out.add(new Target(GhostActionPayload.FILL, center,
             AABB.ofSize(center, resultBox, resultBox, resultBox)));
         if (ws.getGhostCandidateCount() >= 2) {
-            // Horizontal screen-left, from the camera (pitch keeps it level; degenerate looking
-            // straight down with a rolled camera falls back to +X).
             var leftVec = camera.getLeftVector();
             Vec3 left = new Vec3(leftVec.x(), 0.0, leftVec.z());
             left = left.lengthSqr() < 1.0E-4 ? new Vec3(1.0, 0.0, 0.0) : left.normalize();
@@ -133,7 +125,6 @@ public final class GhostClickTargets {
         return out;
     }
 
-    /** The nearest target the ray from {@code from} along {@code dir} hits within {@code reach}. */
     @Nullable
     public static Picked pick(List<Target> targets, Vec3 from, Vec3 dir, double reach) {
         Vec3 to = from.add(dir.normalize().scale(reach));

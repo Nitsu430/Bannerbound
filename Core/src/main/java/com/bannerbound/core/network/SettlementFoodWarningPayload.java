@@ -11,19 +11,13 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: a settlement-wide food warning broadcast to EVERY member. Drives a small on-screen HUD
- * banner (see {@code SettlementFoodWarningHudLayer}) so every player in the settlement — not just
- * whoever has a screen open — is told when food is running out.
- *
- * <p>{@code level} is the threshold bucket the settlement's food has crossed:
- * <ul>
- *   <li>{@link #LEVEL_OK} (0) — food is healthy; clears any banner.</li>
- *   <li>{@link #LEVEL_LOW} (1) — food below the low threshold (amber "Food running low").</li>
- *   <li>{@link #LEVEL_STARVING} (2) — food at zero with active consumption (red "STARVING").</li>
- * </ul>
- *
- * <p>Broadcast only on the once-per-second food tick AND only when the bucket actually changes
- * (tracked server-side), so it never spams packets.
+ * S->C: a settlement-wide food warning broadcast to EVERY member. Drives a small on-screen HUD
+ * banner (see SettlementFoodWarningHudLayer) so every player in the settlement - not just whoever
+ * has a screen open - is told when food is running out. level is the threshold bucket the food has
+ * crossed: LEVEL_OK (0) healthy, clears any banner; LEVEL_LOW (1) below the low threshold (amber
+ * "Food running low"); LEVEL_STARVING (2) at zero with active consumption (red "STARVING").
+ * Broadcast only on the once-per-second food tick AND only when the bucket actually changes (tracked
+ * server-side), so it never spams packets.
  */
 @ApiStatus.Internal
 public record SettlementFoodWarningPayload(int level) implements CustomPacketPayload {

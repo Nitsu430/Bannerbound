@@ -10,7 +10,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: open the Armorer's Workbench design screen for the receiving player. Carries the
+ * Server -> client: open the Armorer's Workbench design screen for the receiving player. Carries the
  * station block so a later crafting step can validate against it server-side. Mirrors the other
  * {@code Open*Payload}s; the real client handler touches client-only classes, so it's dist-guarded in
  * {@link AntiquityNetwork} (no-op on the server, which still registers TYPE + CODEC to encode it).

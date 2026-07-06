@@ -34,49 +34,54 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Digger {@link OrderedWorkGoal} — an ORDERED worker. Unlike the gatherer Forester (which scans the
- * world freely), a digger never digs on its own: it only mines blocks inside areas the player marked
- * with the Foreman's Rod (stored in {@link BlockSelectionRegistry} with {@code workstationType ==
- * "digger"}). A selection is either bound to one specific citizen or open to "all diggers" — see
- * {@link BlockSelection#targetsCitizen}.
- * <p>
- * It mines like a player would: it walks loosely toward the work and breaks any selected block within
- * {@link #REACH} that it has a clear line of sight to ({@link #canMineFromHere}). The raycast is what
- * stops it digging through walls/floors, so the reach can be generous — there's deliberately no
- * "navigate to an exact adjacent tile" step, which was brittle in dug-out terrain. It reads its tool +
- * drop-off off the {@link CitizenEntity} (job tab), routes drops into the marked chest/basket, and
- * paces by the SHOVEL/pickaxe it was handed (its tool age's {@code mine_speed}).
+ * Digger {@link OrderedWorkGoal} -- an ORDERED worker (never digs on its own, unlike the free-scanning
+ * Forester). It only mines blocks inside areas the player marked with the Foreman's Rod, stored in
+ * {@link BlockSelectionRegistry} with workstationType == "digger"; a selection is bound to one citizen
+ * or open to "all diggers" (see {@link BlockSelection#targetsCitizen}). Two work modes share this goal:
+ * ordinary terrain selections (findTarget) and material-deposit outposts (findDepositSite), whose faces
+ * are worked via a state-swap to MaterialDepositLayout.workedBlock so the deposit's mass is never
+ * destroyed.
+ *
+ * <p>It mines like a player: it walks loosely toward the work and breaks any selected block within
+ * {@link #REACH} it has a clear line of sight to ({@link #canMineFromHere}). The raycast -- not raw
+ * distance -- is what stops it digging through walls/floors, so REACH is deliberately generous and there
+ * is no brittle "navigate to an exact adjacent tile" step. To reach a block it navigates to an APPROACH
+ * tile: a standable spot near the target (never the solid block itself) so the navigator walks DOWN into
+ * a pit instead of parking on the rim. Each approach is pre-vetted for line of sight, tried nearest-first,
+ * and a no-progress watchdog abandons a stuck approach (then the block) so a better-placed digger can take
+ * it. DiggerClaims reserves both the target block AND the standing tile so two diggers won't crowd one
+ * tunnel ({@link #CONTEST_RADIUS}) yet still share an open pit in parallel.
+ *
+ * <p>Targeting is top-down (highest block, then nearest); an in-reach "immediate" block is always cleared
+ * before pathing anywhere. It reads its tool + drop-off off the {@link CitizenEntity} (job tab), routes
+ * drops into the marked chest/basket (spilling valuable overflow at its feet), and paces by tool-age
+ * mine_speed, quality, and worker XP. Soil-tier needs the shovel (primary tool); stone-tier (stone/ores/
+ * coal) needs a pickaxe AND the Quarry research ({@link #FLAG_QUARRY}); ProspectingQuarry can add a
+ * daily-capped bonus ore on natural stone.
+ *
+ * <p>Two ordering traps this class exists to avoid: (1) a selection is cleared only when FULLY LOADED and
+ * holding no terrain -- an unloaded chunk reads as air, which would vanish the order mid-dig (the "random
+ * clearing" bug); (2) outpost commute is bootstrapped from the registry only while the outpost chunk is
+ * unloaded (findDepositSite/wireDepositStorage need it loaded), mirroring the miner/herder ordering.
+ * targetDrops is computed once when a target is chosen (the block can't change before we break it) so the
+ * depot-room gate keys to the REAL drop, while DropOffContainers.roomFor is still re-checked live so a
+ * chest filling mid-job still stops us.
  */
 @ApiStatus.Internal
 public class DiggerWorkGoal extends OrderedWorkGoal {
-    /** Per-citizen job id (matches {@link com.bannerbound.core.social.WorkstationIcons} /
-     *  {@link com.bannerbound.core.api.settlement.WorkstationUnlocks}). */
     public static final String JOB_TYPE_ID = "diggers_slab";
-    /** Type string the Foreman's Rod stamps on digger selections (the short unit name). */
     public static final String SELECTION_TYPE = "digger";
 
     private static final int DEFAULT_MINE_TICKS = 80;
-    /** Research flag (Quarry) that lets quarryworkers mine pickaxe-tier blocks (stone, ores, coal). */
     private static final String FLAG_QUARRY = "bannerbound.unlock_quarry";
     private static final int DEPOSIT_MINE_NUMERATOR = 3;
     private static final int DEPOSIT_MINE_DENOMINATOR = 2;
     private static final int RESCAN_COOLDOWN_TICKS = 40;
-    /** Player-like reach: the worker mines any in-sight selected block whose nearest point is within
-     *  this many blocks of its eyes. Generous on purpose — line of sight, not distance, is what keeps
-     *  it from digging through walls, so it never gets "stuck" beside a block it can plainly reach. */
     private static final double REACH = 4.0;
     private static final double REACH_SQ = REACH * REACH;
-    /** Hard backstop: if a target is somehow never minable for this long, drop it and pick another. */
     private static final int TARGET_TIMEOUT_TICKS = 160;
-    /** How long (ticks) a block we couldn't get to is skipped before retrying — short so the worker
-     *  recovers quickly instead of "giving up" on a zone for a long time. */
     private static final int FAILED_TTL_TICKS = 80;
-    /** Ticks of no approach-progress before giving up on a target (and releasing its claim) so a
-     *  better-placed digger can take it — keeps a stuck worker from hogging a block. ~1.5s. */
     private static final int STAGNATION_LIMIT = 30;
-    /** A digger won't commit to a standing spot this close to another digger's reservation. Big enough
-     *  to keep two workers out of the same one-wide tunnel, small enough that they still share an open
-     *  pit / a long wall in parallel. */
     private static final double CONTEST_RADIUS = 2.5;
 
     private BlockPos targetPos;
@@ -84,27 +89,15 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
     private BlockPos depositAnchor;
     private ChunkResource depositResource = ChunkResource.NONE;
     private int depositBaseY = Integer.MIN_VALUE;
-    /** What mining {@link #targetPos} will yield — computed once when the target is chosen (the block
-     *  can't change until we break it) so the depot-room gate can ask about the REAL drop (cobblestone
-     *  from stone, dirt from dirt...) instead of a worst-case "any free slot". {@link DropOffContainers#roomFor}
-     *  is still evaluated live against the depot each check, so a chest that fills mid-job still stops us. */
     private List<ItemStack> targetDrops = List.of();
     private int mineTimer;
     private int targetAge;
     private int rescanCooldown;
-    /** Walkable tiles near the target we can navigate to (so the pathfinder walks DOWN to a standable
-     *  spot instead of parking on the rim above a solid block), nearest-worker first, and the index of
-     *  the one we're trying. Falling back to the next when one proves unreachable lets the worker reach
-     *  a block from whichever side actually connects. {@code approachPos} is the current goal. */
     private java.util.List<BlockPos> approaches = java.util.List.of();
     private int approachIdx;
     private BlockPos approachPos;
-    /** No-progress watchdog: smallest distance² to {@code approachPos} seen this approach + ticks since
-     *  it last improved. */
     private double bestApproachDistSq = Double.MAX_VALUE;
     private int stagnation;
-    /** Blocks we couldn't reach recently → {@code citizen.tickCount} they may be retried. Skipped by the
-     *  scanner until then so the worker doesn't re-fixate on the same unreachable block. */
     private final java.util.Map<BlockPos, Integer> recentlyFailed = new java.util.HashMap<>();
 
     public DiggerWorkGoal(CitizenEntity citizen, double speedModifier) {
@@ -120,9 +113,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         return DropOffContainers.resolveOrPreferred(citizen, citizen.getDropOff());
     }
 
-    /** Exactly what mining {@code pos} will drop — same path as {@link #mineBlock} (loot table + the
-     *  civ's drop filter) so the room gate is keyed to the real item. Empty/unrecognized → empty list
-     *  (nothing to store). Returns empty off the server thread (no level to evaluate against). */
     private List<ItemStack> computeDrops(BlockPos pos) {
         if (pos == null || !(citizen.level() instanceof ServerLevel sl)) return List.of();
         BlockState state = sl.getBlockState(pos);
@@ -141,8 +131,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         return drops;
     }
 
-    /** True if {@code depot} can hold every stack in {@code drops}. An empty drop list (block yields
-     *  nothing the civ recognizes) is trivially "has room" — there's nothing to deposit. */
     private boolean depotHasRoomFor(Container depot, List<ItemStack> drops) {
         for (ItemStack drop : drops) {
             if (drop.isEmpty()) continue;
@@ -153,20 +141,11 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
 
     @Override
     protected boolean canStartWork() {
-        citizen.validateJobStorage();   // clear a broken drop-off so we don't dig for a dead container
+        citizen.validateJobStorage();
         if (!JOB_TYPE_ID.equals(citizen.getJobType()) || !citizen.hasJobTool()) return false;
 
-        // Outpost commute bootstrap: findDepositSite below skips unloaded chunks, so a digger
-        // appointed to a remote material deposit could never learn its site (and thus never set
-        // out) while standing at home. Seed the outpost site straight from the registry here for
-        // the unloaded case; once the digger reaches it and the chunk loads, the normal
-        // findDepositSite/wireDepositStorage path takes over. Mirrors the miner/herder ordering.
         maybeBootstrapOutpostCommute();
 
-        // Continue a still-valid target — but only while it's still inside a live order AND the depot
-        // can still take its drop. If the player deleted the selection (shift+left-click) the cached
-        // target is no longer ordered; if the chest filled up we'd just spill the yield at our feet —
-        // either way, drop it.
         if (targetPos != null) {
             Container depot = resolveDepot();
             if (targetDeposit) {
@@ -179,7 +158,7 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
             } else if (citizen.isJobReady(JOB_TYPE_ID) && depot != null
                     && isStillOrdered(targetPos) && isMineable(citizen.level(), targetPos)
                     && depotHasRoomFor(depot, targetDrops)) {
-                claimWorkArea();   // keep our reservation (block + standing spot) fresh
+                claimWorkArea();
                 return true;
             }
         }
@@ -200,22 +179,18 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
             rescanCooldown = RESCAN_COOLDOWN_TICKS;
             return false;
         }
-        // Don't commit to a block the depot can't hold the drop of (deterministic 1:1 — cobblestone
-        // from stone, etc.). Back off briefly rather than walk over and spill it.
         List<ItemStack> pickDrops = computeDrops(pick.block());
         if (!depotHasRoomFor(depot, pickDrops)) {
             rescanCooldown = RESCAN_COOLDOWN_TICKS;
             return false;
         }
         if (pick.immediate()) {
-            // Already in reach + sight — mine it where we stand, no pathfinding at all.
             approaches = java.util.List.of();
             approachIdx = 0;
             approachPos = null;
         } else {
             java.util.List<BlockPos> appr = findApproaches(citizen.level(), pick.block(), citizen.blockPosition());
             if (appr.isEmpty()) {
-                // No walkable tile near it to mine from yet (fully buried) — skip briefly, try another.
                 recentlyFailed.put(pick.block().immutable(), citizen.tickCount + FAILED_TTL_TICKS);
                 rescanCooldown = RESCAN_COOLDOWN_TICKS;
                 return false;
@@ -230,8 +205,8 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         depositResource = ChunkResource.NONE;
         depositBaseY = Integer.MIN_VALUE;
         citizen.setOutpostSite(null);
-        targetDrops = pickDrops;   // cache the (stable) drop so canKeepWorking can re-vet depot room live
-        claimWorkArea();   // reserve the block AND our standing spot so no other digger crowds in
+        targetDrops = pickDrops;
+        claimWorkArea();
         resetApproachWatchdog();
         targetAge = 0;
         return true;
@@ -321,11 +296,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         return true;
     }
 
-    /** Sets {@link CitizenEntity#setOutpostSite} from this digger's bound material-deposit marker
-     *  ONLY while that outpost chunk is unloaded — the one case {@link #findDepositSite} /
-     *  {@link #wireDepositStorage} can't cover, since they require the chunk loaded. A no-op when the
-     *  site is loaded (the normal path then owns the outpost site) or when this digger holds no bound
-     *  outpost marker, so it can't clobber an in-territory worker's state. */
     private void maybeBootstrapOutpostCommute() {
         if (!(citizen.level() instanceof ServerLevel sl)) return;
         Settlement settlement = citizen.getSettlement();
@@ -333,9 +303,9 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         for (BlockSelection sel : BlockSelectionRegistry.get(sl).getForSettlement(settlement.id())) {
             if (sel.kind() != BlockSelection.Kind.WORKSTATION) continue;
             if (!isMaterialDepositSelection(sel)) continue;
-            if (!sel.targetsCitizen(citizen.getUUID()) || sel.targetsAllWorkers()) continue; // bound to me only
+            if (!sel.targetsCitizen(citizen.getUUID()) || sel.targetsAllWorkers()) continue;
             BlockPos anchor = new BlockPos(sel.minX(), sel.minY(), sel.minZ());
-            if (sl.hasChunk(anchor.getX() >> 4, anchor.getZ() >> 4)) return; // loaded — normal path handles it
+            if (sl.hasChunk(anchor.getX() >> 4, anchor.getZ() >> 4)) return;
             if (settlement.workingClaims().contains(new ChunkPos(anchor).toLong())) {
                 citizen.setOutpostSite(anchor.immutable());
             }
@@ -422,25 +392,17 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         depositBaseY = Integer.MIN_VALUE;
     }
 
-    /** Reserve both the target block and the tile we'll stand on (the approach tile, or our feet for an
-     *  in-place mine). The standing-spot reservation is what lets {@link #contestedTile} keep a second
-     *  digger out of a space this one already occupies. */
     private void claimWorkArea() {
         int id = citizen.getId();
         if (targetPos != null) DiggerClaims.claim(targetPos, id);
         DiggerClaims.claim(approachPos != null ? approachPos : citizen.blockPosition(), id);
     }
 
-    /** True if another digger has reserved a block or standing spot within {@link #CONTEST_RADIUS} of
-     *  {@code tile} — i.e. this tile is inside an area another worker is already working. */
     private boolean contestedTile(BlockPos tile) {
         return citizen.level() instanceof ServerLevel sl
             && DiggerClaims.hasOtherClaimNear(sl, tile, citizen.getId(), CONTEST_RADIUS);
     }
 
-    /** The current approach tile proved unreachable (no progress): try the next one for the SAME block;
-     *  only when all are exhausted do we abandon the block + release its claim for a better-placed
-     *  digger. This is how a worker reaches a block from a different side on its own. */
     private void advanceApproachOrAbandon() {
         approachIdx++;
         if (approachIdx >= approaches.size()) {
@@ -452,13 +414,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         navigateToTarget();
     }
 
-    /**
-     * Tiles within ~2 blocks of {@code target} that the worker can both STAND on and SEE the target
-     * from (sorted nearest-{@code origin} first). Both conditions matter: navigating to a standable
-     * tile (never the solid block) makes the navigator walk down into a pit / up to a wall instead of
-     * parking on the rim; requiring line of sight from that tile means we only ever commit to a block
-     * we'll actually be able to mine when we arrive — no more chasing blocks we can't see.
-     */
     private java.util.List<BlockPos> findApproaches(Level level, BlockPos target, BlockPos origin) {
         java.util.List<BlockPos> out = new java.util.ArrayList<>();
         for (int dx = -2; dx <= 2; dx++) {
@@ -477,9 +432,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         return out;
     }
 
-    /** Would a worker standing at {@code stand} have a clear line of sight to {@code target}? Same
-     *  block raycast as {@link #canMineFromHere} but from a hypothetical eye over {@code stand}, used
-     *  to vet an approach tile before we commit to walking there. */
     private boolean hasSightFrom(Level level, BlockPos stand, BlockPos target) {
         Vec3 eye = new Vec3(stand.getX() + 0.5, stand.getY() + 1.62, stand.getZ() + 0.5);
         Vec3 closest = new Vec3(
@@ -510,10 +462,8 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
     public void start() {
         mineTimer = 0;
         citizen.setWorking(true);
-        // Let the pathfinder route down into the pit (and ride the drop unharmed) while excavating —
-        // vanilla won't path a drop > 3, which strands the worker at the rim of any deeper hole.
+        // vanilla won't path a drop > 3, stranding the worker at the rim of any deeper pit.
         citizen.setDeepDigDescent(true);
-        // Render the player-provided shovel in hand (a copy — the canonical tool lives on the citizen).
         citizen.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, citizen.getJobTool().copy());
         resetApproachWatchdog();
         navigateToTarget();
@@ -525,7 +475,7 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         citizen.setWorking(false);
         citizen.setDeepDigDescent(false);
         citizen.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, ItemStack.EMPTY);
-        DiggerClaims.releaseAll(citizen.getId());   // free our reservation for other diggers
+        DiggerClaims.releaseAll(citizen.getId());
         clearTargetState();
     }
 
@@ -539,7 +489,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
             targetPos.getX() + 0.5, targetPos.getY() + 0.5, targetPos.getZ() + 0.5);
 
         if (canMineFromHere(targetPos)) {
-            // In reach + line of sight → mine it. No precise positioning needed.
             citizen.getNavigation().stop();
             mineTimer++;
             String role = targetDeposit
@@ -554,7 +503,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
                     / DEPOSIT_MINE_DENOMINATOR);
             }
             budget = com.bannerbound.core.api.quality.QualityTier.scaleWorkTicks(tool, budget);
-            // Experience on top of tool age/quality: a seasoned digger works faster.
             budget = skilledWorkTicks(budget);
             int interval = Math.max(1, budget / 3);
             if (mineTimer % interval == 0 && citizen.level() instanceof ServerLevel sl) {
@@ -565,9 +513,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
                 mineTimer = 0;
             }
         } else {
-            // Not in reach/sight yet → walk to the approach tile. Watchdog: if we stop getting closer
-            // to it, that approach is unreachable from here — try the next stand tile, then (when all
-            // are exhausted) abandon the block so a better-placed digger takes it. No stalling.
             if (approachPos != null) {
                 double d = citizen.position().distanceToSqr(
                     approachPos.getX() + 0.5, approachPos.getY() + 0.5, approachPos.getZ() + 0.5);
@@ -586,17 +531,8 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         }
     }
 
-    /**
-     * True if the worker can mine {@code t} right now: its nearest point is within {@link #REACH} of
-     * the worker's eyes AND there's a clear line of sight to it (a block raycast that isn't interrupted
-     * by another block). The line-of-sight test is what prevents digging through walls or floors — a
-     * wall between the worker and {@code t} stops the ray — so the reach can be generous without the
-     * worker ever reaching "through" anything.
-     */
     private boolean canMineFromHere(BlockPos t) {
         Vec3 eye = citizen.getEyePosition();
-        // Closest point on the target block's box to the eye — "can I touch any part of it", not just
-        // its centre, so a block we're right on top of / beside always qualifies.
         Vec3 closest = new Vec3(
             Mth.clamp(eye.x, t.getX(), t.getX() + 1.0),
             Mth.clamp(eye.y, t.getY(), t.getY() + 1.0),
@@ -607,9 +543,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         return hit.getType() == HitResult.Type.MISS || hit.getBlockPos().equals(t);
     }
 
-    /** Walk to the current approach tile — a real standable spot near the target (so the navigator
-     *  descends the steps into a pit instead of parking on the rim). The reach + line-of-sight check
-     *  does the actual mining, so we don't need to land on an exact adjacent tile. */
     private void navigateToTarget() {
         if (approachPos == null) return;
         citizen.getNavigation().moveTo(
@@ -621,7 +554,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         stagnation = 0;
     }
 
-    /** True if {@code pos} timed out recently and its skip window hasn't expired (prunes on access). */
     private boolean isRecentlyFailed(BlockPos pos) {
         Integer expiry = recentlyFailed.get(pos);
         if (expiry == null) return false;
@@ -629,11 +561,10 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         return true;
     }
 
-    /** Couldn't reach this block — skip it for a while, release its claim, and move on. */
     private void markFailedAndAbandon() {
         if (targetPos != null) {
             recentlyFailed.put(targetPos.immutable(), citizen.tickCount + FAILED_TTL_TICKS);
-            DiggerClaims.releaseAll(citizen.getId());   // free both block + standing-spot reservations
+            DiggerClaims.releaseAll(citizen.getId());
         }
         clearTargetState();
         targetAge = 0;
@@ -641,7 +572,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         rescanCooldown = RESCAN_COOLDOWN_TICKS;
     }
 
-    /** Works a material-deposit face without destroying the deposit's mass. */
     private void mineDepositBlock() {
         Level level = citizen.level();
         if (!(level instanceof ServerLevel serverLevel)) return;
@@ -679,7 +609,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         targetAge = 0;
     }
 
-    /** Breaks the target block, routes its drops to the drop-off container, and spends one stamina. */
     private void mineBlock() {
         Level level = citizen.level();
         if (!(level instanceof ServerLevel serverLevel)) return;
@@ -691,11 +620,8 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         Container depot = resolveDepot();
         BlockState state = level.getBlockState(targetPos);
         List<ItemStack> drops = Block.getDrops(state, serverLevel, targetPos, level.getBlockEntity(targetPos));
-        // Strip drops the civ doesn't recognize yet (same gate as a player breaking the block).
         com.bannerbound.core.api.research.SettlementDropFilter.filterStacks(citizen.getSettlement(),
             net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock()), drops);
-        // Prospecting Quarry policy: small, daily-capped chance that natural stone turns up a
-        // common raw ore as a bonus drop (the ore-poor start's scarcity floor — see the class doc).
         ItemStack prospected = ProspectingQuarry.tryBonus(serverLevel, citizen.getSettlement(),
             state, requiredRole(state));
         if (!prospected.isEmpty()) drops.add(prospected);
@@ -707,28 +633,15 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
             if (drop.isEmpty()) continue;
             if (depot == null) { citizen.spawnAtLocation(drop); continue; }
             ItemStack leftover = DropOffContainers.insert(depot, drop);
-            // Mined drops are valuable (ores, stone) — spill the overflow at the citizen's feet
-            // rather than discarding it (unlike the forester's leaf clutter).
             if (!leftover.isEmpty()) citizen.spawnAtLocation(leftover);
         }
         citizen.grantJobXp(JOB_TYPE_ID, 1.0F, "stone");
         citizen.consumeStamina(1);
-        DiggerClaims.releaseAll(citizen.getId());   // block's gone — free block + standing-spot reservations
-        // Completion (a selection with nothing left to dig) is detected + removed in findTarget on
-        // the next scan — cheaper than re-scanning the whole box after every single block here.
+        DiggerClaims.releaseAll(citizen.getId());
         targetPos = null;
         targetAge = 0;
     }
 
-    /**
-     * Scans this settlement's digger selections that target this citizen and returns the best block to
-     * mine next (highest, then nearest). A selection is removed only when it's truly dug out — no
-     * terrain blocks of ANY kind remain in it. A selection the worker can't finish yet (stone left but
-     * no pickaxe / no Quarry research, or blocks still buried) is kept so it lingers until the work is
-     * actually done. Selections otherwise clear only on shift-left-click delete or settlement disband.
-     */
-    /** A chosen block plus whether it's minable from where the worker already stands ({@code true} →
-     *  mine in place, no navigation) or has to be walked to ({@code false}). */
     private record TargetPick(BlockPos block, boolean immediate) {}
 
     private TargetPick findTarget() {
@@ -738,10 +651,10 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         if (!(level instanceof ServerLevel serverLevel)) return null;
         BlockSelectionRegistry registry = BlockSelectionRegistry.get(serverLevel);
         BlockPos origin = citizen.blockPosition();
-        BlockPos best = null;            // nearest exposed block to WALK to (top-down)
+        BlockPos best = null;
         int bestY = Integer.MIN_VALUE;
         double bestDistSq = Double.MAX_VALUE;
-        BlockPos bestImm = null;         // nearest block minable from right here (preferred)
+        BlockPos bestImm = null;
         double bestImmDistSq = Double.MAX_VALUE;
         boolean removedAny = false;
         for (BlockSelection sel : registry.getForSettlement(settlement.id())) {
@@ -751,9 +664,7 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
             if (isMaterialDepositSelection(sel)) continue;
             if (!sel.targetsCitizen(citizen.getUUID())) continue;
             Scan scan = scanSelection(level, sel, origin);
-            // Only declare a zone "done" (and remove it) when it's FULLY LOADED and holds no terrain.
-            // Without the loaded check, an unloaded chunk reads as air and the order would vanish
-            // mid-dig the moment the worker walks out of range — the "random clearing" bug.
+            // Clear a zone only when FULLY LOADED and empty; an unloaded chunk reads as air and would falsely vanish the order.
             if (scan.allLoaded() && !scan.anyTerrain()) {
                 registry.unregister(sel.rodId());
                 removedAny = true;
@@ -763,7 +674,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
                 bestImmDistSq = scan.immediateDistSq();
                 bestImm = scan.immediate();
             }
-            // Top-down across all selections: the highest block wins, nearest breaks ties.
             if (scan.nearest() != null && isBetterTarget(scan.bestY(), scan.bestDistSq(), bestY, bestDistSq)) {
                 bestY = scan.bestY();
                 bestDistSq = scan.bestDistSq();
@@ -771,22 +681,16 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
             }
         }
         if (removedAny) SelectionBroadcaster.broadcast(serverLevel.getServer());
-        // Always clear what's in reach first — that's the block "in front of" the worker, no walking.
         if (bestImm != null) return new TargetPick(bestImm, true);
         if (best != null) return new TargetPick(best, false);
         return null;
     }
 
-    /** Top-down ordering: a candidate beats the incumbent if it's higher, or at the same height and
-     *  closer. Keeps the work face at the surface where blocks stay exposed and in sight. */
     private static boolean isBetterTarget(int y, double distSq, int bestY, double bestDistSq) {
         if (y != bestY) return y > bestY;
         return distSq < bestDistSq;
     }
 
-    /** True while {@code pos} still lies inside at least one live (non-completed) digger selection that
-     *  targets this citizen. Goes false the instant the player deletes the order (shift+left-click) or
-     *  the settlement disbands — so the worker abandons any cached target/dig from a removed selection. */
     private boolean isStillOrdered(BlockPos pos) {
         Settlement settlement = citizen.getSettlement();
         if (settlement == null) return false;
@@ -806,17 +710,10 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         return false;
     }
 
-    /** Result of one selection scan. {@code immediate} is the nearest block the worker can mine from
-     *  exactly where it stands (reach + line of sight, NO walking) — always preferred so it clears
-     *  what's in front of it before pathing anywhere. {@code nearest} (with {@code bestY}/{@code
-     *  bestDistSq}) is the best block to WALK to otherwise (top-down). The flags tell "dug out" from
-     *  "unloaded" so the order isn't cleared prematurely. */
     private record Scan(BlockPos immediate, double immediateDistSq,
                         BlockPos nearest, int bestY, double bestDistSq,
                         boolean anyTerrain, boolean allLoaded) {}
 
-    /** Squared feet-distance pre-filter: only blocks this close get the (cheap but non-free) reach +
-     *  line-of-sight raycast for the "mine from here" test. A bit beyond {@link #REACH}. */
     private static final double IMMEDIATE_PREFILTER_SQ = 30.0;
 
     private Scan scanSelection(Level level, BlockSelection sel, BlockPos origin) {
@@ -828,22 +725,21 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         double immDistSq = Double.MAX_VALUE;
         boolean anyTerrain = false;
         boolean allLoaded = true;
-        for (int y = sel.maxY(); y >= sel.minY(); y--) {        // top-down
+        for (int y = sel.maxY(); y >= sel.minY(); y--) {
             for (int x = sel.minX(); x <= sel.maxX(); x++) {
                 for (int z = sel.minZ(); z <= sel.maxZ(); z++) {
                     c.set(x, y, z);
-                    // Don't read (or force-load) unloaded chunks — just note they're unresolved.
+                    // Don't read (or force-load) unloaded chunks - note them unresolved (a read here would cascade-load).
                     if (!level.isLoaded(c)) { allLoaded = false; continue; }
-                    if (!isTerrain(level, c)) continue;          // a block a quarryworker ever digs
+                    if (!isTerrain(level, c)) continue;
                     anyTerrain = true;
-                    if (!isMineable(level, c)) continue;          // ...that THIS worker can mine now
-                    if (!isExposed(level, c)) continue;           // ...has an open face (visible/reachable)
-                    if (isRecentlyFailed(c)) continue;            // ...and didn't just fail to reach
+                    if (!isMineable(level, c)) continue;
+                    if (!isExposed(level, c)) continue;
+                    if (isRecentlyFailed(c)) continue;
                     if (level instanceof ServerLevel sl
-                        && DiggerClaims.isClaimedByOther(sl, c, citizen.getId())) continue; // ...or another digger's
+                        && DiggerClaims.isClaimedByOther(sl, c, citizen.getId())) continue;
                     double d = origin.distSqr(c);
                     if (isBetterTarget(y, d, bestY, bestDistSq)) { bestY = y; bestDistSq = d; best = c.immutable(); }
-                    // Can we mine it from right here, no walking? Prefer the nearest such block.
                     if (d < immDistSq && d <= IMMEDIATE_PREFILTER_SQ && canMineFromHere(c)) {
                         immDistSq = d; imm = c.immutable();
                     }
@@ -853,11 +749,6 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         return new Scan(imm, immDistSq, best, bestY, bestDistSq, anyTerrain, allLoaded);
     }
 
-    /** True if {@code pos} has at least one open (non-colliding) face — air, foliage, water, etc. — so
-     *  it's reachable and visible to a worker standing on that side, rather than fully entombed in solid
-     *  rock. Targeting only exposed blocks means the worker never fixates on something it can't see; as
-     *  the exposed face is mined, the block behind it becomes exposed and is picked next (digging
-     *  front-to-back into a wall), which is exactly the "mine the first block you can see" behaviour. */
     private static boolean isExposed(Level level, BlockPos pos) {
         BlockPos.MutableBlockPos n = new BlockPos.MutableBlockPos();
         for (Direction d : Direction.values()) {
@@ -867,25 +758,15 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         return false;
     }
 
-    /** True if {@code pos} holds a terrain block a quarryworker would eventually dig (soil- or
-     *  stone-tier), regardless of whether THIS worker currently has the tool. Used to tell "zone fully
-     *  excavated" apart from "this worker can't finish it yet". */
     private boolean isTerrain(Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         if (state.isAir()) return false;
         if (!state.getFluidState().isEmpty()) return false;
-        if (state.getDestroySpeed(level, pos) < 0) return false;          // unbreakable
-        if (state.getCollisionShape(level, pos).isEmpty()) return false;  // foliage/décor
+        if (state.getDestroySpeed(level, pos) < 0) return false;
+        if (state.getCollisionShape(level, pos).isEmpty()) return false;
         return requiredRole(state) != null;
     }
 
-    /**
-     * Mineable = a breakable terrain block the citizen has the right tool for. Soil-tier blocks need
-     * the shovel (the primary tool); stone-tier blocks (stone, ores, coal) need a pickaxe in the
-     * second slot AND the Quarry research. Anything that's neither tag (wood, wool, décor) is left
-     * alone — a quarryworker clears terrain, not builds. Reachability isn't decided here; the reach +
-     * line-of-sight check in {@link #canMineFromHere} handles that at mine time.
-     */
     private boolean isMineable(Level level, BlockPos pos) {
         if (pos == null) return false;
         if (pos.equals(citizen.getDropOff())) return false;
@@ -893,17 +774,12 @@ public class DiggerWorkGoal extends OrderedWorkGoal {
         return canMineRole(requiredRole(level.getBlockState(pos)));
     }
 
-    /** Tool role needed to mine {@code state}: {@code "shovel"} for soil-tier (dirt/sand/gravel),
-     *  {@code "pickaxe"} for stone-tier (stone/ores/coal), or {@code null} for blocks the digger
-     *  doesn't touch. */
     private static String requiredRole(BlockState state) {
         if (state.is(net.minecraft.tags.BlockTags.MINEABLE_WITH_SHOVEL)) return "shovel";
         if (state.is(net.minecraft.tags.BlockTags.MINEABLE_WITH_PICKAXE)) return "pickaxe";
         return null;
     }
 
-    /** True if this citizen can currently mine a block of {@code role}: shovel is the primary tool
-     *  (already required by {@code isJobReady}); pickaxe also needs the Quarry research + a pickaxe. */
     private boolean canMineRole(String role) {
         if ("shovel".equals(role)) return true;
         if ("pickaxe".equals(role)) {

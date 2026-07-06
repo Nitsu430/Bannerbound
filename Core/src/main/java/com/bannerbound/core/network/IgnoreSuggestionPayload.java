@@ -11,12 +11,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: the chief clicked [Ignore] on a Suggestions-tab row. The server clears that suggestion and
- * tells each suggester their suggestion was ignored.
- *
- * @param kind 0 = science research, 1 = culture research, 2 = policy, 3 = palette,
- *             4 = exile (id = citizen UUID string), 5 = tablet (id unused, "")
- * @param id   the suggested thing's id within its kind
+ * C->S: the chief clicked [Ignore] on a Suggestions-tab row. The server clears that suggestion and
+ * tells each suggester it was ignored. kind selects the suggestion family (see the KIND_* constants:
+ * 0 science, 1 culture, 2 policy, 3 palette, 4 exile, 5 tablet); id is the suggested thing's id
+ * within that kind -- for exile it is the citizen UUID string, for tablet it is unused ("").
  */
 @ApiStatus.Internal
 public record IgnoreSuggestionPayload(int kind, String id) implements CustomPacketPayload {

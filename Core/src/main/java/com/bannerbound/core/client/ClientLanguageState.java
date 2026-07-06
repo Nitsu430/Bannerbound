@@ -29,15 +29,23 @@ import net.minecraft.world.item.Items;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
+/**
+ * Client-side procedural language ("Tongue") state: whether the custom language is enabled, its
+ * per-civ seed, and the resolved display names for jobs / items / entities in the player's current
+ * era. {@code getHoverName} is injected at HEAD and runs regex-heavy word generation on every call
+ * (every tooltip frame, once per item per keystroke in name-search), so generated labels are
+ * memoized per (kind, seed, era, id) in {@code NAME_CACHE} and the cache MUST be cleared whenever
+ * the language sync changes ({@link #replace}) or names go stale. {@code dictionaryEntries()}
+ * builds the Dictionary tab from known items, unlocked jobs, and completed research/culture. Name
+ * lookups return {@code null} (fall back to vanilla) when disabled, for unknown items, or for
+ * player-renamed stacks; fallback resolution never throws, so a tooltip never fails on language.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientLanguageState {
     private static volatile boolean enabled;
     private static volatile long seed;
 
-    // getHoverName() is injected at HEAD and runs the full regex-heavy word generation on every
-    // call — every tooltip frame, and once per item per keystroke for name-search filters. Memoize
-    // the generated label per (seed, era, id); cleared whenever the language sync changes.
     private static final java.util.Map<String, Component> NAME_CACHE =
         new java.util.concurrent.ConcurrentHashMap<>();
 
@@ -186,7 +194,6 @@ public final class ClientLanguageState {
                 return Component.translatable(stack.getDescriptionId()).getString();
             }
         } catch (RuntimeException ignored) {
-            // Fall through to registry id parsing. Tooltips should never fail because of language.
         }
         ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
         return id == null ? "item" : id.getPath();

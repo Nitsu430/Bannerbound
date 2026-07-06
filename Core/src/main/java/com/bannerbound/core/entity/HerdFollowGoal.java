@@ -12,20 +12,21 @@ import net.minecraft.world.entity.ai.goal.Goal;
 import net.minecraft.world.entity.animal.Animal;
 
 /**
- * Makes a herded animal FOLLOW the herder that claims it, exactly like vanilla {@code TemptGoal} makes an
- * animal follow a player holding its food — using the animal's OWN navigation. This is the whole design:
- * we don't overwrite or replace the animal's pathfinding (every attempt to do that failed), we just make the
- * animal WANT to walk to the herder and let its own vanilla nav do the work. A player proved a wheat-tempted
- * cow walks straight through an open rope gate into a pen; the herder is simply a stand-in for that player
- * (vanilla TemptGoal only targets real players, so we re-create it here pointed at the herder).
- *
- * <p>Lives in the animal's goalSelector (added on claim) with {@code MOVE}+{@code LOOK} so it beats the
- * wander goals. Yields the instant the animal isn't claimed, so a released / penned animal behaves normally.</p>
+ * Makes a herded animal FOLLOW the herder that claims it, exactly like vanilla TemptGoal makes an
+ * animal follow a player holding its food -- using the animal's OWN vanilla navigation. This is the
+ * whole design: we do not overwrite or replace the animal's pathfinding (every attempt to do that
+ * failed), we just make the animal WANT to walk to the herder and let its own nav do the work -- a
+ * wheat-tempted cow walks straight through an open rope gate into a pen, and the herder is simply a
+ * stand-in for the real player vanilla TemptGoal only targets. Lives in the animal's goalSelector
+ * (added on claim) with MOVE+LOOK so it beats the wander goals. Resolves the herder each
+ * canUse/canContinueToUse from the HERDED_BY data attachment and yields the instant the animal isn't
+ * claimed, so a released or penned animal behaves normally; stop() also clears a dangling HERDED_BY
+ * when the herder has vanished so the animal can't linger claimed with no herder.
  */
 @ApiStatus.Internal
 public class HerdFollowGoal extends Goal {
-    private static final double STOP_DIST_SQ = 2.5 * 2.5;   // within ~2.5 blocks of the herder → close enough
-    private static final double SPEED = 1.15;               // a gentle, tempt-like follow pace
+    private static final double STOP_DIST_SQ = 2.5 * 2.5;
+    private static final double SPEED = 1.15;
     private static final int REPATH_INTERVAL = 5;
 
     private final Animal animal;
@@ -69,7 +70,6 @@ public class HerdFollowGoal extends Goal {
 
     @Override
     public void stop() {
-        // Freed (herder gone) → make sure we don't linger claimed with no herder.
         if (herder == null) animal.removeData(BannerboundCore.HERDED_BY.get());
         herder = null;
         animal.getNavigation().stop();
@@ -80,11 +80,11 @@ public class HerdFollowGoal extends Goal {
         if (herder == null) return;
         animal.getLookControl().setLookAt(herder, 30.0F, (float) animal.getMaxHeadXRot());
         if (animal.distanceToSqr(herder) <= STOP_DIST_SQ) {
-            animal.getNavigation().stop();   // arrived — wait by the herder (it releases us once we're inside)
+            animal.getNavigation().stop();
             return;
         }
         if (--repath > 0) return;
         repath = REPATH_INTERVAL;
-        animal.getNavigation().moveTo(herder, SPEED);   // the animal's OWN vanilla nav — walks through the gate
+        animal.getNavigation().moveTo(herder, SPEED);
     }
 }

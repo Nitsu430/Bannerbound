@@ -10,13 +10,15 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Client-side mirror of the available culture styles, synced from the server on join / reload.
- * Read by {@link SettleScreen}'s style-picker page.
+ * Read by {@link SettleScreen}'s style-picker page. Each {@link Entry} is a selectable style: its
+ * id (sent back in the settle request), its display name, and the ResourceLocation string of its
+ * preview image. Images sync as a parallel list; replace() tolerates a short or absent one so a
+ * name-only payload still populates the picker, falling back to the id-based convention path
+ * bannerbound:textures/gui/culture/<id>.png.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientCultureStyleState {
-    /** One selectable style: its id (sent back in the settle request), its display name, and the
-     *  ResourceLocation string of its preview image. */
     public record Entry(String id, String nameKey, String image) {}
 
     private static volatile List<Entry> STYLES = List.of();
@@ -27,8 +29,6 @@ public final class ClientCultureStyleState {
     public static void replace(List<String> ids, List<String> nameKeys, List<String> images) {
         List<Entry> list = new ArrayList<>();
         for (int i = 0; i < ids.size() && i < nameKeys.size(); i++) {
-            // Images sync as a parallel list; tolerate a short/absent one so a name-only payload
-            // still populates the picker (image falls back to the id-based convention).
             String image = i < images.size() && !images.get(i).isBlank()
                 ? images.get(i)
                 : "bannerbound:textures/gui/culture/" + ids.get(i) + ".png";

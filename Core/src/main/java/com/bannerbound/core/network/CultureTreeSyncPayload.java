@@ -14,7 +14,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /** Twin of {@link ResearchTreeSyncPayload} for the Culture tree. The {@link ResearchDefinition}
- *  record itself is reused — the two trees only differ in which node IDs they contain. */
+ *  record itself is reused - the two trees only differ in which node IDs they contain. */
 @ApiStatus.Internal
 public record CultureTreeSyncPayload(List<ResearchDefinition> definitions) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<CultureTreeSyncPayload> TYPE =

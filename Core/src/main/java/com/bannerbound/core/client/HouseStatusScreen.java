@@ -18,23 +18,31 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Home status panel — opened by shift-right-clicking inside a home with the Housing Orders rod.
- * Shows the home's validation status (colour-coded), an occupancy bar (residents / beds), the
- * appeal score + beauty tier (tier-coloured), the <b>crowdedness</b> (interior space per bed), and
- * the residents — a scrolling list with a per-resident unassign (✘) control plus an Assign button
- * onto the resident picker. Snapshot of server state at open time; after an inline unassign the
- * server re-sends {@link OpenHouseStatusPayload} and {@link #refresh} updates this panel in place.
+ * Home status panel -- opened by shift-right-clicking inside a home with the Housing Orders rod.
+ * Shows the home's validation status (colour-coded), home happiness, an occupancy bar
+ * (residents / beds), the appeal score + beauty tier, the crowdedness (interior space per bed), a
+ * demands checklist, and a scrolling residents list with a per-resident unassign control plus an
+ * Assign button that opens the resident picker. The colour constants mirror the SelectionRenderer /
+ * appeal colour language.
+ *
+ * <p>Holds a snapshot of server state taken at open time; after an inline unassign the server
+ * re-sends {@link OpenHouseStatusPayload} and {@link #refresh} swaps in the fresh snapshot and
+ * re-lays out in place, preserving scroll where the list is still long enough to need it.
+ *
+ * <p>The panel body is drawn imperatively in an addRenderableOnly callback that runs every frame.
+ * The residents list start Y is dynamic (it sits below the variable-length demands list), so
+ * {@code maxVisibleRows} and the per-row unassign hit-targets ({@code unassignHits}) are recomputed
+ * during that draw and then consumed by {@link #mouseClicked} / {@link #mouseScrolled}. Likewise
+ * {@code hoverTooltip} is set during the draw and rendered on top afterwards in {@link #render}.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class HouseStatusScreen extends PolishedScreen {
     private static final int PANEL_WIDTH = 244;
     private static final int PANEL_HEIGHT = 340;
-    /** Resident row pitch — matches the old static list spacing. */
     private static final int ROW_HEIGHT = 12;
     private static final int SCROLL_TRACK_WIDTH = 4;
 
-    // Shared palette — matches the SelectionRenderer / appeal colour language.
     private static final int GREEN = 0xFF7BCB6F;
     private static final int YELLOW = 0xFFE9D24A;
     private static final int RED = 0xFFE57761;
@@ -44,7 +52,6 @@ public class HouseStatusScreen extends PolishedScreen {
     private static final int WHITE = 0xFFFFFFFF;
 
     private final UUID homeId;
-    // Snapshot fields — non-final so refresh() can swap in a fresh server snapshot in place.
     private Component statusText;
     private Home.Status status;
     private int bedCount;
@@ -58,18 +65,11 @@ public class HouseStatusScreen extends PolishedScreen {
     private List<Component> residentNames;
     private List<UUID> residentIds;
 
-    /** Top-resident index shown in the scroll window. Clamped to {@code [0, residentCount - rows]}. */
     private int scrollOffset = 0;
-    /** Recomputed every frame during the panel draw (the residents start Y is dynamic — it sits
-     *  below the variable-length demands list), then read by the scroll/click handlers. */
     private int maxVisibleRows = 1;
 
-    /** Unassign (✘) hit-targets for the visible rows this frame: {residentIndex, x0, y0, x1, y1}.
-     *  Rebuilt during the panel draw, consulted in {@link #mouseClicked}. */
     private final java.util.List<int[]> unassignHits = new java.util.ArrayList<>(8);
 
-    /** Tooltip lines for the row/control under the cursor this frame, or null. Set during the panel
-     *  draw, rendered on top in {@link #render}. */
     private List<Component> hoverTooltip;
 
     public HouseStatusScreen(OpenHouseStatusPayload payload) {
@@ -78,8 +78,6 @@ public class HouseStatusScreen extends PolishedScreen {
         apply(payload);
     }
 
-    /** Swap in a fresh server snapshot for an open panel (used after an inline unassign) and re-lay
-     *  out, preserving the scroll position where the list is still long enough to need it. */
     public void refresh(OpenHouseStatusPayload payload) {
         apply(payload);
         clampScroll();
@@ -120,7 +118,6 @@ public class HouseStatusScreen extends PolishedScreen {
         final int innerRight = panelX + PANEL_WIDTH - 14;
 
         this.addRenderableOnly((graphics, mouseX, mouseY, partialTick) -> {
-            // Panel chrome: body + header strip + identity border.
             drawIdentityPanel(graphics, panelX, panelY, PANEL_WIDTH, PANEL_HEIGHT, identityAccents);
             graphics.fill(panelX + 1, panelY + 1, panelX + PANEL_WIDTH - 1, panelY + 24, 0xFF1B1B1B);
             graphics.drawCenteredString(this.font,
@@ -129,11 +126,10 @@ public class HouseStatusScreen extends PolishedScreen {
 
             int y = panelY + 32;
 
-            // ── Status: label + a colour-coded, wrapped message. ──────────────────────────────
             int statusColor = switch (status) {
                 case VALID -> GREEN;
                 case NO_BEDS, UNMARKED -> YELLOW;
-                default -> RED; // BROKEN_*
+                default -> RED;
             };
             graphics.drawString(this.font,
                 Component.translatable("bannerbound.house.screen.status_label"), rowX, y, LABEL, false);
@@ -146,7 +142,6 @@ public class HouseStatusScreen extends PolishedScreen {
             }
             y = Math.max(y + this.font.lineHeight + 2, ly + 4);
 
-            // ── Home happiness: the headline value (appeal + demands) + a bar. ────────────────
             graphics.drawString(this.font,
                 Component.translatable("bannerbound.house.screen.happiness_label"), rowX, y, LABEL, false);
             int hhColor = homeHappiness >= 70 ? GREEN : homeHappiness >= 45 ? YELLOW : RED;
@@ -155,7 +150,6 @@ public class HouseStatusScreen extends PolishedScreen {
             drawValueBar(graphics, rowX, y, innerRight - rowX, 6, homeHappiness / 100f, hhColor);
             y += 12;
 
-            // ── Occupancy: "N / M" + a segmented fill bar. ────────────────────────────────────
             graphics.drawString(this.font,
                 Component.translatable("bannerbound.house.screen.beds_label"), rowX, y, LABEL, false);
             graphics.drawString(this.font, Component.literal(residentCount + " / " + bedCount),
@@ -164,7 +158,6 @@ public class HouseStatusScreen extends PolishedScreen {
             drawOccupancyBar(graphics, rowX, y, innerRight - rowX, 6);
             y += 12;
 
-            // ── Appeal: score (signed colour) + beauty-tier pill. ─────────────────────────────
             graphics.drawString(this.font,
                 Component.translatable("bannerbound.house.screen.appeal_label"), rowX, y, LABEL, false);
             int appealColor = appealScore >= 5.0 ? GREEN : appealScore >= -1.0 ? YELLOW : RED;
@@ -174,7 +167,6 @@ public class HouseStatusScreen extends PolishedScreen {
             graphics.drawString(this.font, beautyText, valueX + 34, y, beautyColor, false);
             y += 15;
 
-            // ── Living space (crowdedness): tier word + "(N blocks each)". Hover explains it. ──
             graphics.drawString(this.font,
                 Component.translatable("bannerbound.house.screen.space_label"), rowX, y, LABEL, false);
             if (bedCount > 0 && interiorVolume > 0) {
@@ -204,7 +196,6 @@ public class HouseStatusScreen extends PolishedScreen {
             }
             y += 17;
 
-            // ── Demands checklist: one row per active (researched) demand, ✓ green / ✗ red. ───
             if (!demands.isEmpty()) {
                 graphics.fill(rowX, y - 4, innerRight, y - 3, 0xFF2A2A2A);
                 graphics.drawString(this.font,
@@ -217,7 +208,6 @@ public class HouseStatusScreen extends PolishedScreen {
                         rowX + 4, y, c, false);
                     graphics.drawString(this.font,
                         Component.translatable("bannerbound.house.demand." + d.suffix()), rowX + 18, y, c, false);
-                    // Hover → a tooltip explaining how this need is met (rendered on top in render()).
                     if (mouseX >= rowX && mouseX <= innerRight && mouseY >= y - 1 && mouseY <= y + 9) {
                         java.util.List<Component> tip = new java.util.ArrayList<>(3);
                         tip.add(Component.translatable("bannerbound.house.demand." + d.suffix())
@@ -234,7 +224,6 @@ public class HouseStatusScreen extends PolishedScreen {
                 y += 4;
             }
 
-            // ── Residents list (scrolling window with a per-row unassign control). ────────────
             graphics.fill(rowX, y - 4, innerRight, y - 3, 0xFF2A2A2A);
             graphics.drawString(this.font,
                 Component.translatable("bannerbound.house.screen.residents_label").withStyle(ChatFormatting.GRAY),
@@ -249,14 +238,13 @@ public class HouseStatusScreen extends PolishedScreen {
                 this.maxVisibleRows = 1;
             } else {
                 int listTop = y;
-                int listBottom = panelY + PANEL_HEIGHT - 56; // stay clear of the Assign button
+                int listBottom = panelY + PANEL_HEIGHT - 56;
                 int rows = Math.max(1, (listBottom - listTop) / ROW_HEIGHT);
                 this.maxVisibleRows = rows;
                 clampScroll();
 
                 boolean overflow = residentNames.size() > rows;
                 int trackX = panelX + PANEL_WIDTH - 8;
-                // The unassign glyph column; nudged left of the scroll track when one is shown.
                 int unX = innerRight - (overflow ? 4 : 0) - 7;
 
                 int first = scrollOffset;
@@ -267,7 +255,6 @@ public class HouseStatusScreen extends PolishedScreen {
                         rowX + 4, rowY, 0xFF808080, false);
                     graphics.drawString(this.font, residentNames.get(i), rowX + 14, rowY, WHITE, false);
 
-                    // Unassign control: a red ✘ at the row's right edge, brightening on hover.
                     boolean hot = mouseX >= unX - 3 && mouseX <= unX + 9
                         && mouseY >= rowY - 1 && mouseY <= rowY + 9;
                     graphics.drawString(this.font, Component.literal("✘"), unX, rowY,
@@ -281,7 +268,6 @@ public class HouseStatusScreen extends PolishedScreen {
                     }
                 }
 
-                // Scroll-track + thumb on the right edge, only when the list overflows the window.
                 if (overflow) {
                     int trackH = rows * ROW_HEIGHT - 2;
                     graphics.fill(trackX, listTop, trackX + SCROLL_TRACK_WIDTH, listTop + trackH, 0xFF2A2A2A);
@@ -293,7 +279,6 @@ public class HouseStatusScreen extends PolishedScreen {
             }
         });
 
-        // Assign — opens the resident picker (server replies with HomeCitizenListPayload).
         this.addRenderableWidget(PolishButton.polished(
             Component.translatable("bannerbound.house.screen.assign"),
             btn -> PacketDistributor.sendToServer(new RequestHomeCitizenListPayload(homeId)))
@@ -301,7 +286,6 @@ public class HouseStatusScreen extends PolishedScreen {
             .accent(primaryAccent())
             .build());
 
-        // Cancel / close.
         this.addRenderableWidget(PolishButton.polished(
             Component.translatable("gui.cancel"),
             btn -> this.onClose())
@@ -329,7 +313,6 @@ public class HouseStatusScreen extends PolishedScreen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        // 1 row per wheel notch. Wheel toward the user (negative scrollY) scrolls down the list.
         if (maxScroll() > 0) {
             int prev = scrollOffset;
             scrollOffset -= (int) Math.signum(scrollY);
@@ -341,14 +324,14 @@ public class HouseStatusScreen extends PolishedScreen {
 
     @Override
     public void render(net.minecraft.client.gui.GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        this.hoverTooltip = null;                 // recomputed by the panel draw inside super.render
+        // Null before super.render (the panel draw inside it recomputes hoverTooltip), read after.
+        this.hoverTooltip = null;
         super.render(graphics, mouseX, mouseY, partialTick);
         if (this.hoverTooltip != null) {
             graphics.renderComponentTooltip(this.font, this.hoverTooltip, mouseX, mouseY);
         }
     }
 
-    /** A simple horizontal value bar: dark track with a {@code frac}-wide fill in {@code color}. */
     private void drawValueBar(net.minecraft.client.gui.GuiGraphics graphics, int x, int y, int w, int h,
                               float frac, int color) {
         graphics.fill(x, y, x + w, y + h, 0xFF000000);
@@ -357,8 +340,6 @@ public class HouseStatusScreen extends PolishedScreen {
         if (fw > 0) graphics.fill(x + 1, y + 1, x + 1 + fw, y + h - 1, color);
     }
 
-    /** Horizontal bar split into {@code bedCount} cells, the first {@code residentCount} filled.
-     *  Falls back to a plain proportional fill when there are too many beds to show distinct cells. */
     private void drawOccupancyBar(net.minecraft.client.gui.GuiGraphics graphics, int x, int y, int w, int h) {
         graphics.fill(x, y, x + w, y + h, 0xFF000000);
         graphics.fill(x + 1, y + 1, x + w - 1, y + h - 1, 0xFF2C2C2C);

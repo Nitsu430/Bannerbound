@@ -12,7 +12,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: teleport the named citizen to their settlement's town hall. Server-side check
+ * Client -> server: teleport the named citizen to their settlement's town hall. Server-side check
  * ensures the requester is a member of the citizen's settlement so a stranger can't yank someone
  * else's worker.
  */

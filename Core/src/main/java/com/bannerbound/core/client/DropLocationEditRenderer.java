@@ -42,7 +42,6 @@ public final class DropLocationEditRenderer {
         LocalPlayer player = mc.player;
         if (player == null || mc.level == null) return;
 
-        // Action-bar prompt: "EDITING DROP LOCATION / SEEDS STORAGE FOR: <name> (<job>)" in settlement color.
         int rgb = DropLocationEditState.settlementRgb();
         Component prompt = Component.translatable(
                 DropLocationEditState.isSeed()

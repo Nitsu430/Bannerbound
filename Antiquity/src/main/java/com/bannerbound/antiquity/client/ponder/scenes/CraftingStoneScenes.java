@@ -15,8 +15,11 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Ponder storyboards for the Crafting Stone — the off-station knapping bench where flint and stone
- * become the first tools. Scenes registered under {@code bannerboundantiquity:crafting_stone}.
+ * Ponder storyboards for the Crafting Stone - the knapping bench carved out of a plain Stone block
+ * with a flint knife, where flint and stone become the first tools. Scenes registered under
+ * {@code bannerboundantiquity:crafting_stone}. Built at runtime on the shared blank platform (see
+ * PonderUtil.basePlate); the material pile and its insert animation are faked by rewriting the
+ * block entity's Contents NBT instead of simulating real player interactions.
  */
 @OnlyIn(Dist.CLIENT)
 public final class CraftingStoneScenes {
@@ -54,7 +57,6 @@ public final class CraftingStoneScenes {
             .setValue(BlockStateProperties.HORIZONTAL_FACING, FACING), false);
         scene.idle(10);
 
-        // Build the pile.
         scene.overlay().showControls(util.vector().topOf(pos), Pointing.DOWN, 50)
             .rightClick().withItem(PonderUtil.stack("minecraft:flint", 2));
         scene.idle(5);
@@ -73,7 +75,6 @@ public final class CraftingStoneScenes {
             .placeNearTarget();
         scene.idle(80);
 
-        // Craft.
         scene.overlay().showControls(util.vector().centerOf(pos), Pointing.DOWN, 50).rightClick();
         scene.idle(5);
         modify(scene, util, tag -> tag.put("Contents", new ListTag()));

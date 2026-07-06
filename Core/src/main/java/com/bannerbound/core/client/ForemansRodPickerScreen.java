@@ -16,14 +16,14 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Picker opened by shift-right-clicking a Foreman's Rod. Lists every supported workstation type
- * plus a "Clear selection" row at the bottom. Clicking a row ships
- * {@link PickForemansRodWorkstationPayload} with the chosen type id (empty string for Clear);
- * server-side handler writes / wipes the rod's data components.
- * <p>
- * Workstation list is hard-coded for v1 (only "digger"). When future workstations land,
- * add their type id to {@link #WORKSTATION_TYPES} and to the server-side allowlist in
- * {@code ServerPayloadHandler.handlePickForemansRodWorkstation}.
+ * Picker opened by shift-right-clicking a Foreman's Rod. Lists every supported workstation type the
+ * settlement has researched (WorkstationUnlocks.flagForUnit -> bannerbound.unlock.<type>), each
+ * labelled from bannerbound.workstation_type.<id>, plus a red "Clear selection" row above Cancel.
+ * Clicking a row ships {@link PickForemansRodWorkstationPayload} with the chosen type id (empty
+ * string for Clear); the server-side handler writes or wipes the rod's data components.
+ *
+ * <p>To add a workstation: add its type id to {@link #WORKSTATION_TYPES} AND to the server-side
+ * allowlist in ServerPayloadHandler.handlePickForemansRodWorkstation.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -32,8 +32,6 @@ public class ForemansRodPickerScreen extends PolishedScreen {
     private static final int PANEL_HEIGHT = 200;
     private static final int ROW_HEIGHT = 22;
 
-    /** Workstation type ids the player can pick. Each maps to a lang key
-     *  {@code bannerbound.workstation_type.<id>} for the row label. */
     public static final List<String> WORKSTATION_TYPES = List.of("digger", "farmer", "herder", "miner", "guard");
 
     public ForemansRodPickerScreen() {
@@ -51,7 +49,6 @@ public class ForemansRodPickerScreen extends PolishedScreen {
                 panelX + PANEL_WIDTH / 2, panelY + 10, GuiPalette.TITLE);
         });
 
-        // Only list units the settlement has researched (bannerbound.unlock.<type>).
         int listTop = panelY + 30;
         int row = 0;
         for (String typeId : WORKSTATION_TYPES) {
@@ -72,7 +69,6 @@ public class ForemansRodPickerScreen extends PolishedScreen {
                 .build());
         }
 
-        // Clear row sits at the bottom-above-cancel — distinguishable by red label color.
         int clearY = panelY + PANEL_HEIGHT - 52;
         this.addRenderableWidget(PolishButton.polished(
                 Component.translatable("bannerbound.foremans_rod.picker.clear")

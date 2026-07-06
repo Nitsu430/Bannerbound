@@ -11,6 +11,10 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/**
+ * S->C: the current diplomacy objective marker - a titled/subtitled world beacon at {@code pos}
+ * tinted {@code colorRgb}, or {@code active=false} to clear it.
+ */
 @ApiStatus.Internal
 public record DiplomacyObjectivePayload(boolean active, String title, String subtitle,
                                         BlockPos pos, int colorRgb)

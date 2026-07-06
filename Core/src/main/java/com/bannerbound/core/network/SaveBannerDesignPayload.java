@@ -13,8 +13,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: save the Heraldry banner design — parallel lists of pattern registry ids and
- * {@code DyeColor} ids, bottom-up layer order. The server re-validates everything (membership,
+ * C->S request to save the Heraldry banner design: parallel lists of pattern registry ids and
+ * {@code DyeColor} ids in bottom-up layer order. The server re-validates everything (membership,
  * Heraldry flag, layer cap, point budget, pattern ids) before storing; the client lists are a
  * proposal, never authority.
  */

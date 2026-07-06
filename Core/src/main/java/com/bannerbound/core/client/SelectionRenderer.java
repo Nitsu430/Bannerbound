@@ -28,18 +28,38 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
 /**
- * Draws Create-style colored wireframes while the local player holds a Foreman's Rod:
- * <ul>
- *   <li><b>Committed selections</b> — one bounding-box wireframe per active
- *       {@link BlockSelection} in {@link ClientSelectionState}, tinted to the owning settlement
- *       color, with a flicker alpha.</li>
- *   <li><b>Tentative preview</b> — if the held rod has Point A set but not yet committed, a
- *       white wireframe is drawn from A to whatever block the player's crosshair is currently
- *       on (within reach). Updates every frame so the player can frame the box before
- *       right-clicking again to lock in Point B.</li>
- * </ul>
- * Uses vanilla {@link RenderType#lines()} + {@link LevelRenderer#renderLineBox} so lines are
- * depth-tested (occluded by intervening solid blocks) — same look as F3+B entity hitboxes.
+ * Client renderer that draws Create-style colored wireframes and overlays while the local player
+ * holds one of the survey rods. Subscribed to RenderLevelStageEvent and only acts at
+ * AFTER_TRANSLUCENT_BLOCKS. Rendering uses vanilla RenderType.lines() + LevelRenderer.renderLineBox
+ * so lines are depth-tested (occluded by solids, same look as F3+B hitboxes).
+ *
+ * What it draws, gated by which rod is held:
+ *  - WORKSTATION (Foreman's Rod): one settlement-colored AABB wireframe per active BlockSelection.
+ *  - HOME (Housing Orders rod) / WORKSHOP (Workshop Rod): while the matching rod is held, EVERY
+ *    home/workshop renders - the rod-bound one at full alpha, the rest dimmed - so the player can
+ *    survey them all at a glance. Homes and workshops have no anchor block, so their id rides in the
+ *    BlockSelection homeId slot and groups are keyed by it. Each group draws as a merged silhouette
+ *    plus a face-culled translucent tint in the settlement color.
+ *  - HERDER pens: the enclosure is flood-filled client-side (PenEnclosure.scan) into a pen
+ *    silhouette; the pen under the crosshair previews in green so the player can frame it before marking.
+ *  - Stockpile debug: green interior silhouette, blue boxes on connected containers, red box on the
+ *    exact scan-failure spot.
+ *  - Tentative previews: a white A->B box for each rod that has Point A set but not yet Point B,
+ *    updated every frame against the crosshair block.
+ *  - Workshop overview labels: a floating billboard (icon + name + status + appeal) above each
+ *    workshop, distance-culled at LABEL_RANGE.
+ *
+ * Silhouette pass: draws only edges on the boundary of the merged volume. Each unique edge (deduped
+ * via EdgeKey) is classified by the 2x2 of cubes around it; edges interior to a flat face (2 cubes
+ * side-by-side) are skipped, which kills the per-block grid look. Tint pass: emits only faces whose
+ * neighbour cube is unmarked, so shared interior faces never stack and multiply the overlay into
+ * dark bands, and each quad is outset a hair to avoid z-fighting the block surface it hugs.
+ *
+ * Render-order invariant: getBuffer(debugQuads()) ends the in-flight lines build, so ALL lines()
+ * work must finish and endBatch(lines()) must run BEFORE the tint pass, or the next lines call
+ * crashes with "Not building!". Anti-cheat: a workshop whose craft the settlement has not researched
+ * renders as "Unknown Workshop" with a "?" icon so the overview label can't reveal or operate the
+ * craft early; a player-set custom name still shows because it reveals nothing.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
@@ -47,10 +67,7 @@ public final class SelectionRenderer {
     private static final float ALPHA_BASE = 0.85f;
     private static final float ALPHA_SWING = 0.15f;
     private static final float FLICKER_HZ = 1.4f;
-    /** Preview flickers a bit faster so it reads as "in progress" vs the stable committed boxes. */
     private static final float PREVIEW_FLICKER_HZ = 2.4f;
-    /** Per-cube translucent settlement-color overlay alpha. Low enough that block textures still
-     *  read clearly through it — same intent as {@link BirdseyeOverlayRenderer}'s slab alphas. */
     private static final float TINT_ALPHA = 0.18f;
 
     private SelectionRenderer() {
@@ -66,9 +83,6 @@ public final class SelectionRenderer {
         ItemStack foremanRod = findHeldRod(player, BannerboundCore.FOREMANS_ROD.get());
         ItemStack homeRod = findHeldRod(player, BannerboundCore.HOUSING_ORDERS.get());
 
-        // HOME-kind visibility gates on holding a Housing Orders rod; while held, EVERY home renders
-        // (the bound one full strength, the rest dimmed), grouped by home id — the home twin of the
-        // Workshop Orders survey. WORKSTATION selections still gate on holding the Foreman's Rod.
         java.util.UUID boundHomeId = homeRod != null
             ? com.bannerbound.core.item.HousingOrdersItem.boundHomeId(homeRod) : null;
         BlockPos foremanPreviewA = foremanRod != null
@@ -78,8 +92,6 @@ public final class SelectionRenderer {
         BlockPos foremanPreviewB = previewBHover(mc, foremanPreviewA);
         BlockPos homePreviewB = previewBHover(mc, homePreviewA);
 
-        // WORKSHOP-kind visibility gates on a Workshop Orders rod bound to the selection's
-        // workshop id (the id rides in the homeId slot — workshops have no anchor block).
         ItemStack workshopRod = findHeldRod(player, BannerboundCore.WORKSHOP_ROD.get());
         java.util.UUID boundWorkshopId = workshopRod != null
             ? com.bannerbound.core.item.WorkshopRodItem.boundWorkshopId(workshopRod) : null;
@@ -116,12 +128,10 @@ public final class SelectionRenderer {
         MultiBufferSource.BufferSource buffer = mc.renderBuffers().bufferSource();
         var consumer = buffer.getBuffer(RenderType.lines());
 
-        // ── WORKSTATION selections: per-box AABB wireframe (unchanged). ──────────────────────
         if (foremanRod != null) {
             for (BlockSelection sel : ClientSelectionState.getAll()) {
                 if (sel.kind() != BlockSelection.Kind.WORKSTATION) continue;
                 if (sel.completed()) continue;
-                // Herder pens draw as a flood-filled pen silhouette below, not a 1×1 box.
                 if (HerderWorkGoal.SELECTION_TYPE.equals(sel.workstationType())) continue;
                 if (foremanType != null && !foremanType.isEmpty()
                     && !foremanType.equals(sel.workstationType())) continue;
@@ -136,17 +146,6 @@ public final class SelectionRenderer {
             }
         }
 
-        // ── HOME selections: while the Housing Orders rod is held, EVERY home renders (the bound one
-        //    at full strength, the rest dimmed) so the player can survey all their homes at a glance —
-        //    grouped by home id (it rides in the homeId slot; homes have no anchor block). Same
-        //    settlement-coloured silhouette + face-culled tint as the workshop survey.
-        //
-        //    The silhouette (lines pass): for each solid cube, draw the 4 edges of any face whose
-        //    neighbour cube is NOT marked, so edges interior to a flat surface are skipped — just
-        //    the outer outline, no per-block grid. The tint (filled pass) MUST run after all line
-        //    work is done: getBuffer(debugQuads) ends the in-flight lines build, so a later lines
-        //    call would crash with "Not building!". Collect here, draw silhouettes now, tint at the
-        //    bottom once every line caller has finished. ──────────────────────────────────────────
         java.util.List<java.util.Map.Entry<java.util.Set<BlockPos>, float[]>> homeRenders =
             new java.util.ArrayList<>();
         if (homeRod != null) {
@@ -172,7 +171,7 @@ public final class SelectionRenderer {
                         for (int z = sel.minZ(); z <= sel.maxZ(); z++) {
                             BlockPos p = new BlockPos(x, y, z);
                             if (marked.contains(p)) continue;
-                            if (mc.level.getBlockState(p).isAir()) continue; // don't outline empty space
+                            if (mc.level.getBlockState(p).isAir()) continue;
                             marked.add(p);
                         }
                     }
@@ -186,10 +185,6 @@ public final class SelectionRenderer {
             }
         }
 
-        // ── WORKSHOP selections: while the rod is held, EVERY workshop renders (the bound one at
-        //    full strength, the rest dimmed) so the player can survey all their workplaces at a
-        //    glance. Grouped by workshop id (it rides in the homeId slot); the groups also feed
-        //    the floating overview labels drawn at the end of this method. ──────────────────────
         java.util.Map<java.util.UUID, java.util.Set<BlockPos>> workshopGroups = new java.util.HashMap<>();
         if (workshopRod != null) {
             java.util.Map<java.util.UUID, float[]> workshopColors = new java.util.HashMap<>();
@@ -228,9 +223,6 @@ public final class SelectionRenderer {
             }
         }
 
-        // ── HERDER pens: flood-fill the enclosure CLIENT-SIDE and draw it as a pen silhouette (not a
-        //    1×1 marker), only while holding a herder-mode rod. Committed pens in settlement colour; the
-        //    pen under the crosshair previews in green (valid) so you can frame it before marking. ─────
         if (herderRod) {
             for (BlockSelection sel : ClientSelectionState.getAll()) {
                 if (sel.kind() != BlockSelection.Kind.WORKSTATION || sel.completed()) continue;
@@ -252,9 +244,6 @@ public final class SelectionRenderer {
             }
         }
 
-        // ── Stockpile debug wireframe: green interior-floor silhouette (+ tint via homeRenders),
-        //    blue boxes on connected containers, a red box on the exact scan-failure spot. Reuses the
-        //    same silhouette/box primitives as the home render above. ──────────────────────────────
         if (stockpileDebug) {
             java.util.Set<BlockPos> spInterior = StockpileDebugState.interior();
             if (!spInterior.isEmpty()) {
@@ -275,9 +264,6 @@ public final class SelectionRenderer {
             }
         }
 
-        // Tentative previews — drawn in WHITE for both rods so they read as "in progress" vs the
-        // settled coloured boxes. Foreman's preview only when its rod is held; Home preview only
-        // when the marker rod is held.
         if (foremanRod != null && foremanPreviewA != null && foremanPreviewB != null) {
             drawPreviewBox(pose, consumer, foremanPreviewA, foremanPreviewB, time);
         }
@@ -288,17 +274,10 @@ public final class SelectionRenderer {
             drawPreviewBox(pose, consumer, workshopPreviewA, workshopPreviewB, time);
         }
 
-        // End lines BEFORE the tint pass — see the comment above the home collection block. Any
-        // line-consumer caller after this point would crash on the now-ended lines buffer.
+        // Must finish all lines() work before getBuffer(debugQuads()) below, or the next lines call crashes.
         buffer.endBatch(RenderType.lines());
 
         if (!homeRenders.isEmpty()) {
-            // Settlement-colour translucent tint, FACE-CULLED: only faces of a marked cube whose
-            // neighbour is NOT marked are emitted, so the faces shared between adjacent cubes — the
-            // ones that stacked and multiplied the opacity into dark bands — are gone. Each viewing
-            // ray now crosses at most the shell's near + far faces, so the tint reads evenly. Quads
-            // go through debugQuads (POSITION_COLOR / translucent / depth-tested) with a hair of
-            // outset so they don't z-fight the block surfaces they hug.
             var quads = buffer.getBuffer(RenderType.debugQuads());
             for (var e : homeRenders) {
                 float[] c = e.getValue();
@@ -307,9 +286,6 @@ public final class SelectionRenderer {
             buffer.endBatch(RenderType.debugQuads());
         }
 
-        // ── Workshop overview labels: floating icon + name + status above each workshop while the
-        //    rod is held, so the player can survey what's operating / needs workers / is broken
-        //    without opening menus. Drawn last (text/item use their own render types). ───────────
         if (workshopRod != null && !workshopGroups.isEmpty()) {
             for (java.util.Map.Entry<java.util.UUID, java.util.Set<BlockPos>> e
                     : workshopGroups.entrySet()) {
@@ -323,9 +299,6 @@ public final class SelectionRenderer {
         pose.popPose();
     }
 
-    /** One floating billboard label: type-icon item above, name line, status line ("Operating" /
-     *  "Needs workers n/cap" / "Invalid"), centered over the workshop's marked bbox. Distance-
-     *  culled at {@link #LABEL_RANGE} blocks. */
     private static void drawWorkshopLabel(PoseStack pose, Minecraft mc, Camera camera,
                                           java.util.UUID workshopId, java.util.Set<BlockPos> marked) {
         com.bannerbound.core.client.ClientWorkshopSummaries.Summary summary =
@@ -348,10 +321,6 @@ public final class SelectionRenderer {
                 .fromOrdinalOrDefault(summary.statusOrdinal());
         boolean valid = status == com.bannerbound.core.api.settlement.Workshop.Status.VALID;
         boolean operating = valid && summary.workerCount() > 0;
-        // Anti-cheat: a station whose craft the settlement hasn't researched (e.g. a pottery slab
-        // left on the ruins of an old town) shows as "Unknown Workshop" with a "?" icon instead of
-        // its real type/icon, so the overview label can't reveal/operate the craft early. A
-        // player-set custom name still shows — it reveals nothing about the unresearched craft.
         boolean known = ClientResearchState.isWorkshopTypeKnown(summary.typeId());
         net.minecraft.network.chat.Component name = !summary.customName().isEmpty()
             ? net.minecraft.network.chat.Component.literal(summary.customName())
@@ -368,8 +337,6 @@ public final class SelectionRenderer {
             .withStyle(operating ? net.minecraft.ChatFormatting.GREEN
                 : valid ? net.minecraft.ChatFormatting.YELLOW
                 : net.minecraft.ChatFormatting.RED);
-        // Workplace appeal tier (3rd line) — only once scored, and only on valid workshops so
-        // the invalid label stays focused on what's broken.
         net.minecraft.network.chat.Component appealLine = null;
         if (valid && summary.appealOrdinal() >= 0) {
             com.bannerbound.core.api.settlement.ChunkBeauty beauty =
@@ -384,10 +351,6 @@ public final class SelectionRenderer {
         net.minecraft.client.gui.Font font = mc.font;
         int bg = (int) (0.25F * 255.0F) << 24;
 
-        // Text: nameplate-style billboard (flip Y, 1/40 block per pixel). Two passes like vanilla
-        // name tags — a dim SEE_THROUGH pass (with the background slab, visible through blocks)
-        // and a bright NORMAL pass on top. One see-through pass alone renders patchy where it
-        // depth-fights the silhouette wireframes.
         pose.pushPose();
         pose.translate(cx, cy, cz);
         pose.mulPose(camera.rotation());
@@ -415,8 +378,6 @@ public final class SelectionRenderer {
         }
         pose.popPose();
 
-        // Type icon: a small billboarded item floating just above the text — or a "?" glyph when
-        // the craft is unresearched (the icon would otherwise reveal the hidden workshop type).
         net.minecraft.world.item.Item icon = known
             ? com.bannerbound.core.api.workshop.WorkBlockRegistry.iconForType(summary.typeId())
             : null;
@@ -446,53 +407,28 @@ public final class SelectionRenderer {
         }
     }
 
-    /** Max distance (blocks) at which workshop overview labels draw. */
     private static final double LABEL_RANGE = 64.0;
 
-    /** Silhouette renderer — draws only the edges that lie on the BOUNDARY of the union shape.
-     *
-     *  <p>For each cube in {@code marked}, enumerates its 12 axis-aligned edges and dedupes
-     *  via a {@code Set<EdgeKey>}. Each unique edge is classified by the configuration of the
-     *  4 cubes that share it (a 2×2 perpendicular to the edge):
-     *  <ul>
-     *    <li>0 or 4 marked → edge is fully outside or fully inside the union; skip.</li>
-     *    <li>1 marked → edge is on a single cube's silhouette; draw.</li>
-     *    <li>2 marked, side-by-side (sharing a face) → edge is interior to a flat surface
-     *        between the two cubes; <b>skip</b>. This is the cure for the per-block grid look.</li>
-     *    <li>2 marked, diagonal → edge is a pinch point of the shape; draw.</li>
-     *    <li>3 marked → edge is a concave corner; draw.</li>
-     *  </ul>
-     *  Result: only edges on the outer silhouette of the merged volume are drawn; no grid
-     *  lines along flat faces between adjacent solids.
-     */
     private static void drawSilhouette(PoseStack pose, com.mojang.blaze3d.vertex.VertexConsumer consumer,
                                         java.util.Set<BlockPos> marked,
                                         float r, float g, float b, float a) {
         java.util.Set<EdgeKey> seen = new java.util.HashSet<>();
         for (BlockPos cube : marked) {
             int cx = cube.getX(), cy = cube.getY(), cz = cube.getZ();
-            // X-axis edges of this cube — 4 of them at (yi, zi) ∈ {0,1}².
             for (int yi = 0; yi <= 1; yi++) for (int zi = 0; zi <= 1; zi++) {
                 tryDrawEdge(0, cx, cy + yi, cz + zi, marked, seen, pose, consumer, r, g, b, a);
             }
-            // Y-axis edges.
             for (int xi = 0; xi <= 1; xi++) for (int zi = 0; zi <= 1; zi++) {
                 tryDrawEdge(1, cx + xi, cy, cz + zi, marked, seen, pose, consumer, r, g, b, a);
             }
-            // Z-axis edges.
             for (int xi = 0; xi <= 1; xi++) for (int yi = 0; yi <= 1; yi++) {
                 tryDrawEdge(2, cx + xi, cy + yi, cz, marked, seen, pose, consumer, r, g, b, a);
             }
         }
     }
 
-    /** Edge identity key: axis (0=X, 1=Y, 2=Z) plus the edge's anchor corner. Records auto-
-     *  provide value-equality so the {@code Set<EdgeKey>} dedupes correctly across cubes that
-     *  share an edge. */
     private record EdgeKey(int axis, int x, int y, int z) {}
 
-    /** Looks up the 4 cubes around the edge, runs the silhouette classification, and emits the
-     *  line segment if the edge is on the silhouette. */
     private static void tryDrawEdge(int axis, int x, int y, int z,
                                      java.util.Set<BlockPos> marked, java.util.Set<EdgeKey> seen,
                                      PoseStack pose, com.mojang.blaze3d.vertex.VertexConsumer consumer,
@@ -502,21 +438,21 @@ public final class SelectionRenderer {
         boolean q00, q01, q10, q11;
         float x2, y2, z2;
         switch (axis) {
-            case 0 -> { // X-axis edge from (x,y,z) to (x+1,y,z); 4 cubes in YZ around it.
+            case 0 -> {
                 q00 = marked.contains(new BlockPos(x, y - 1, z - 1));
                 q01 = marked.contains(new BlockPos(x, y - 1, z));
                 q10 = marked.contains(new BlockPos(x, y,     z - 1));
                 q11 = marked.contains(new BlockPos(x, y,     z));
                 x2 = x + 1; y2 = y; z2 = z;
             }
-            case 1 -> { // Y-axis edge from (x,y,z) to (x,y+1,z); 4 cubes in XZ around it.
+            case 1 -> {
                 q00 = marked.contains(new BlockPos(x - 1, y, z - 1));
                 q01 = marked.contains(new BlockPos(x - 1, y, z));
                 q10 = marked.contains(new BlockPos(x,     y, z - 1));
                 q11 = marked.contains(new BlockPos(x,     y, z));
                 x2 = x; y2 = y + 1; z2 = z;
             }
-            case 2 -> { // Z-axis edge from (x,y,z) to (x,y,z+1); 4 cubes in XY around it.
+            case 2 -> {
                 q00 = marked.contains(new BlockPos(x - 1, y - 1, z));
                 q01 = marked.contains(new BlockPos(x - 1, y,     z));
                 q10 = marked.contains(new BlockPos(x,     y - 1, z));
@@ -529,42 +465,31 @@ public final class SelectionRenderer {
         drawLine(pose, consumer, x, y, z, x2, y2, z2, r, g, b, a);
     }
 
-    /** Edge-classification rule — see {@link #drawSilhouette} javadoc for the full table. */
     private static boolean isSilhouetteEdge(boolean q00, boolean q01, boolean q10, boolean q11) {
         int count = (q00 ? 1 : 0) + (q01 ? 1 : 0) + (q10 ? 1 : 0) + (q11 ? 1 : 0);
         if (count == 0 || count == 4) return false;
         if (count == 2) {
-            // The 4 cubes form a 2x2. Two marked are "side-by-side" (share a face) if both
-            // share the same row OR the same column. Diagonals don't share a face.
             boolean sideBySide =
-                (q00 && q01) || (q10 && q11) ||    // share the "above-below" row split
-                (q00 && q10) || (q01 && q11);      // share the "left-right" column split
+                (q00 && q01) || (q10 && q11) ||
+                (q00 && q10) || (q01 && q11);
             return !sideBySide;
         }
-        return true; // 1 or 3 marked
+        return true;
     }
 
-    /** Per-cube outset for the tint faces — pushes each quad a hair outside the block surface it
-     *  hugs so the translucent fill doesn't z-fight that surface. */
     private static final float TINT_FACE_OUTSET = 0.005f;
 
-    /** Face-culled translucent fill of a marked-cube set. For each cube, emits ONLY the faces whose
-     *  neighbour cube is not in {@code marked}; a face shared between two marked cubes is skipped by
-     *  both, so the interior faces that used to stack and multiply the overlay into dark bands are
-     *  never drawn. Quads go into a {@link RenderType#debugQuads()} consumer (POSITION_COLOR). */
     private static void drawCulledFaces(PoseStack pose, com.mojang.blaze3d.vertex.VertexConsumer quads,
                                          java.util.Set<BlockPos> marked, float r, float g, float b, float a) {
         org.joml.Matrix4f mat = pose.last().pose();
         for (BlockPos cube : marked) {
             for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.values()) {
-                if (marked.contains(cube.relative(dir))) continue;  // shared interior face → cull
+                if (marked.contains(cube.relative(dir))) continue;
                 emitFace(mat, quads, cube, dir, r, g, b, a);
             }
         }
     }
 
-    /** Emits one cube face as a quad (4 verts, POSITION_COLOR), nudged {@link #TINT_FACE_OUTSET}
-     *  along its outward normal. */
     private static void emitFace(org.joml.Matrix4f mat, com.mojang.blaze3d.vertex.VertexConsumer quads,
                                   BlockPos pos, net.minecraft.core.Direction dir,
                                   float r, float g, float b, float a) {
@@ -574,7 +499,6 @@ public final class SelectionRenderer {
         float ox = dir.getStepX() * TINT_FACE_OUTSET;
         float oy = dir.getStepY() * TINT_FACE_OUTSET;
         float oz = dir.getStepZ() * TINT_FACE_OUTSET;
-        // Four corners of the face.
         float x0, y0, z0, x1, y1, z1, x2, y2, z2, x3, y3, z3;
         switch (dir) {
             case UP -> {
@@ -621,9 +545,6 @@ public final class SelectionRenderer {
         quads.addVertex(mat, x3 + ox, y3 + oy, z3 + oz).setColor(r, g, b, a);
     }
 
-    /** Emits one line segment for {@link RenderType#lines()}. Lines render type needs a normal
-     *  per vertex (vanilla uses the segment's direction); the per-vertex pose-stack normal is
-     *  what {@code LevelRenderer.renderLineBox} uses too, so we mirror the pattern. */
     private static void drawLine(PoseStack pose, com.mojang.blaze3d.vertex.VertexConsumer consumer,
                                   float x1, float y1, float z1, float x2, float y2, float z2,
                                   float r, float g, float b, float a) {
@@ -637,7 +558,6 @@ public final class SelectionRenderer {
             .setNormal(pose.last(), nx, ny, nz);
     }
 
-    /** Draws a white preview box A→B with the faster preview flicker. */
     private static void drawPreviewBox(PoseStack pose, com.mojang.blaze3d.vertex.VertexConsumer consumer,
                                         BlockPos a, BlockPos b, double time) {
         float previewAlpha = ALPHA_BASE + ALPHA_SWING
@@ -654,7 +574,6 @@ public final class SelectionRenderer {
             1.0f, 1.0f, 1.0f, previewAlpha);
     }
 
-    /** Returns the held stack of the given item (main or off), or null if neither hand holds it. */
     private static ItemStack findHeldRod(Player player, net.minecraft.world.item.Item item) {
         ItemStack main = player.getMainHandItem();
         if (main.is(item)) return main;
@@ -663,8 +582,6 @@ public final class SelectionRenderer {
         return null;
     }
 
-    /** Resolves the "tentative B" block — whatever vanilla block the player's crosshair is on.
-     *  Returns null if there's no rod-A to preview from or the crosshair isn't on a block. */
     private static BlockPos previewBHover(Minecraft mc, BlockPos previewA) {
         if (previewA == null) return null;
         HitResult hit = mc.hitResult;

@@ -18,22 +18,62 @@ import net.minecraft.world.level.Level;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Per-tick accumulator that turns a settlement's food/culture production into new citizens.
- * Each tick adds {@code (foodPerSecond / 20, culturePerSecond / 20)} to the stored pools. When
- * both pools reach the population-scaled cost, the cost is subtracted, a {@link CitizenEntity}
- * is spawned near the town hall, and the roster is updated.
+ * Server-side heartbeat for every settlement: {@code tickAll} runs each server tick as both the
+ * immigration accumulator and the per-settlement housekeeping loop (status effects, labor
+ * auto-assign, governance timers, policies, and a once-per-second broadcast fan-out to members,
+ * so an open {@link com.bannerbound.core.client.TownHallScreen} reads live progress without
+ * request/reply chatter).
  * <p>
- * Broadcasts a {@link PopulationStatePayload} once per second to every member of every
- * settlement so any open {@link com.bannerbound.core.client.TownHallScreen} reads live
- * progress without per-frame request/reply chatter.
+ * Growth model: CULTURE is the growth currency - it accumulates (rate/20 per tick) toward the
+ * population-scaled cost and is spent per immigrant. FOOD is a GATE, not a cost: growth requires
+ * net food >= 0, and the food bar (foodStored) is only a survival buffer banking the net trend
+ * toward/away from starvation - the old per-citizen fill/spend/refill cycle is gone. The
+ * per-immigrant cooldown (Config.IMMIGRATION_MIN_SECONDS_BETWEEN) is the real pacing lever since
+ * the culture bar fills fast. The immigration floor is a FLOOR, not a lifetime cap: a settlement
+ * whose citizens all died drops below it and grows again, and below IMMIGRATION_FOOD_GRACE_POP
+ * the food gate is waived entirely - a wiped-out government-era settlement has no workers, so it
+ * can never run a surplus and would otherwise be soft-locked forever. The lifetime immigrant
+ * counter bumped in spawnImmigrant never decrements (one-shot population seed, not a running tap).
+ * <p>
+ * Dormancy ("frozen in amber"; recomputed by SettlementManager.refreshDormancy earlier in the
+ * server tick): while no member is online the larder scan is skipped (which freezes stored-food
+ * spoilage, since LarderHooks.process runs inside LarderService.refresh), the food/culture bar
+ * commits and the immigrant spawn are skipped, and hourly policy upkeep is frozen - the
+ * settlement stays exactly as the last player left it even if its chunks are force-loaded.
+ * Population cannot change while dormant, so the peak mark is unaffected by the skip.
+ * <p>
+ * Once per second the loop refreshes the larder + food-economy stats, notes the population peak
+ * (the starvation crisis demands food for the tribe's high-water mark, not for the survivors of
+ * a die-off), rebalances gatherer labor (anarchy always; under a government only while
+ * auto-assign is on), recomputes the chiefdom regent (no-op heartbeat covering edge cases the
+ * login events miss), and pushes PopulationStatePayload plus the Mathematics-gated Statistics
+ * payloads (entries capped at WORKFORCE_ROSTER_CAP to bound packet size), the change-only food
+ * warning (STARVING outranks LOW; a settlement with zero consumption never warns; LOW requires
+ * under a day of reserve AND a negative trend so a stockpile still filling never warns),
+ * suggestion/policy/labor state, and ChatVoteManager expiry. Every tick it drains governance
+ * timers: vote pull-back when the choice window closes mid-vote (pop dropped below floor), chief
+ * election timeout (5 min, resolved by top vote), pending chief/government enactment once the
+ * reveal animation has played, pending disband (removes the settlement, so the loop skips its
+ * remaining work), the once-per-day dawn coup check and dusk pre-warning (day time >= 12000),
+ * and hourly policy upkeep (gated so no-policy settlements pay nothing). The Code of Laws prompt
+ * fires once per settlement ever (flag persists in NBT), and stage-ups fire a one-shot chat +
+ * fireworks celebration (checked every tick so the set_population/add_population debug commands
+ * trigger it too).
+ * <p>
+ * Spawning: spawnImmigrant places a real roster citizen near the town hall and returns false if
+ * the town hall chunk is unloaded (the caller refunds the culture cost). The drawn name is
+ * re-read from the entity after initializeCitizen because it is baked into the settlement
+ * language there - roster and announcement must match the name tag. Compliance at spawn keys off
+ * government, not population: anarchy rolls 10-40 (it gates consent to player-REQUESTED job
+ * switches; anarchy citizens always work), any government spawns at 100, matching the jump
+ * existing citizens take at enactment. spawnSimCitizen is the throwaway /bannerbound simulate
+ * variant: same pipeline but no roster entry, no immigration counter, and markSimulated so it is
+ * never persisted (the caller discards it). Open: revalidateWorkstationBuildings is inert - the
+ * workstation registry is always empty since workstation blocks were removed - and should be
+ * excised with the rest of that plumbing.
  */
 public final class ImmigrationManager {
     private static int tickCounter = 0;
-    /** Below this population a settlement immigrates on CULTURE alone — the food surplus gate is waived.
-     *  A government-era settlement that loses all its citizens has no workers, so it can never run a food
-     *  surplus; without this waiver a wiped-out tribe would be permanently soft-locked (the food gate
-     *  could never pass again). Above it, a food surplus is required to grow. At founding the anarchy
-     *  food trickle is already a surplus, so this only ever matters for recovery. */
     private static final int IMMIGRATION_FOOD_GRACE_POP = 2;
 
     private ImmigrationManager() {
@@ -48,30 +88,15 @@ public final class ImmigrationManager {
         boolean broadcastTick = (tickCounter % 20 == 0);
         boolean anyChange = false;
 
-        // Snapshot: a tribe-backed disband (enactPendingDisband below) removes its settlement
-        // from `data`, which would otherwise CME this iteration over the live values view.
+        // Copy first: enactPendingDisband removes settlements mid-loop -> CME on the live values view.
         for (Settlement s : new java.util.ArrayList<>(data.all())) {
-            // Settlement food: rescan claimed storage into the passive stored-food value + food/sec
-            // (LarderService), then update the per-source production-rate stats. The abstract food bar
-            // (foodStored) accumulates the net trend in the immigration block below.
             if (broadcastTick) {
-                // Dormancy (no member online → frozen "in amber") is recomputed at the top of the
-                // server tick by SettlementManager.refreshDormancy, before every consumer.
-                // Skip the larder scan while dormant — this freezes stored-food SPOILAGE (LarderHooks.process
-                // runs inside refresh) and the storedFoodValue/rate churn, and saves the scan cost for an
-                // unattended colony. Population can't change while dormant, so the peak mark is unaffected.
                 if (!s.isDormant()) {
                     com.bannerbound.core.api.settlement.food.LarderService.refresh(overworld, s);
                     s.tickFoodEconomyStats(overworld.getGameTime());
-                    // Track the population high-water mark so the starvation crisis demands food for the
-                    // full tribe the settlement grew into, not for whoever survives a die-off.
                     s.notePopulationPeak();
                 }
             }
-            // Tick the per-settlement status effects every tick (decrement remaining; drop
-            // expired). If anything was removed, push the new list to members so the Statuses
-            // tab's progress bars converge to the server truth instead of drifting on local
-            // tick counts alone.
             if (s.tickStatusEffects()) {
                 SettlementManager.broadcastStatusEffectsToMembers(server, s);
                 anyChange = true;
@@ -80,23 +105,11 @@ public final class ImmigrationManager {
                 anyChange = true;
             }
 
-            // Labor distribution: once per second, balance gatherer-job staffing toward the
-            // settlement's weighted priority targets — employ idle adults, re-skill one over-staffed
-            // worker. Runs in anarchy always, and under a government only while auto-assign is left on
-            // (a chief/council can switch it off to assign per-citizen).
             if (broadcastTick
                     && (s.governmentType() == Settlement.Government.NONE || s.laborAutoAssign())) {
                 com.bannerbound.core.entity.AnarchyJobDistributor.tick(overworld, s);
             }
 
-            // Immigration: CULTURE is the growth currency — it accumulates toward the population-scaled
-            // cost and is spent on each new citizen (the visible "progress to next citizen" bar). FOOD is
-            // a GATE, not a cost: a settlement only grows while it is feeding itself (net food ≥ 0), so
-            // you can't attract newcomers you can't feed. The food bar (foodStored) is a survival BUFFER
-            // that banks the net food trend (passive stored-food income − consumption), clamped to the
-            // cap; a deficit drains it toward 0 (→ starvation). It is NOT spent per citizen — the old
-            // per-citizen fill→spend→refill cycle (you had to dip out of surplus and back in for every
-            // immigrant) was confusing and is gone.
             double effectiveFoodPerSec = s.effectiveFoodPerSecond();
             double effectiveCulturePerSec = s.effectiveCulturePerSecond(overworld);
             double newFood = Math.max(0.0,
@@ -105,35 +118,24 @@ public final class ImmigrationManager {
                 Math.min(s.cultureCap(), s.cultureStored() + effectiveCulturePerSec / 20.0));
             double cultureCost = s.nextCultureCost();
 
-            // Minimum spacing between immigrants (the real pacing lever — the culture bar fills quickly).
             long now = overworld.getGameTime();
             long cooldownTicks = (long) (com.bannerbound.core.Config.IMMIGRATION_MIN_SECONDS_BETWEEN.get() * 20.0);
             boolean cooldownElapsed = now - s.lastImmigrationTick() >= cooldownTicks;
 
             boolean immigrated = false;
-            // FLOOR, not a lifetime cap: a settlement whose citizens all died drops back below the
-            // floor and immigrates again, so the player can never be permanently soft-locked. Below the
-            // food-grace population the food gate is WAIVED (culture + cooldown only) — a wiped-out,
-            // government-era settlement has no workers, so it can never be in surplus and requiring food
-            // would lock it out forever. Above the grace pop, a food surplus is required to grow.
             boolean recovering = s.population() < IMMIGRATION_FOOD_GRACE_POP;
             boolean fed = recovering || effectiveFoodPerSec >= -1.0e-6;
-            // Frozen in amber: while every member is offline (dormant) the settlement neither loses food
-            // (consumption is gated to 0 and the larder scan is skipped above) NOR grows. Skip the
-            // immigration spawn and the food/culture bar commits so culture, the food bar, and population
-            // are exactly as the last player left them — like single-player, where the server simply stops
-            // ticking for an absent world. (Consumption being 0 would otherwise leave the food gate open
-            // and let a force-loaded dormant tribe keep accruing culture and taking in immigrants.)
+            // Dormant: skip spawn AND bar commits, or a force-loaded offline tribe keeps growing.
             if (!s.isDormant()) {
                 if (fed && newCulture >= cultureCost && cooldownElapsed
                     && s.population() < s.immigrationFloor()) {
-                    newCulture -= cultureCost;   // food is a gate, not a cost — only culture is spent
+                    newCulture -= cultureCost;
                     if (spawnImmigrant(overworld, s, true)) {
                         immigrated = true;
                         anyChange = true;
                         s.setLastImmigrationTick(now);
                     } else {
-                        newCulture += cultureCost;   // spawn failed (town hall not loaded) — refund
+                        newCulture += cultureCost;
                     }
                 }
                 s.setFoodStored(newFood);
@@ -141,11 +143,6 @@ public final class ImmigrationManager {
             }
             if (immigrated) {
                 anyChange = true;
-                // Code of Laws one-shot: the first time population hits the era's immigration
-                // floor, broadcast the prompt so players know they can choose a government.
-                // The promptShown flag persists in NBT — reload won't re-broadcast, and a
-                // later population dip + refill won't either (the prompt only "fires" once
-                // per settlement, ever).
                 if (!s.codeOfLawsPromptShown() && s.population() >= s.immigrationFloor()) {
                     s.setCodeOfLawsPromptShown(true);
                     SettlementManager.broadcastToSettlement(server, s,
@@ -153,19 +150,10 @@ public final class ImmigrationManager {
                             .withStyle(ChatFormatting.GOLD));
                 }
             }
-            // Settlement stage-up: one-shot celebration (chat + fireworks) when growth crosses into
-            // a new named stage. Checked every tick so it fires for both natural immigration and the
-            // /bannerbound ... set_population|add_population debug commands.
             if (checkStageUp(server, overworld, s)) {
                 anyChange = true;
             }
 
-            // Selection-window housekeeping — runs every tick so we react promptly to
-            // pop drops or election timeouts. Two cases:
-            //   (a) Pull-back: a choose-government vote is active but the window closed
-            //       (pop dropped below floor mid-vote, e.g. admin /kill). Abort + broadcast
-            //       so the prompt button reappears once pop recovers.
-            //   (b) Election timeout: chief election ran > 5 min — resolve by top vote.
             if (s.isGovernmentVoteActive() && !s.governmentChoiceWindowOpen()) {
                 s.clearGovernmentVote();
                 SettlementManager.broadcastToSettlement(server, s,
@@ -180,32 +168,22 @@ public final class ImmigrationManager {
                     anyChange = true;
                 }
             }
-            // Pending chief installation — tribe-vote reveal has been displaying for the
-            // scheduled animation duration; now actually install the winner. Cleared on hit
-            // so subsequent ticks don't re-fire.
             if (s.pendingChiefId() != null
                     && overworld.getGameTime() >= s.pendingChiefEnactTick()) {
                 SettlementManager.enactPendingChief(server, s, data);
                 anyChange = true;
             }
-            // Same drainage for the Choose-Government tribe-vote tiebreaker.
             if (s.pendingGovernmentType() != null
                     && overworld.getGameTime() >= s.pendingGovernmentEnactTick()) {
                 SettlementManager.enactPendingGovernment(server, s, data);
                 anyChange = true;
             }
-            // Tribe-backed (Opinionated Crowd) disband: the citizens' confirming reveal has
-            // played for its scheduled duration — dissolve now. This removes the settlement, so
-            // skip the rest of this iteration's per-settlement work for it.
             if (s.hasPendingDisband()
                     && overworld.getGameTime() >= s.pendingDisbandEnactTick()) {
                 SettlementManager.enactPendingDisband(server, s, data);
                 anyChange = true;
                 continue;
             }
-            // Step 13 v2: settlement-level dawn coup check. Day boundary detection — fire
-            // once per in-game day. Runs in every gov type but the manager itself short-
-            // circuits on non-CHIEFDOM, so the per-tick cost is negligible.
             long today = overworld.getDayTime() / 24_000L;
             if (today != s.lastCoupCheckDay()) {
                 if (s.lastCoupCheckDay() != -1L) {
@@ -214,24 +192,14 @@ public final class ImmigrationManager {
                 }
                 s.setLastCoupCheckDay(today);
             }
-            // Dusk pre-warning: once the day rolls into evening (>=12000), broadcast the day's
-            // looming consequences (strikes, coup, homelessness) so the dawn checks above are
-            // never a surprise. Fired once per in-game day.
             long timeOfDay = overworld.getDayTime() % 24_000L;
             if (timeOfDay >= 12_000L && today != s.lastDuskWarnDay()) {
                 SettlementManager.duskWarningCheck(server, s);
                 s.setLastDuskWarnDay(today);
             }
-            // Step 15: regent recompute heartbeat. The PlayerLogged*Event handlers cover the
-            // common case, but a once-per-second sweep catches edge cases (server crash
-            // recovery, an admin command silently changing chief, etc.) without measurable
-            // cost — recomputeRegent is no-op when the state already matches.
             if (broadcastTick && s.governmentType() == Settlement.Government.CHIEFDOM) {
                 SettlementManager.recomputeRegent(server, s);
             }
-            // Policies: hourly upkeep (Nightshift/Domestication thoughts + Opinionated bonus).
-            // Gated on having something to do so the common no-policy settlement pays nothing,
-            // and frozen while dormant like every other per-settlement drain.
             if (!s.isDormant()
                     && (!s.activePolicies().isEmpty() || s.policyOpinionatedBonusExpiry() > 0L)) {
                 long policyHour = overworld.getGameTime() / 1000L;
@@ -243,30 +211,19 @@ public final class ImmigrationManager {
             }
             if (broadcastTick) {
                 broadcastState(server, s);
-                // Statistics-tab data (who/what/why + per-workshop rates) — only for settlements that
-                // have researched Mathematics; piggybacks the once-per-second cadence.
                 broadcastWorkforceStatsIfEnabled(server, s);
                 broadcastWorkshopStatsIfEnabled(server, s);
-                // Settlement-wide food warning: tell EVERY member (not just whoever has a screen
-                // open) when food is running out. Only broadcasts when the bucket changes, so it
-                // never spams packets. Piggybacks the once-per-second cadence.
                 broadcastFoodWarningIfChanged(server, s);
-                // Live suggestion sync (#7): keep an open chief's Suggestions tab current as members
-                // add/retract suggestions. Cheap once-per-second re-broadcast piggybacking this
-                // cadence; only does packet work when the settlement actually has suggestions.
                 if (s.governmentType() == Settlement.Government.CHIEFDOM && s.hasAnySuggestions()) {
                     SettlementManager.broadcastSuggestionState(server, s);
                     SettlementManager.broadcastPolicyState(server, s);
                     SettlementManager.broadcastPaletteState(server, s);
                     SettlementManager.broadcastExtraSuggestions(server, s);
                 }
-                // Live labor counts for an open Town Hall "Labor" tab so re-skilling is visible in
-                // real time (no-op build cost when no members are online — see broadcastLaborState).
                 SettlementManager.broadcastLaborState(server, s);
                 revalidateWorkstationBuildings(overworld, s);
             }
         }
-        // Expire overdue council chat-votes (exile/tablet) — global sweep, not per-settlement.
         if (broadcastTick) {
             ChatVoteManager.tick(server);
         }
@@ -275,22 +232,11 @@ public final class ImmigrationManager {
         }
     }
 
-    /**
-     * Re-runs {@link com.bannerbound.core.building.BuildingValidator} on every workstation
-     * in {@code s} whose chunk is loaded. Updates the cached {@code buildingValid} flag so
-     * workstation goals can yield while the building is broken without losing the assignment.
-     * Unloaded chunks keep their previous flag value — we don't have visibility to validate.
-     */
     private static void revalidateWorkstationBuildings(ServerLevel level, Settlement s) {
-        // NOTE: the workstation registry is now always empty (workstation blocks were removed), so
-        // this loop is inert. Kept as a no-op until the registry plumbing is fully excised.
         for (com.bannerbound.core.api.settlement.Workstation ws : s.workstations().values()) {
             BlockPos pos = ws.pos();
             if (!level.isLoaded(pos)) continue;
-            // Validate at the tier the workstation was placed under. Without this, ancient
-            // roof-only workstations get re-validated under the strict ENCLOSED rules and
-            // immediately marked invalid every tick (no walls → fail), which silently disables
-            // their worker goals.
+            // Validate at placement tier: ENCLOSED rules would invalidate ancient roof-only stations every tick.
             com.bannerbound.core.building.BuildingValidator.BuildingTier tier =
                 com.bannerbound.core.building.WorkstationPlacement.tierFor(ws.type());
             com.bannerbound.core.building.BuildingValidator.Result r =
@@ -299,38 +245,22 @@ public final class ImmigrationManager {
         }
     }
 
-    /**
-     * Spawns one real roster citizen near the town hall (the natural-immigration path), reusable by
-     * debug commands. {@code announce} controls the "X arrived" member broadcast (false for bulk
-     * spawns so they don't spam chat). Returns false if the town hall chunk isn't loaded.
-     */
     public static boolean spawnImmigrant(ServerLevel level, Settlement s, boolean announce) {
         BlockPos thp = s.townHallPos();
         if (thp == null) return false;
-        // Only spawn when the town hall chunk is loaded — otherwise hold off.
         if (!level.isLoaded(thp)) return false;
 
         BlockPos spawnPos = findSpawnPos(level, thp);
         CitizenEntity entity = BannerboundCore.CITIZEN.get().create(level);
         if (entity == null) return false;
 
-        // Roll gender 50/50, then draw a name from that gender's pool for the settlement's era.
         CitizenGender gender = level.random.nextBoolean() ? CitizenGender.MALE : CitizenGender.FEMALE;
         String name = com.bannerbound.core.api.settlement.data.CitizenNameLoader.randomName(
             level.random, s.age(), gender);
         entity.initializeCitizen(s.id(), name, gender, s.age(), s.identityFormatting());
-        // initializeCitizen baked the raw draw into the settlement language — use that styled name
-        // for the roster + announcement so every surface reads it the same way the name tag does.
         name = entity.getCitizenName();
-        // Compliance at spawn keys off whether a government has been enacted, NOT population:
-        //  • Anarchy (no government): citizens arrive with a wide spread of compliance (random
-        //    10-40). In anarchy this no longer gates work — self-organized citizens always work —
-        //    it governs whether a citizen consents to a player-REQUESTED job switch: a stubborn
-        //    (low-compliance) one is likely to refuse and keep its current gatherer job.
-        //  • Once any government is in place: new citizens start fully compliant (100), matching
-        //    the jump every existing citizen takes the moment the government is enacted.
         if (s.governmentType() == Settlement.Government.NONE) {
-            entity.setCompliance(10 + level.random.nextInt(31)); // 10..40 inclusive
+            entity.setCompliance(10 + level.random.nextInt(31));
         } else {
             entity.setCompliance(100);
         }
@@ -342,10 +272,6 @@ public final class ImmigrationManager {
             return false;
         }
 
-        // Record on the settlement's roster + bump the lifetime immigrant counter. The counter
-        // never decrements — dying / exiled immigrants don't refund a slot, matching the user's
-        // "each settlement has a cap of 7 immigration" design (it's a one-shot population seed,
-        // not a running tap).
         s.addCitizen(new Citizen(entity.getUUID(), name));
         s.recordImmigration();
 
@@ -353,14 +279,6 @@ public final class ImmigrationManager {
         return true;
     }
 
-    /**
-     * Spawns a throwaway crowd-simulation citizen bound to {@code s} for the {@code /bannerbound
-     * simulate} stress test. Mirrors {@link #spawnNewCitizen} (create → initialize → finalize →
-     * add) but deliberately does NOT touch the roster ({@link Settlement#addCitizen}) or the
-     * lifetime immigration counter, and flags the entity {@link CitizenEntity#markSimulated()} so
-     * it is never persisted. Returns the spawned entity, or {@code null} if the town hall chunk
-     * isn't loaded. The caller is responsible for discarding it when the simulation ends.
-     */
     public static CitizenEntity spawnSimCitizen(ServerLevel level, Settlement s) {
         BlockPos thp = s.townHallPos();
         if (thp == null || !level.isLoaded(thp)) return null;
@@ -383,8 +301,6 @@ public final class ImmigrationManager {
         return entity;
     }
 
-    /** Fires a one-shot stage-up celebration if the settlement has grown into a higher stage.
-     *  Returns true if a stage-up was announced (so the caller marks data dirty). */
     private static boolean checkStageUp(MinecraftServer server, ServerLevel level, Settlement s) {
         SettlementStage cur = s.stage();
         if (cur.ordinal() <= s.lastAnnouncedStage().ordinal()) return false;
@@ -396,7 +312,6 @@ public final class ImmigrationManager {
         return true;
     }
 
-    /** A small volley of colourful fireworks above the town hall to mark a stage-up. */
     private static void spawnCelebrationFireworks(ServerLevel level, Settlement s) {
         BlockPos th = s.townHallPos();
         if (th == null || !level.isLoaded(th)) return;
@@ -404,7 +319,7 @@ public final class ImmigrationManager {
         for (int i = 0; i < 6; i++) {
             double fx = th.getX() + 0.5 + (level.random.nextDouble() - 0.5) * 8.0;
             double fz = th.getZ() + 0.5 + (level.random.nextDouble() - 0.5) * 8.0;
-            double fy = th.getY() + 6.0;   // launch above the structure, not inside it
+            double fy = th.getY() + 6.0;
             net.minecraft.world.item.ItemStack rocket =
                 new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.FIREWORK_ROCKET);
             int c1 = palette[level.random.nextInt(palette.length)];
@@ -463,9 +378,6 @@ public final class ImmigrationManager {
     }
 
     public static PopulationStatePayload buildPayload(ServerLevel level, Settlement s) {
-        // Effective per-second rates — same numbers the accumulator drains by + the culture
-        // tree consumes. Single source of truth for both food (Settlement.effectiveFood...)
-        // and culture (Settlement.effectiveCulture...).
         return new PopulationStatePayload(
             s.id().toString(),
             s.population(),
@@ -501,14 +413,9 @@ public final class ImmigrationManager {
         }
     }
 
-    /** Research flag (Mathematics) that unlocks the Town Hall Statistics tab. */
     public static final String STATISTICS_FLAG = "bannerbound.unlock.statistics";
-    /** Cap the roster snapshot so the payload stays bounded on a huge settlement (Phase 1). */
     private static final int WORKFORCE_ROSTER_CAP = 80;
 
-    /** Once-a-second roster snapshot for the Statistics tab — only built/sent for settlements that have
-     *  researched Mathematics (no point computing/sending it otherwise). Each entry is a citizen's name,
-     *  job, and derived {@link com.bannerbound.core.entity.CitizenWorkStatus} (ordinal -1 = unloaded). */
     public static void broadcastWorkforceStatsIfEnabled(MinecraftServer server, Settlement s) {
         if (server == null || s == null) return;
         if (!com.bannerbound.core.api.research.ResearchManager.hasFlag(s, STATISTICS_FLAG)) return;
@@ -523,6 +430,7 @@ public final class ImmigrationManager {
                 entries.add(new com.bannerbound.core.network.WorkforceStatsPayload.Entry(
                     c.name(), job, status, ce.getId()));
             } else {
+                // status -1 = citizen entity not loaded; the client renders the row as such.
                 entries.add(new com.bannerbound.core.network.WorkforceStatsPayload.Entry(
                     c.name(), "", -1, -1));
             }
@@ -537,9 +445,6 @@ public final class ImmigrationManager {
         }
     }
 
-    /** Once-a-second per-workshop stats for the Statistics tab (Phase 2) — staffing, output rate, and
-     *  pending backlog. Ticks each workshop's rate EMA and broadcasts, only for statistics-enabled
-     *  settlements. */
     public static void broadcastWorkshopStatsIfEnabled(MinecraftServer server, Settlement s) {
         if (server == null || s == null) return;
         if (!com.bannerbound.core.api.research.ResearchManager.hasFlag(s, STATISTICS_FLAG)) return;
@@ -561,12 +466,6 @@ public final class ImmigrationManager {
         }
     }
 
-    /**
-     * Computes the current food-warning bucket from the settlement food reserve and, only when it
-     * changed, pushes a {@link com.bannerbound.core.network.SettlementFoodWarningPayload} to every
-     * member. STARVING (empty bar with active consumption) outranks LOW (under a day of reserve and
-     * trending down); a settlement with no consumption yet (pre-government / anarchy) never warns.
-     */
     private static void broadcastFoodWarningIfChanged(MinecraftServer server, Settlement s) {
         int level;
         double consumption = s.foodConsumptionPerSecond();
@@ -575,8 +474,6 @@ public final class ImmigrationManager {
         } else if (s.isStarving()) {
             level = com.bannerbound.core.network.SettlementFoodWarningPayload.LEVEL_STARVING;
         } else {
-            // Warn "low" when there's under a day of reserve left AND it's actually trending down — a
-            // settlement still filling its stockpile shouldn't get a low-food banner.
             boolean low = s.reserveDays() < 1.0 && s.effectiveFoodPerSecond() < 0.0;
             level = low
                 ? com.bannerbound.core.network.SettlementFoodWarningPayload.LEVEL_LOW

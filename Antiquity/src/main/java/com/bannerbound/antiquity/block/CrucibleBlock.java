@@ -35,10 +35,12 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * A crucible placed on the ground (METALWORKING_PLAN.md Part 2 — overhauled). Right-click it with raw
- * ore / metal items to drop them in (they show inside); break it (faster with a pickaxe) to get the
- * crucible item back <b>carrying the charge</b>, then melt it in a bloomery. The block is invisible —
- * its {@link com.bannerbound.antiquity.client.CrucibleRenderer} draws the body + the charge.
+ * A crucible placed on the ground (METALWORKING_PLAN.md Part 2 -- overhauled). Right-click it with
+ * raw ore / metal items to drop them in (they show inside); empty-hand right-click pops the last
+ * charged item back out, but only while the charge is still solid (molten contents cannot be taken).
+ * Breaking it (faster with a pickaxe) drops a crucible item <b>carrying the charge</b> -- there is no
+ * separate empty-crucible item -- ready to melt in a bloomery. The blockstate model is only the bowl;
+ * the {@link com.bannerbound.antiquity.client.CrucibleRenderer} BER draws the charge inside it.
  */
 public class CrucibleBlock extends BaseEntityBlock {
     public static final MapCodec<CrucibleBlock> CODEC = simpleCodec(CrucibleBlock::new);
@@ -58,10 +60,7 @@ public class CrucibleBlock extends BaseEntityBlock {
         return SHAPE;
     }
 
-    /**
-     * The collision box isn't a full block, so vanilla classifies the cell as walkable and NPCs path
-     * onto it and snag. Mark it un-pathfindable so every pathfinder routes around it.
-     */
+    // Non-full collision box reads as walkable to vanilla nav and NPCs snag; must stay un-pathfindable.
     @Override
     protected boolean isPathfindable(BlockState state,
                                      net.minecraft.world.level.pathfinder.PathComputationType type) {
@@ -70,7 +69,7 @@ public class CrucibleBlock extends BaseEntityBlock {
 
     @Override
     protected RenderShape getRenderShape(BlockState state) {
-        return RenderShape.MODEL; // the bowl is the blockstate model; the BER adds the charge inside
+        return RenderShape.MODEL; // BaseEntityBlock defaults to INVISIBLE; without this the bowl never renders
     }
 
     @Nullable
@@ -105,7 +104,6 @@ public class CrucibleBlock extends BaseEntityBlock {
         return ItemInteractionResult.sidedSuccess(level.isClientSide);
     }
 
-    /** Empty-hand right-click pops the last charged item back out (only while still solid). */
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player,
                                                BlockHitResult hit) {
@@ -114,14 +112,13 @@ public class CrucibleBlock extends BaseEntityBlock {
         }
         if (!level.isClientSide) {
             ItemStack popped = be.removeLast();
-            if (popped.isEmpty()) return InteractionResult.PASS; // molten or empty — nothing to take
+            if (popped.isEmpty()) return InteractionResult.PASS;
             if (!player.addItem(popped)) Block.popResource(level, pos.above(), popped);
             level.playSound(null, pos, SoundEvents.ITEM_PICKUP, SoundSource.BLOCKS, 0.6F, 1.2F);
         }
         return InteractionResult.sidedSuccess(level.isClientSide);
     }
 
-    /** Break keeps the charge: drop a crucible item carrying it (no separate empty crucible). */
     @Override
     protected List<ItemStack> getDrops(BlockState state, LootParams.Builder params) {
         BlockEntity be = params.getOptionalParameter(LootContextParams.BLOCK_ENTITY);

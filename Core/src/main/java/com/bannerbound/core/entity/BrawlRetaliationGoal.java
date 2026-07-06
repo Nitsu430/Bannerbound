@@ -12,29 +12,18 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.goal.Goal;
 
 /**
- * Holds the floor at priority 0 while a retaliation swing is pending, then lands the swing.
- * Sits below {@code PanicGoal} (priority 1) in the priority number, so the citizen <b>stops
- * running from pain</b> and faces their attacker the moment {@code CitizenBrawlEvents}
- * schedules a counter-swing. Without this goal, vanilla {@code PanicGoal} would carry the
- * citizen away from the attacker before the {@code aiStep} swing-handler could fire, and the
- * brawl loop would silently break at every step.
+ * Holds the floor at priority 0 while a retaliation swing is pending, then lands the swing. Its
+ * priority number sits BELOW PanicGoal (priority 1), so when CitizenBrawlEvents schedules a
+ * counter-swing the citizen stops fleeing from pain and faces the attacker. Without this goal vanilla
+ * PanicGoal would carry the citizen away before the aiStep swing-handler could fire and the brawl loop
+ * would silently break at every step.
  *
- * <p>Flow:
- * <ol>
- *   <li>{@code CitizenBrawlEvents} sets {@link CitizenEntity#schedulePendingRetaliation} on
- *       the victim with a target UUID + scheduled tick (~10 ticks out).</li>
- *   <li>This goal's {@link #canUse} sees the pending state and starts — claiming MOVE+LOOK
- *       at priority 0, which preempts {@code PanicGoal} (priority 1).</li>
- *   <li>{@link #start} stops the navigation so the citizen plants their feet.</li>
- *   <li>{@link #tick} stares the target down each tick. Once the scheduled tick arrives,
- *       performs the swing via {@link CitizenEntity#performBrawlSwing}, notes the brawl
- *       exchange (so the next hit IS treated as ongoing), and clears the pending state —
- *       which makes {@link #canContinueToUse} return false and the goal ends.</li>
- * </ol>
- *
- * <p>Target can be any {@link LivingEntity} (citizen or player) — citizens can be brawling
- * with players too, post-Step 11 where player-on-citizen attacks trigger the same auto-
- * retaliation rolls.
+ * Flow: CitizenBrawlEvents sets schedulePendingRetaliation on the victim (target UUID + scheduled tick
+ * ~10 ticks out); canUse sees the pending state and starts, claiming MOVE+LOOK at priority 0 to
+ * preempt PanicGoal; start stops navigation so the citizen plants their feet; tick stares the target
+ * down until the scheduled tick, then swings via performBrawlSwing, notes the exchange (so the next
+ * hit is treated as ongoing) and clears the pending state, which ends the goal. Target may be any
+ * LivingEntity (citizen or player) since player-on-citizen attacks trigger the same retaliation rolls.
  */
 @ApiStatus.Internal
 public class BrawlRetaliationGoal extends Goal {
@@ -53,7 +42,6 @@ public class BrawlRetaliationGoal extends Goal {
         if (!(citizen.level() instanceof ServerLevel sl)) return false;
         Entity e = sl.getEntity(id);
         if (!(e instanceof LivingEntity le) || !le.isAlive()) {
-            // Target gone — clean up the stale pending state.
             citizen.clearPendingRetaliation();
             return false;
         }
@@ -77,8 +65,6 @@ public class BrawlRetaliationGoal extends Goal {
         if (target == null) return;
         citizen.getLookControl().setLookAt(target, 30.0f, 30.0f);
         if (!(citizen.level() instanceof ServerLevel sl)) return;
-        // Hold the spot until the scheduled tick arrives, then swing. Short delay so the
-        // attacker can't drift out of range during the wait.
         if (sl.getGameTime() >= citizen.getPendingRetaliationTick()) {
             if (citizen.performBrawlSwing(target)) {
                 citizen.noteBrawlExchange(target.getUUID(), sl.getGameTime());
@@ -90,8 +76,6 @@ public class BrawlRetaliationGoal extends Goal {
     @Override
     public void stop() {
         target = null;
-        // Don't clear pendingRetaliation here — start/tick own that. stop() runs both on
-        // graceful end and on preemption; clearing here would lose a still-pending retaliation
-        // if a higher-priority goal briefly took over.
+        // Never clear pendingRetaliation here: stop() also runs on preemption, and clearing would drop a still-pending retaliation.
     }
 }

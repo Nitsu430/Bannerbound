@@ -8,16 +8,16 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Tracks the local player's settlement era and the world era. Used only for display now â€”
- * item knowledge is governed by {@link ClientStartingItems} + {@link ClientResearchState}.
+ * Tracks the local player's settlement era, the world era, and the world year. Used only for
+ * display now - item knowledge is governed by {@link ClientStartingItems} +
+ * {@link ClientResearchState}. The world year is computed server-side from the leading civ's era
+ * plus per-era research progress (negative = BC, positive = AD) and is never read by gameplay.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientEraState {
     private static volatile Era playerEra = Era.ANCIENT;
     private static volatile Era worldEra = Era.ANCIENT;
-    /** World year computed server-side from the leading civ's era + per-era research progress.
-     *  Negative = BC, positive = AD. Display-only; gameplay never reads this. */
     private static volatile int worldYear = -100000;
 
     private ClientEraState() {

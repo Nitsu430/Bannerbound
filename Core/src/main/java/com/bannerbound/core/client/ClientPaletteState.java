@@ -17,15 +17,15 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * Client mirror of the player's settlement's palette state, fed by {@link PaletteStateSyncPayload}
  * and read by the town hall's Palettes tab. Twin of {@link ClientPolicyState}, plus a cache of the
- * synced palette <b>definitions</b> (name + ordered block-id/bonus lists) so the tab can render
- * each palette's block icons and per-block bonus tooltips.
+ * synced palette definitions ({@link Def}: display name + parallel block-id / bonus lists, so the
+ * tab can render each palette's block icons and per-block bonus tooltips; {@code Def.bonusOf}
+ * returns 0 for blocks a palette doesn't list). Also holds the pending-change confirm votes and
+ * the per-palette suggestion map that the Suggestions tab aggregates.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientPaletteState {
-    /** One palette's renderable definition: display name + parallel block-id / bonus lists. */
     public record Def(String name, List<String> blockIds, List<Float> bonuses) {
-        /** This palette's bonus for {@code blockId}, or {@code 0} when it doesn't list it. */
         public float bonusOf(String blockId) {
             int i = blockIds.indexOf(blockId);
             return i < 0 ? 0f : bonuses.get(i);
@@ -84,7 +84,6 @@ public final class ClientPaletteState {
 
     @Nullable
     public static Def getDef(String paletteId) { return defs.get(paletteId); }
-    /** Display name for a palette id, falling back to the id when its def isn't synced. */
     public static String nameOf(String paletteId) {
         Def def = defs.get(paletteId);
         return def == null ? paletteId : def.name();
@@ -106,10 +105,8 @@ public final class ClientPaletteState {
         return s == null ? List.of() : s;
     }
 
-    /** Full suggestion map — the Suggestions tab aggregates it into its row list. */
     public static Map<String, List<UUID>> getAllSuggestions() { return suggestions; }
 
-    /** Available palettes that aren't already active — the right-hand list. */
     public static List<String> getAvailableNotActive() {
         List<String> out = new ArrayList<>();
         for (String id : available) if (!active.contains(id)) out.add(id);

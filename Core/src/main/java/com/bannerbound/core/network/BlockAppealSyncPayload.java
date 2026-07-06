@@ -13,7 +13,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: the <i>resolved</i> block appeal for the receiving player's settlement —
+ * S->C: the resolved block appeal for the receiving player's settlement -
  * base appeal already combined with the settlement's culture-style overrides. Two parallel
  * lists (block id, appeal). Re-sent whenever the styles change (founding, datapack reload) so
  * the in-game appeal tooltip and the beauty-debug overlay stay accurate.

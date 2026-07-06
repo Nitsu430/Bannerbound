@@ -17,13 +17,17 @@ import net.minecraft.world.item.UseAnim;
 import net.minecraft.world.level.Level;
 
 /**
- * A bamboo blowgun — fires a {@link PoisonDart} from the inventory as ammo, and it draws like a bow:
- * hold to build breath, release to puff. A longer draw flings the dart faster, straighter and further
- * (far beyond a hand throw, which is the weak desperation option). Reusable; one dart per shot. Any
- * poison's dart works as ammo.
+ * A bamboo blowgun - fires a {@link PoisonDart} from the inventory as ammo (any poison's dart
+ * works), and draws like a bow: hold to build breath, release to puff. Power ramps over
+ * FULL_DRAW_TICKS (~1.2s) on the bow's accelerating curve; a longer draw flings the dart faster,
+ * straighter (inaccuracy shrinks to zero at full draw) and further - far beyond a hand throw,
+ * which is the weak desperation option. Reusable; one dart per shot; a sub-0.12-power release is
+ * a wasted breath, not a shot. Uses the TOOT_HORN "raised to the mouth" pose: vanilla renders it
+ * natively in third person, but its first-person switch has no TOOT_HORN case, so
+ * FirstPersonTootHornMixin supplies that, after which the blowgun_draw model's firstperson
+ * display transforms place the tube at the mouth.
  */
 public class BlowgunItem extends Item {
-    /** Ticks of draw for a full-power puff (~1.2s). */
     private static final int FULL_DRAW_TICKS = 24;
     private static final float MIN_SPEED = 1.6F;
     private static final float MAX_SPEED = 3.4F;
@@ -36,7 +40,7 @@ public class BlowgunItem extends Item {
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack blowgun = player.getItemInHand(hand);
         if (findDart(player).isEmpty() && !player.getAbilities().instabuild) {
-            return InteractionResultHolder.fail(blowgun); // no ammo → nothing to draw
+            return InteractionResultHolder.fail(blowgun);
         }
         player.startUsingItem(hand);
         return InteractionResultHolder.consume(blowgun);
@@ -44,10 +48,7 @@ public class BlowgunItem extends Item {
 
     @Override
     public UseAnim getUseAnimation(ItemStack stack) {
-        // TOOT_HORN = the goat-horn "raised to the mouth" pose, which reads as blowing into the
-        // blowgun. Vanilla renders this pose natively in third person; first person is supplied by
-        // FirstPersonTootHornMixin (vanilla's first-person switch has no TOOT_HORN case), after which
-        // the blowgun_draw model's firstperson display transforms place the tube at the mouth.
+        // TOOT_HORN pairs with FirstPersonTootHornMixin - vanilla's first-person switch has no TOOT_HORN case.
         return UseAnim.TOOT_HORN;
     }
 
@@ -64,7 +65,7 @@ public class BlowgunItem extends Item {
         int charge = getUseDuration(blowgun, entity) - timeLeft;
         float power = drawPower(charge);
         if (power < 0.12F) {
-            return; // barely a breath — no shot
+            return;
         }
         boolean creative = player.getAbilities().instabuild;
         ItemStack dart = findDart(player);
@@ -79,7 +80,7 @@ public class BlowgunItem extends Item {
             BlowdartProjectile d = new BlowdartProjectile(level, player, poison);
             float speed = Mth.lerp(power, MIN_SPEED, MAX_SPEED);
             d.shootFromRotation(player, player.getXRot(), player.getYRot(), 0.0F,
-                speed, (1.0F - power) * 1.5F); // tighter aim at full draw
+                speed, (1.0F - power) * 1.5F);
             level.addFreshEntity(d);
         }
         if (!creative && !dart.isEmpty()) {
@@ -88,14 +89,12 @@ public class BlowgunItem extends Item {
         player.getCooldowns().addCooldown(this, 8);
     }
 
-    /** Bow-style power curve: ramps over {@link #FULL_DRAW_TICKS}, accelerating toward full. */
     private static float drawPower(int charge) {
         float f = charge / (float) FULL_DRAW_TICKS;
         f = (f * f + f * 2.0F) / 3.0F;
         return Mth.clamp(f, 0.0F, 1.0F);
     }
 
-    /** The first poison dart found in the player's inventory (empty if none). */
     private static ItemStack findDart(Player player) {
         Inventory inv = player.getInventory();
         for (int i = 0; i < inv.getContainerSize(); i++) {

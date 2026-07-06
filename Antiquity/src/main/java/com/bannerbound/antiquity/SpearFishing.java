@@ -18,20 +18,20 @@ import net.minecraft.world.phys.AABB;
 
 /**
  * Spear fishing's research gate and reel-in target resolution. The rope-tethered throw + reel-in is
- * gated behind {@link #FLAG} (a per-settlement research unlock); spearing a fish still produces the
- * floating catch without it (that's purely cosmetic). The flag id is a constant here so the Research
- * Tree Editor auto-discovers it (matches {@code FisherCatchTable.FLAG_TREASURE_FISHING}).
+ * gated behind FLAG (a per-settlement research unlock); spearing a fish still produces the floating catch
+ * without it (purely cosmetic). FLAG is kept as a plain String constant here (mirroring
+ * FisherCatchTable.FLAG_TREASURE_FISHING) so the Research Tree Editor auto-discovers it. Reel-in
+ * (startReel) is server-side only and scans within REEL_RANGE for the player's nearest tethered catch or
+ * spear; hasTether is a read-only either-side probe the client uses to decide whether a reel-click is
+ * worth sending.
  */
 @ApiStatus.Internal
 public final class SpearFishing {
-    /** Research flag that unlocks the rope-tethered spear + reel-in. */
     public static final String FLAG = "bannerbound.unlock_spear_fishing";
-    /** How far (blocks) a reel-in scan reaches for the player's tethered spear/catch. */
     private static final double REEL_RANGE = 48.0;
 
     private SpearFishing() {}
 
-    /** Whether {@code player}'s settlement has researched spear fishing. Mirrors AnimalBreedingGate. */
     public static boolean unlocked(Player player) {
         if (!(player instanceof ServerPlayer serverPlayer)) {
             return false;
@@ -45,14 +45,10 @@ public final class SpearFishing {
             Settlement settlement = data.getByPlayer(serverPlayer.getUUID());
             return ResearchManager.hasFlag(settlement, FLAG);
         } catch (Exception ex) {
-            return false; // no settlement / not loaded → treat as not unlocked
+            return false;
         }
     }
 
-    /**
-     * Find {@code player}'s nearest rope-tethered catch or spear and start reeling it in. Returns true
-     * if one was found (so the caller can consume the interaction). Server-side only.
-     */
     public static boolean startReel(Player player) {
         Level level = player.level();
         if (level.isClientSide) {
@@ -84,15 +80,12 @@ public final class SpearFishing {
         } else {
             return false;
         }
-        // The yank of the rope as it pulls in (0.8–1.0 pitch — higher sounds off).
         level.playSound(null, player.getX(), player.getY(), player.getZ(),
             BannerboundAntiquity.SPEAR_REEL_SOUND.get(), SoundSource.PLAYERS,
             0.9F, 0.8F + player.getRandom().nextFloat() * 0.2F);
         return true;
     }
 
-    /** Read-only check (works on either side) for whether {@code player} has a tethered spear/catch
-     *  nearby — the client uses it to decide whether an empty-hand reel-click is worth sending. */
     public static boolean hasTether(Player player) {
         Level level = player.level();
         AABB area = player.getBoundingBox().inflate(REEL_RANGE);

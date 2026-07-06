@@ -13,9 +13,10 @@ import net.neoforged.neoforge.event.entity.living.BabyEntitySpawnEvent;
 import net.neoforged.neoforge.event.level.BlockEvent;
 
 /**
- * Vanilla player insight hooks for the event-driven trigger types. {@code obtain_item} is NOT here —
- * it is a holdings poll ({@link InsightManager#tickLevels}) that reads what the settlement actually has
- * (storage + members' inventories), so it needs no per-action hook and never stamps items.
+ * Vanilla player insight hooks for the event-driven trigger types (place_block, breed_animal).
+ * obtain_item is deliberately NOT here: it is a holdings poll (InsightManager.tickLevels) that
+ * reads what the settlement actually has (storage + members' inventories), so it needs no
+ * per-action hook and never stamps items.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 public final class InsightEvents {

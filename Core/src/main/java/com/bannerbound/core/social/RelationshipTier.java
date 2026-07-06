@@ -1,27 +1,30 @@
 package com.bannerbound.core.social;
 
 /**
- * Bucket label for a relationship's signed score. Positive tiers are user-defined and stable;
- * negative tiers are placeholders until the user lands on names — only swap the labels here.
+ * Bucket label for a relationship's signed score, resolved by {@link #of(int)} from a raw -100..100
+ * score against the thresholds in {@link Relationships}. Positive tiers are user-defined and stable;
+ * the negative tiers are placeholder names - only the labels change, not the cutoffs. Ladder:
+ * HATED <=-80, ENEMIES -79..-50, RIVALS -49..-25, DISLIKED -24..-10, STRANGERS -9..9,
+ * ACQUAINTANCES 10..24, FRIENDS 25..49, CLOSE_FRIENDS 50..79, FRIENDS_FOR_LIFE >=80.
+ * <p>
+ * FAMILY is the permanent parent-child bond: stronger than every score-based tier, never decays,
+ * never removable except by the dead-citizen cleanup. {@link Relationship#tier()} returns it
+ * whenever {@code isFamily} is set - the score on family entries is locked at 100 and never moves
+ * through conversations. {@link #displayLabel()} renders the enum name as words (e.g. "Friends for
+ * Life").
  */
 public enum RelationshipTier {
-    HATED,           // <= -80
-    ENEMIES,         // <= -50
-    RIVALS,          // <= -25
-    DISLIKED,        // <= -10
-    STRANGERS,       // -9..9
-    ACQUAINTANCES,   // 10..24
-    FRIENDS,         // 25..49
-    CLOSE_FRIENDS,   // 50..79
-    FRIENDS_FOR_LIFE, // >= 80
-    /** Permanent parent ↔ child bond. Stronger than every score-based tier, never decays,
-     *  never removable except by the cleanup that already drops dead-citizen entries.
-     *  Resolved by {@link Relationship#tier()} when {@code isFamily} is set — score on
-     *  family relationships is locked at 100 and never moves through conversations. */
+    HATED,
+    ENEMIES,
+    RIVALS,
+    DISLIKED,
+    STRANGERS,
+    ACQUAINTANCES,
+    FRIENDS,
+    CLOSE_FRIENDS,
+    FRIENDS_FOR_LIFE,
     FAMILY;
 
-    /** Human-readable label: {@code "Friends for Life"}, {@code "Close Friends"}, etc. Built
-     *  from the enum name by lowercasing, splitting on {@code _}, and capitalising each word. */
     public String displayLabel() {
         String[] parts = name().toLowerCase().split("_");
         StringBuilder sb = new StringBuilder();
@@ -32,7 +35,6 @@ public enum RelationshipTier {
         return sb.toString();
     }
 
-    /** Resolves a tier from a raw -100..100 score. Bounds are inclusive on the lower side. */
     public static RelationshipTier of(int score) {
         if (score >= Relationships.FRIENDS_FOR_LIFE) return FRIENDS_FOR_LIFE;
         if (score >= Relationships.CLOSE_FRIENDS)    return CLOSE_FRIENDS;

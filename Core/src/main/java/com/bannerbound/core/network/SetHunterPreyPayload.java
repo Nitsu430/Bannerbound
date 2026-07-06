@@ -10,9 +10,9 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: toggle one huntable species on/off for a hunter citizen from the Job tab prey picker.
- *  {@code entityTypeId} is the species' registry id string (e.g. {@code "minecraft:cow"}) — the
- *  prey list is the data-driven {@code #bannerbound:huntable} tag, so there's no stable ordinal. */
+/** C->S: toggle one huntable species on/off for a hunter citizen from the Job tab prey picker.
+ *  entityTypeId is the species' registry id string (e.g. "minecraft:cow"); the prey list is the
+ *  data-driven #bannerbound:huntable tag, so there's no stable ordinal to key on. */
 @ApiStatus.Internal
 public record SetHunterPreyPayload(int entityId, String entityTypeId, boolean enabled)
         implements CustomPacketPayload {

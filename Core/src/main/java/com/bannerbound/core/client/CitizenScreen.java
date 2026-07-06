@@ -22,65 +22,66 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Per-citizen detail screen opened by right-clicking a CitizenEntity. Two tabs:
- * <ul>
- *   <li><b>Info</b> — name + heart row + happiness + stamina + workstation/exile buttons.</li>
- *   <li><b>Relationships</b> — one row per other citizen this one has met, with a horizontal
- *       {@code -100..+100} bar (red on the left, green on the right) and the tier label.</li>
- * </ul>
- * Tab navigation lives at the top of the panel; the cancel button persists on both tabs.
+ * Per-citizen detail screen (client-only), opened by right-clicking a CitizenEntity via
+ * OpenCitizenScreenPayload. Four bookmark tabs protrude above the panel: Info (hearts +
+ * happiness/stamina/compliance/resentment bars, optional pregnancy bar, Exile), Relationships
+ * (one -100..+100 bar per met citizen), Thoughts (four pillar gauges + scrolling modifier rows),
+ * and Job (adults only -- children can't be employed, so they get a 3-tab strip).
+ *
+ * Live data flows two ways. refreshFromEntity() re-reads health/stamina/happiness/pregnancy from
+ * the client-side entity every render frame, caching last-good values so the panel doesn't blank
+ * when the citizen briefly leaves view distance. tick() fires a 1 Hz server request whose replies
+ * land in applyLiveState (compliance + viewer-only resentment) and applyJobState (the whole Job
+ * tab). Both handlers ignore any payload whose entityId != this screen's, so a stale reply from a
+ * previously open citizen screen can't clobber the current one. applyJobState calls rebuildWidgets
+ * ONLY on a structural change (employed<->unemployed, permission flip, first packet) so the open
+ * overlay + scroll survive each poll. Thoughts + relationships are frozen at open (re-open to
+ * refresh).
+ *
+ * The Job tab is the bulk of this class. Employed citizens get a primary button (Change Job under a
+ * government; compliance-gated Request switch in anarchy) plus the job's core control and a gear
+ * Options overlay for set-and-forget actions. Crafters route through their bound workshop; stockers
+ * are fully auto (task-board list); tool-slot jobs (forester/digger/farmer/fisher/herder, plus any
+ * registry job that declares an iconRole) show a clickable tool slot -- forester adds a
+ * preferred-wood button, quarryworker a second pickaxe slot, farmer a seed-cache row. Pickers
+ * (job/log/tool/forage/prey/settings) draw as an overlay in renderPolishedExtras that covers the
+ * main controls; Escape closes the overlay, not the whole screen.
+ *
+ * Layout constraints: panelHeight() clamps the design height to the window minus the bookmark strip
+ * (guiScale 4 on 1080p leaves only ~270px) and panelTop() centers panel+tabs as one block so the
+ * protruding tabs stay on-screen -- bottom-anchored button rows ride panelHeight(), not the raw
+ * constant. Job/forage/prey row icons are the settlement's representative tools and may be
+ * undiscovered, so they bypass UnknownItemHelper's "?" swap (UI glyph, not loot); always reset the
+ * bypass to false right after rendering.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class CitizenScreen extends PolishedScreen {
     private static final int PANEL_WIDTH = 284;
-    /** Bumped from 232 in Step 9 to make room for the Compliance bar + Resentment list
-     *  below the Stamina row. Buttons shifted down by the same amount. */
-    /** Tall enough that the Stamina row stays above the Assign / Exile / Cancel button stack
-     *  even when the pregnancy block is showing (PREGNANT_SHIFT pushes Stamina down 14 px). */
-    /** The Farmer is still the tallest Job tab: its content runs down to the seed-cache slot row
-     *  (~panelY+169). After the ⚙ Options de-bloat the employed button stack is at most a primary
-     *  (Change Job) + one 2-wide action row (Drop-off + Options), bottom-anchored, so the topmost
-     *  action button sits at HEIGHT-76. 300 leaves the seed cache a comfortable gap above it (down
-     *  from 344 when every set-and-forget action was a separate main-view button). */
     private static final int PANEL_HEIGHT = 300;
 
-    /** Effective panel height: the design height clamped to the window (minus the bookmark-tab
-     *  strip protruding above), so the panel never overflows short GUI areas (guiScale 4 on
-     *  1080p leaves only 270px). Bottom-anchored rows ride this instead of the raw constant. */
     private int panelHeight() {
         return Math.min(PANEL_HEIGHT, this.height - 8 - BookmarkTab.HEIGHT);
     }
 
-    /** Panel top edge: centered together with the tab strip as one block (TownHall pattern),
-     *  so the tabs protruding above the panel always stay on-screen. */
     private int panelTop() {
         return (this.height - panelHeight() + BookmarkTab.HEIGHT) / 2;
     }
 
-    // Vanilla HUD heart sprites — same artwork the player health bar uses.
     private static final ResourceLocation HEART_FULL_SPRITE =
         ResourceLocation.withDefaultNamespace("hud/heart/full");
     private static final ResourceLocation HEART_HALF_SPRITE =
         ResourceLocation.withDefaultNamespace("hud/heart/half");
-    // Vanilla 1.21.1 calls the empty-heart sprite "container"; "empty" doesn't exist and rendered
-    // as the missing-texture purple-and-black checkerboard.
+    // Vanilla 1.21.1 names the empty-heart sprite "container"; "empty" doesn't exist (renders as missing-texture checkerboard).
     private static final ResourceLocation HEART_EMPTY_SPRITE =
         ResourceLocation.withDefaultNamespace("hud/heart/container");
 
-    /** Relationship-bar colors. Red half on negative side, green on positive — same hex the
-     *  vanilla horse-bond / villager-popularity HUDs use, picked for contrast on a dark panel. */
     private static final int BAR_RED   = 0xFFE57761;
     private static final int BAR_GREEN = 0xFF2EB872;
-    /** White marker dot showing the citizen's current score along the bar. */
     private static final int BAR_DOT   = 0xFFFFFFFF;
 
-    /** Matches the TownHall statuses tab so the two list styles read identically. */
     private static final int THOUGHT_ROW_HEIGHT = 26;
 
-    // ── Happiness bar palette ──────────────────────────────────────────────────────────────────
-    // Segment thresholds match the ones Icons.happiness() already uses to pick the face glyph
-    // — bar colour and face colour stay in agreement (red frown sits in the red region, etc.).
     private static final float HAPPINESS_MID_RATIO  = 0.40f;
     private static final float HAPPINESS_HIGH_RATIO = 0.70f;
     private static final int HAPPINESS_RED    = 0xFFE57761;
@@ -88,82 +89,48 @@ public class CitizenScreen extends PolishedScreen {
     private static final int HAPPINESS_GREEN  = 0xFF2EB872;
     private static final int HAPPINESS_BAR_WIDTH = 160;
     private static final int HAPPINESS_BAR_HEIGHT = 6;
-    /** Vertical shift applied to Happiness + Stamina when the citizen is pregnant — makes room
-     *  for the "Pregnant" label + pink progress bar between Health and Happiness. */
     private static final int PREGNANT_SHIFT = 14;
 
     private enum Tab { INFO, RELATIONSHIPS, THOUGHTS, JOB }
 
-    // ── Job tab state (from CitizenJobStatePayload; refreshed on the 1 Hz live poll) ─────────────
     private boolean jobStateReceived = false;
     private boolean jobCanManage = false;
-    /** Stocker only: the trade-courier opt-in (synced; toggled optimistically on click). */
     private boolean jobTradingCourier = false;
-    /** "" = unemployed. */
     private String jobTypeId = "";
     private boolean jobHasTool = false;
     private net.minecraft.world.item.ItemStack jobToolIcon = net.minecraft.world.item.ItemStack.EMPTY;
-    /** Item id of the current job's icon (settlement's current tool-age tool for the job). */
     private int jobIconItemId = 0;
     private net.minecraft.world.level.block.Block jobPreferredLog =
         net.minecraft.world.level.block.Blocks.OAK_LOG;
     private boolean jobDropOffSet = false;
     private boolean jobSeedSourceSet = false;
-    /** Settlement is in anarchy: the citizen self-organized into its job; the player may only request
-     *  a switch to another gatherer job (compliance-gated) and set the drop-off — not freely
-     *  assign/unassign. */
     private boolean jobAnarchy = false;
-    /** Forester only: whether canopy saplings/apples/sticks are stored (true) or only logs are kept. */
     private boolean jobForesterKeepExtras = true;
-    /** True when the player pinned this citizen's job (manual override; the labor distributor leaves
-     *  them alone). Cleared by Unassign under a government. */
     private boolean jobPinned = false;
-    /** True while the citizen is under a recent "won't work as that" refusal — the "Request switch"
-     *  button stays greyed until it lapses so re-requests can't be spammed. */
     private boolean jobSwitchRefused = false;
-    /** Live work-status verdict for the headline (derived server-side or goal-published). */
     private com.bannerbound.core.entity.CitizenWorkStatus jobWorkStatus =
         com.bannerbound.core.entity.CitizenWorkStatus.IDLE;
-    /** Forester only: Silviculture researched, so the Options panel offers "Select plantation area". */
     private boolean jobPlantationUnlocked = false;
-    /** Forager only: bitmask of categories the player has switched on, and of those the settlement
-     *  has researched (the rest render LOCKED). */
     private int forageEnabledBits = 0;
     private int forageUnlockedBits = 0;
-    /** Farmer only: the buffered seeds in the seed cache (read-only display). */
     private List<net.minecraft.world.item.ItemStack> seedCache = java.util.List.of();
     private List<String> jobUnlocked = java.util.List.of();
-    /** Parallel to {@link #jobUnlocked}: each unlocked job's icon item id. */
     private List<Integer> jobUnlockedIcons = java.util.List.of();
-    /** Item ids of the axes the tool slot will accept (current tool age or lower). */
     private java.util.Set<Integer> allowedToolItemIds = java.util.Set.of();
-    // Quarryworker second (pickaxe) slot.
     private boolean jobPickaxeUnlocked = false;
     private boolean jobHasPickaxe = false;
     private net.minecraft.world.item.ItemStack jobPickaxeIcon = net.minecraft.world.item.ItemStack.EMPTY;
     private java.util.Set<Integer> allowedPickaxeItemIds = java.util.Set.of();
-    /** Which slot the open TOOL_PICK overlay is filling: true = pickaxe (2nd) slot, false = primary. */
     private boolean toolPickPickaxe = false;
-    /** Which Job-tab overlay (job picker / log picker / tool picker) is currently open. */
     private enum JobOverlay { NONE, JOB_PICK, LOG_PICK, TOOL_PICK, FORAGE_PICK, PREY_PICK, SETTINGS }
 
-    /** One row of the ⚙ Options overlay: a set-and-forget action folded off the main view to keep
-     *  it un-bloated. {@code enabled=false} greys the row (e.g. no Foreman's Rod in hand) and shows
-     *  {@code tooltip}; the action fires the same payload the old main-view button did. */
     private record JobOption(Component label, Runnable action, boolean enabled, Component tooltip) {}
     private final java.util.List<JobOption> settingsOptions = new java.util.ArrayList<>();
     private JobOverlay jobOverlay = JobOverlay.NONE;
     private int jobOverlayScroll = 0;
-    /** Hunter only: entity-type ids the player switched OFF in the prey picker (server-synced;
-     *  everything in the huntable tag defaults ON). */
     private java.util.Set<String> hunterPreyOff = new java.util.HashSet<>();
-    /** The huntable species rows for the prey picker — read from the (client-synced)
-     *  {@code #bannerbound:huntable} tag when the overlay opens, sorted by id for a stable order. */
     private final java.util.List<net.minecraft.world.entity.EntityType<?>> preyList = new java.util.ArrayList<>();
-    /** Cached valid log blocks for the preferred-wood picker (built lazily). */
     private final java.util.List<net.minecraft.world.level.block.Block> validLogs = new java.util.ArrayList<>();
-    /** Player-inventory axe slots for the tool picker, rebuilt when the overlay opens.
-     *  Each entry is the inventory slot index. */
     private final java.util.List<Integer> axeSlots = new java.util.ArrayList<>();
 
     private final int entityId;
@@ -171,38 +138,21 @@ public class CitizenScreen extends PolishedScreen {
     private final int happinessMax;
     private final boolean canModify;
     private final List<RelationshipEntry> relationships;
-    /** Frozen-at-open snapshot of the citizen's active thoughts. Thoughts decay slowly enough
-     *  that re-fetching on every frame would be wasteful — re-open the screen to refresh. */
     private final List<ThoughtEntry> thoughts;
-    /** Step 9: compliance + the viewer's own resentment (server-filtered for privacy).
-     *  Updated live by a 1-Hz polling request fired from {@link #tick()} — see
-     *  {@link #applyLiveState(com.bannerbound.core.network.CitizenLiveStatePayload)}.
-     *  Initial values come from the open payload so the first render frame already has
-     *  something to show. */
     private int compliance;
     private int viewerResentment;
-    /** Counter so the 1-Hz refresh doesn't fire every tick. */
     private int liveStateTickCounter = 0;
 
-    // Live-read stats: refreshed each render frame from the entity via SynchedEntityData / vanilla
-    // health sync. We cache the last good values so the panel doesn't blank when the citizen
-    // briefly leaves view distance.
     private float lastHealth;
     private float lastMaxHealth;
     private int lastStamina;
     private int lastStaminaMax;
     private int lastHappiness;
-    /** Live pregnancy flag — read from the entity's synched data every render frame. The Info
-     *  tab inserts a pink "Pregnant" line between Health and Happiness when this is true. */
     private boolean lastPregnant;
-    /** Game-tick at which the pregnancy started, or {@code -1L} if not pregnant. Synced from
-     *  the entity — paired with the live world game-time to render the pregnancy progress bar. */
     private long lastPregnantSinceTick = -1L;
 
     private Tab activeTab = Tab.INFO;
-    /** Vertical scroll offset (pixels) for the Relationships list. Clamped on render. */
     private int relScroll = 0;
-    /** Vertical scroll offset (pixels) for the Thoughts list. Clamped on render. */
     private int thoughtScroll = 0;
 
     public CitizenScreen(OpenCitizenScreenPayload payload) {
@@ -219,8 +169,6 @@ public class CitizenScreen extends PolishedScreen {
         this.thoughts = payload.thoughts();
         this.compliance = payload.compliance();
         this.viewerResentment = payload.viewerResentment();
-        // Seed the cache with the packet snapshot so the first render frame has something to show
-        // before the live lookup runs.
         this.lastHealth = payload.currentHealth();
         this.lastMaxHealth = payload.maxHealth();
         this.lastStamina = payload.stamina();
@@ -237,10 +185,6 @@ public class CitizenScreen extends PolishedScreen {
         return activeTab == Tab.JOB;
     }
 
-    /** Apply a server-sent live update for compliance + resentment. Called from the network
-     *  handler; the request that triggers it is fired from {@link #tick()} once a second.
-     *  Returning quickly when entityId doesn't match keeps stray updates from a previously
-     *  open citizen screen from clobbering the current one. */
     public void applyLiveState(com.bannerbound.core.network.CitizenLiveStatePayload payload) {
         if (payload.entityId() != this.entityId) return;
         this.compliance = payload.compliance();
@@ -250,18 +194,12 @@ public class CitizenScreen extends PolishedScreen {
     @Override
     public void tick() {
         super.tick();
-        // 1 Hz refresh — cheap; one VAR_INT to the server, ~20 bytes back. Cheaper than
-        // adding compliance/resentment to SynchedEntityData since we only pay when a screen
-        // is actually open.
         if (liveStateTickCounter++ % 20 == 0) {
             net.neoforged.neoforge.network.PacketDistributor.sendToServer(
                 new com.bannerbound.core.network.RequestCitizenLiveStatePayload(entityId));
         }
     }
 
-    /** Refreshes {@link #lastHealth}/{@link #lastStamina}/{@link #lastHappiness} from the live
-     *  entity if the client has it loaded. Called once per render frame so the panel updates
-     *  while open (health regen, stamina drain, happiness shifts from incoming thoughts). */
     private void refreshFromEntity() {
         if (this.minecraft == null || this.minecraft.level == null) return;
         net.minecraft.world.entity.Entity e = this.minecraft.level.getEntity(entityId);
@@ -281,29 +219,19 @@ public class CitizenScreen extends PolishedScreen {
         layoutForActiveTab();
     }
 
-    /** Clears existing widgets and rebuilds them for the current {@link #activeTab}. Called
-     *  initially and on every tab switch. (Named to not shadow {@code Screen.rebuildWidgets()}.) */
     private void layoutForActiveTab() {
         this.clearWidgets();
         final int panelX = (this.width - PANEL_WIDTH) / 2;
         final int panelY = panelTop();
         final int btnWidth = PANEL_WIDTH - 24;
 
-        // ── Panel chrome + tab strip (drawn every frame for both tabs) ─────────────────────────
         this.addRenderableOnly((graphics, mouseX, mouseY, partialTick) -> {
             drawIdentityPanel(graphics, panelX, panelY, PANEL_WIDTH, panelHeight(), identityAccents);
-            // Centered citizen name — rendered as the styled Component so the gender glyph
-            // (custom-font) and settlement-color tint survive. Vertically centered in the
-            // header block now that the tabs live above the panel as bookmarks.
             graphics.drawCenteredString(this.font, citizenName,
                 panelX + PANEL_WIDTH / 2, panelY + 20, 0xFFFFFFFF);
-            // Header divider — the standard identity gradient (TownHall treatment).
             drawIdentityDivider(graphics, panelX + 8, panelY + 48, PANEL_WIDTH - 16, identityAccents);
         });
 
-        // ── Bookmark tabs (protrude above the panel's top edge — the house tab style) ──────────
-        // Children have no Job tab (they can't be employed), so the strip is 3 tabs for them, 4 for
-        // adults.
         boolean showJob = !isCitizenChild();
         if (activeTab == Tab.JOB && !showJob) activeTab = Tab.INFO;
         final java.util.List<Tab> tabOrder = new java.util.ArrayList<>(
@@ -331,7 +259,6 @@ public class CitizenScreen extends PolishedScreen {
             case JOB           -> buildJobTab(panelX, panelY, btnWidth);
         }
 
-        // Cancel button persists across tabs.
         this.addRenderableWidget(PolishButton.polished(
             Component.translatable("gui.cancel"),
             btn -> this.onClose())
@@ -340,8 +267,6 @@ public class CitizenScreen extends PolishedScreen {
             .build());
     }
 
-    /** True if the viewed citizen is a child (read live from the entity). Children can't be
-     *  employed, so they get no Job tab. */
     private boolean isCitizenChild() {
         if (this.minecraft != null && this.minecraft.level != null
             && this.minecraft.level.getEntity(entityId)
@@ -357,11 +282,6 @@ public class CitizenScreen extends PolishedScreen {
             int statsY = panelY + 60;
             drawHeartRow(graphics, statsX, statsY, "bannerbound.citizen.health",
                 lastHealth, lastMaxHealth);
-            // "Pregnant" label + a pink progress bar showing how far along she is. The bar
-            // reads {@code (now - pregnantSinceTick) / PREGNANCY_DURATION_TICKS}, fills left
-            // to right, refreshes live every frame (synced data carries the start tick). When
-            // pregnant the Happiness + Stamina rows shift down by PREGNANT_SHIFT to make room
-            // for the label + bar; when not pregnant the layout is unchanged.
             int shift = lastPregnant ? PREGNANT_SHIFT : 0;
             if (lastPregnant) {
                 Component label = Component.translatable("bannerbound.citizen.pregnant")
@@ -372,7 +292,6 @@ public class CitizenScreen extends PolishedScreen {
                 int barX = panelX + PANEL_WIDTH / 2 - barW / 2;
                 int barY = statsY + 24;
                 int barH = 4;
-                // Dark track + outline so the bar reads on the panel background.
                 graphics.fill(barX, barY, barX + barW, barY + barH, 0xFF2A1A22);
                 graphics.renderOutline(barX - 1, barY - 1, barW + 2, barH + 2, 0xFF000000);
                 if (lastPregnantSinceTick > 0L
@@ -385,31 +304,19 @@ public class CitizenScreen extends PolishedScreen {
                     graphics.fill(barX, barY, barX + fill, barY + barH, 0xFFFF7AC8);
                 }
             }
-            // Happiness gets a centered title + segmented bar block instead of a one-line row
-            // so it reads as the citizen's primary mood, not just another stat. Takes ~30 px
-            // vertical; stamina row slides down to compensate.
             Component happinessTip = drawHappinessBlock(graphics, panelX + PANEL_WIDTH / 2,
                 statsY + 24 + shift, HAPPINESS_BAR_WIDTH, lastHappiness, happinessMax, mouseX, mouseY);
             drawStaminaRow(graphics, statsX, statsY + 64 + shift, "bannerbound.citizen.stamina",
                 lastStamina, lastStaminaMax);
-            // Step 9 rows. drawStaminaRow's three-tone palette works for compliance too —
-            // green/yellow/red read "obedient/wavering/insubordinate" without retuning.
             drawStaminaRow(graphics, statsX, statsY + 80 + shift, "bannerbound.citizen.compliance",
                 compliance, 100);
-            // Resentment toward the viewing player only. Same bar shape, inverted palette
-            // (high = red = "they hate you"). Clamped to 100 for the bar display since
-            // resentment past 100 only deepens the same "hostile" reading.
             drawInvertedBar(graphics, statsX, statsY + 96 + shift,
                 "bannerbound.citizen.resentment", Math.min(100, viewerResentment), 100);
-            // Happiness explainer — drawn last so it floats above every row it might overlap.
             if (happinessTip != null) {
                 graphics.renderTooltip(this.font, this.font.split(happinessTip, 200), mouseX, mouseY);
             }
         });
 
-        // Buttons block sits below the Step-9 resentment list. Job assignment now lives on the Job
-        // tab (the old "Assign to Workstation" button was removed with the workstation blocks), so
-        // the Info tab just carries Exile.
         int btnY = panelY + 200;
         Button exile = PolishButton.polished(
             Component.translatable("bannerbound.citizen.exile").withStyle(ChatFormatting.RED),
@@ -423,8 +330,6 @@ public class CitizenScreen extends PolishedScreen {
         this.addRenderableWidget(exile);
     }
 
-    // ── Job tab ──────────────────────────────────────────────────────────────────────────────────
-
     private static final String FORESTER_TYPE = "foresters_log";
     private static final String DIGGER_TYPE = "diggers_slab";
     private static final String FARMER_TYPE = "farmers_granary";
@@ -433,19 +338,11 @@ public class CitizenScreen extends PolishedScreen {
     private static final String HERDER_TYPE = "herders_pen";
     private static final String HUNTER_TYPE = "hunters_camp";
 
-    /** True for jobs that take a held tool in the tool slot (forester axe, digger shovel, farmer hoe,
-     *  fisher rod, herder fiber rope) — plus any {@link com.bannerbound.core.api.job.CitizenJobRegistry
-     *  registry} job that declares {@code toolRequired} (e.g. the Antiquity spear fisher's bone spear).
-     *  Tool-slot jobs render the tool row + a Set-drop-location button. */
     private static boolean jobHasToolSlot(String typeId) {
         if (FORESTER_TYPE.equals(typeId) || DIGGER_TYPE.equals(typeId)
             || FARMER_TYPE.equals(typeId) || FISHER_TYPE.equals(typeId)
             || HERDER_TYPE.equals(typeId)) return true;
-        // The stocker is pure logistics — no tool, no drop-off; its Job tab shows the task list
-        // instead (its icon role exists only for the BUNDLE job glyph, not a tool slot).
         if (com.bannerbound.core.entity.StockerWorkGoal.JOB_TYPE_ID.equals(typeId)) return false;
-        // A registry job shows the tool slot whenever it declares a tool role — even when the tool is
-        // OPTIONAL (e.g. the spear fisher works bare-handed but lets you install a better spear).
         com.bannerbound.core.api.job.CitizenJobRegistry.JobDef d =
             com.bannerbound.core.api.job.CitizenJobRegistry.byId(typeId);
         return d != null && d.iconRole() != null;
@@ -459,34 +356,24 @@ public class CitizenScreen extends PolishedScreen {
         }
         return false;
     }
-    /** Slot / button geometry for the Job tab, relative to the panel. */
     private static final int JOB_CONTENT_Y = 58;
     private static final int JOB_TOOL_SLOT = 18;
     private static final int JOB_LOG_BTN = 24;
-    /** Picker overlay metrics (shared by the job / log / tool overlays). */
     private static final int JOB_OVERLAY_ROW_H = 20;
-    /** Farmer seed-cache slot count — mirrors the {@code SimpleContainer} size on the citizen. */
     private static final int SEED_CACHE_SLOTS = 6;
 
-    // Workshop state plus current profession XP for the Job tab. Empty workshopId = workshop job
-    // without a binding; non-workshop jobs still receive jobSkillXp from their job id bucket.
     private String jobWorkshopId = "";
     private String jobWorkshopName = "";
     private String jobWorkshopTypeId = "";
     private int jobSkillXp;
 
-    // Stocker-only state: the settlement task board (queue order) for the "Active tasks" list.
-    // States: 0 = open, 1 = claimed by another stocker, 2 = THIS citizen's current haul.
+    // Task states: 0 = open, 1 = claimed by another stocker, 2 = THIS citizen's current haul.
     private java.util.List<Integer> stockerTaskItems = java.util.List.of();
     private java.util.List<Integer> stockerTaskCounts = java.util.List.of();
     private java.util.List<String> stockerTaskDests = java.util.List.of();
     private java.util.List<Integer> stockerTaskStates = java.util.List.of();
-    /** The citizen's work site is an outpost: storage is outpost-decided, drop button greys. */
     private boolean jobOutpostManaged;
 
-    /** Apply a server job-state push (open + 1 Hz poll). Rebuilds widgets only when the structural
-     *  layout changes (employed↔unemployed, permission flip, first packet) so the open overlay +
-     *  scroll aren't reset on every poll. */
     public void applyJobState(com.bannerbound.core.network.CitizenJobStatePayload p) {
         if (p.entityId() != this.entityId) return;
         boolean prevEmployed = !this.jobTypeId.isEmpty();
@@ -552,7 +439,6 @@ public class CitizenScreen extends PolishedScreen {
         }
     }
 
-    /** Y of the "Back" button shown while an overlay is open (just above the persistent Cancel). */
     private int jobBackBtnY(int panelY) { return panelY + panelHeight() - 52; }
 
     private void openJobOverlay(JobOverlay overlay) {
@@ -565,8 +451,6 @@ public class CitizenScreen extends PolishedScreen {
         rebuildWidgets();
     }
 
-    /** Rebuilds the prey-picker rows from the huntable entity-type tag (synced to the client with
-     *  every other registry tag), sorted by id so the row order is stable across opens. */
     private void buildPreyList() {
         preyList.clear();
         net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
@@ -576,8 +460,6 @@ public class CitizenScreen extends PolishedScreen {
             net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(t).toString()));
     }
 
-    /** Opens the tool picker for the primary slot ({@code pickaxe == false}) or the quarryworker's
-     *  pickaxe slot ({@code true}), filtering the list to that slot's allowed items. */
     private void openToolPick(boolean pickaxe) {
         toolPickPickaxe = pickaxe;
         openJobOverlay(JobOverlay.TOOL_PICK);
@@ -611,14 +493,11 @@ public class CitizenScreen extends PolishedScreen {
 
     private void buildJobTab(int panelX, int panelY, int btnWidth) {
         final int sy = panelY + JOB_CONTENT_Y;
-        // Main-view content is drawn only when no overlay is open; the overlay list draws itself in
-        // render() so it cleanly covers the area instead of overlapping the main controls.
         this.addRenderableOnly((graphics, mouseX, mouseY, partialTick) ->
             renderJobMain(graphics, panelX, panelY, sy));
 
         if (!jobStateReceived || !jobCanManage) return;
 
-        // Overlay open → the only control is a Back button (Cancel still persists below it).
         if (jobOverlay != JobOverlay.NONE) {
             this.addRenderableWidget(PolishButton.polished(
                     Component.translatable("bannerbound.citizen.job.back"),
@@ -628,7 +507,6 @@ public class CitizenScreen extends PolishedScreen {
             return;
         }
 
-        // Main view buttons. Unemployed → just the assign picker.
         if (jobTypeId.isEmpty()) {
             this.addRenderableWidget(PolishButton.polished(
                     Component.translatable("bannerbound.citizen.job.assign"),
@@ -638,11 +516,6 @@ public class CitizenScreen extends PolishedScreen {
             return;
         }
 
-        // Employed: the main view carries only the everyday controls — the primary "Change Job"
-        // (one-click reassign/unassign via the picker), the job's most-used control (drop-off, or a
-        // core target picker), and a "⚙ Options" gate for the set-and-forget actions. All the rare
-        // configure-once actions live in the SETTINGS overlay (buildSettingsOptions) to keep this
-        // panel un-bloated.
         int primaryY = panelY + panelHeight() - 52;
         int actionStartY = primaryY - 24;
         int actionIndex = 0;
@@ -650,8 +523,6 @@ public class CitizenScreen extends PolishedScreen {
         buildSettingsOptions();
 
         if (com.bannerbound.core.entity.CrafterWorkGoal.isWorkshopJob(jobTypeId)) {
-            // Crafter: everything routes through the bound workshop — Open / Choose Workshop is the
-            // one core control. No tool, no drop-off, no Options.
             final String workshopId = jobWorkshopId;
             if (workshopId.isEmpty()) {
                 actionIndex = addJobActionButton(panelX, actionStartY, btnWidth, actionIndex,
@@ -673,8 +544,6 @@ public class CitizenScreen extends PolishedScreen {
             return;
         }
         if (com.bannerbound.core.entity.StockerWorkGoal.JOB_TYPE_ID.equals(jobTypeId)) {
-            // Stocker: fully auto from the task board — plus the trade-courier opt-in: a Trading
-            // stocker may be adopted to physically walk a deal's goods to the partner settlement.
             if (jobCanManage) {
                 final boolean on = jobTradingCourier;
                 Button trading = PolishButton.polished(
@@ -695,9 +564,6 @@ public class CitizenScreen extends PolishedScreen {
             return;
         }
 
-        // Storage is no longer marked per worker — every settlement worker deposits into / takes from
-        // the shared storage pool (open stockpiles + loose baskets), governed by per-stockpile
-        // toggles. Only the forager/hunter core target pickers remain on the action row.
         if (FORAGER_TYPE.equals(jobTypeId)) {
             actionIndex = addJobActionButton(panelX, actionStartY, btnWidth, actionIndex,
                 Component.translatable("bannerbound.forager.picker.title"),
@@ -709,7 +575,6 @@ public class CitizenScreen extends PolishedScreen {
                 btn -> openJobOverlay(JobOverlay.PREY_PICK));
         }
 
-        // ⚙ Options — only when this job actually has set-and-forget actions to fold away.
         if (!settingsOptions.isEmpty()) {
             actionIndex = addJobActionButton(panelX, actionStartY, btnWidth, actionIndex,
                 Component.translatable("bannerbound.citizen.job.options"),
@@ -717,9 +582,6 @@ public class CitizenScreen extends PolishedScreen {
         }
     }
 
-    /** The primary employed-view button: "Change Job" under a government (opens the picker, which
-     *  leads with "— Make idle —" so reassign and unassign are one click), or the compliance-gated
-     *  "Request switch" in anarchy. */
     private void addPrimaryJobButton(int panelX, int panelY, int btnWidth, int primaryY) {
         if (jobAnarchy) {
             Button reqSwitch = PolishButton.polished(
@@ -731,7 +593,6 @@ public class CitizenScreen extends PolishedScreen {
                         ? "bannerbound.citizen.job.switch_refused_tooltip"
                         : "bannerbound.citizen.job.anarchy_hint")))
                 .build();
-            // Greyed while a recent switch request is still being refused (NO_WORK_AS_JOB active).
             reqSwitch.active = !jobSwitchRefused;
             this.addRenderableWidget(reqSwitch);
         } else {
@@ -743,15 +604,11 @@ public class CitizenScreen extends PolishedScreen {
         }
     }
 
-    /** Builds the ⚙ Options rows for the current job — the set-and-forget actions folded off the
-     *  main view. Each row fires the same payload its old main-view button did. */
     private void buildSettingsOptions() {
         settingsOptions.clear();
         if (jobTypeId.isEmpty()) return;
         boolean hasRod = playerHasForemanRod();
         Component noRod = Component.translatable("bannerbound.citizen.job.no_rod_tooltip");
-        // No tool-depot / drop-off / seed marking anymore — workers source tools, seeds, and a
-        // deposit target from the settlement storage pool. Only the rod-area + forester options remain.
         if (FORESTER_TYPE.equals(jobTypeId)) {
             boolean keep = jobForesterKeepExtras;
             settingsOptions.add(new JobOption(
@@ -760,7 +617,6 @@ public class CitizenScreen extends PolishedScreen {
                 () -> net.neoforged.neoforge.network.PacketDistributor.sendToServer(
                     new com.bannerbound.core.network.SetForesterKeepExtrasPayload(entityId, !keep)),
                 true, Component.translatable("bannerbound.citizen.job.extras_tooltip")));
-            // Tree plantation area — research-gated (Silviculture), needs a rod in hand.
             if (jobPlantationUnlocked) {
                 settingsOptions.add(new JobOption(
                     Component.translatable("bannerbound.citizen.job.select_plantation_area"),
@@ -779,7 +635,6 @@ public class CitizenScreen extends PolishedScreen {
         }
     }
 
-    /** Draws the Job tab's main view (skipped while an overlay is open). */
     private void renderJobMain(GuiGraphics graphics, int panelX, int panelY, int sy) {
         if (jobOverlay != JobOverlay.NONE) return;
         int x = panelX + 14;
@@ -793,19 +648,14 @@ public class CitizenScreen extends PolishedScreen {
                 Component.translatable("bannerbound.job.unemployed").withStyle(ChatFormatting.GRAY),
                 x, sy, 0xFFCCCCCC, false);
         } else {
-            // Job title + icon (the settlement's current tool-age tool for this job). The item may
-            // be undiscovered, so bypass the unknown-item "?" swap — it's a UI glyph, not loot.
             UnknownItemHelper.setBypassUnknownSwap(true);
             graphics.renderItem(itemFromId(jobIconItemId), x, sy - 3);
             UnknownItemHelper.setBypassUnknownSwap(false);
             graphics.drawString(this.font, jobTitle(jobTypeId).withStyle(ChatFormatting.WHITE),
                 x + 20, sy + 1, 0xFFFFFFFF, false);
-            // Status headline — the glanceable "is this worker working, and if not why" verdict.
-            // Colour by category: green = working, amber = idle/waiting, red = hard blocker.
             graphics.drawString(this.font, statusLine(), x + 20, sy + 11, statusColor(), false);
             boolean workshopJob = com.bannerbound.core.entity.CrafterWorkGoal.isWorkshopJob(jobTypeId);
             if (workshopJob) {
-                // Workshop row: the bound workshop's name (custom or derived type), or a red hint.
                 Component workshopName = jobWorkshopId.isEmpty()
                     ? Component.translatable("bannerbound.citizen.job.no_workshop")
                         .withStyle(ChatFormatting.RED)
@@ -819,8 +669,6 @@ public class CitizenScreen extends PolishedScreen {
                         .withStyle(ChatFormatting.GRAY)
                         .append(" ").append(workshopName),
                     x, sy + 28, 0xFFFFFFFF, false);
-                // Skill line + villager-style XP bar: tier name, then progress through the current
-                // band toward the next promotion. Live -- jobSkillXp refreshes on the 1 Hz poll.
                 if (!jobWorkshopId.isEmpty()) {
                     Component tier = Component.translatable("bannerbound.skill."
                             + com.bannerbound.core.api.quality.QualityMath.skillTierKey(jobSkillXp))
@@ -832,7 +680,6 @@ public class CitizenScreen extends PolishedScreen {
                     int barY = sy + 56;
                     float progress = com.bannerbound.core.api.quality.QualityMath
                         .skillProgress(jobSkillXp);
-                    // The villager trade-XP palette: near-black track, thin lime fill.
                     graphics.fill(x - 1, barY - 1, x + barW + 1, barY + 4, 0xFF000000);
                     graphics.fill(x, barY, x + barW, barY + 3, 0xFF2B2B2B);
                     graphics.fill(x, barY, x + (int) (barW * progress), barY + 3, 0xFF80FF20);
@@ -842,8 +689,6 @@ public class CitizenScreen extends PolishedScreen {
                 drawSkillLine(graphics, x, sy + 28);
             }
             if (com.bannerbound.core.entity.StockerWorkGoal.JOB_TYPE_ID.equals(jobTypeId)) {
-                // "Active tasks" — the settlement haul board in queue order. This citizen's own
-                // haul glows lime, other stockers' claims gray out, open orders stay white.
                 graphics.drawString(this.font,
                     Component.translatable("bannerbound.citizen.job.tasks_header")
                         .withStyle(ChatFormatting.GRAY),
@@ -882,7 +727,6 @@ public class CitizenScreen extends PolishedScreen {
             if (jobHasToolSlot(jobTypeId)) {
                 int toolY = workshopJob ? sy + 72 : sy + 50;
                 int toolSlotY = toolY - 4;
-                // Tool row (label left, slot right) — shared by forester (axe) + digger (shovel).
                 graphics.drawString(this.font,
                     Component.translatable("bannerbound.citizen.job.tool").withStyle(ChatFormatting.GRAY),
                     x, toolY, 0xFFCCCCCC, false);
@@ -893,7 +737,6 @@ public class CitizenScreen extends PolishedScreen {
                 }
                 int statusY = toolY + 26;
                 if (FORESTER_TYPE.equals(jobTypeId)) {
-                    // Preferred-wood row (forester only) — one row below the tool row.
                     graphics.drawString(this.font,
                         Component.translatable("bannerbound.citizen.job.preferred_wood").withStyle(ChatFormatting.GRAY),
                         x, toolY + 26, 0xFFCCCCCC, false);
@@ -904,7 +747,6 @@ public class CitizenScreen extends PolishedScreen {
                     graphics.renderItem(new net.minecraft.world.item.ItemStack(jobPreferredLog), lbx + 4, lby + 4);
                     statusY = toolY + 54;
                 } else if (DIGGER_TYPE.equals(jobTypeId) && jobPickaxeUnlocked) {
-                    // Pickaxe row (quarryworker, after the Quarry research) — second tool slot.
                     graphics.drawString(this.font,
                         Component.translatable("bannerbound.citizen.job.pickaxe").withStyle(ChatFormatting.GRAY),
                         x, toolY + 24, 0xFFCCCCCC, false);
@@ -916,11 +758,7 @@ public class CitizenScreen extends PolishedScreen {
                     statusY = toolY + 50;
                 }
                 if (!workshopJob) {
-                    // Storage status: whether this worker has anywhere in the settlement storage pool
-                    // to bank its yield (outpost workers use their own outpost chest instead).
                     graphics.drawString(this.font, storageStatus(jobDropOffSet), x, statusY, 0xFFFFFFFF, false);
-                    // Farmer also shows whether seeds are reachable + the seed cache (overflow seeds it
-                    // saved when storage was full; replanted before pulling fresh seeds from the pool).
                     if (FARMER_TYPE.equals(jobTypeId)) {
                         graphics.drawString(this.font, seedStatus(jobSeedSourceSet), x, statusY + 14, 0xFFFFFFFF, false);
                         int cacheLabelY = statusY + 30;
@@ -939,7 +777,6 @@ public class CitizenScreen extends PolishedScreen {
                     }
                 }
             } else if (FORAGER_TYPE.equals(jobTypeId)) {
-                // No tool slot — storage-pool status + gather-picker hint, below the skill line/bar.
                 graphics.drawString(this.font, storageStatus(jobDropOffSet), x, sy + 50, 0xFFFFFFFF, false);
                 graphics.drawString(this.font,
                     Component.translatable("bannerbound.forager.picker.hint").withStyle(ChatFormatting.DARK_GRAY),
@@ -953,8 +790,6 @@ public class CitizenScreen extends PolishedScreen {
         }
     }
 
-    /** Storage-pool status line for a worker: green when it has somewhere to bank its yield (an
-     *  outpost chest, or any deposit-open stockpile/basket in the pool), red when nothing is open. */
     private Component storageStatus(boolean hasStorage) {
         if (jobOutpostManaged) {
             return Component.translatable("bannerbound.citizen.job.outpost_storage").withStyle(ChatFormatting.GREEN);
@@ -964,8 +799,6 @@ public class CitizenScreen extends PolishedScreen {
             : Component.translatable("bannerbound.citizen.job.storage_none").withStyle(ChatFormatting.RED);
     }
 
-    /** Seed-availability status line for the farmer: green when seeds are reachable (outpost chest or
-     *  any take-open pooled storage holding seeds), red when none are. */
     private Component seedStatus(boolean hasSeeds) {
         if (jobOutpostManaged) {
             return Component.translatable("bannerbound.citizen.job.outpost_storage").withStyle(ChatFormatting.GREEN);
@@ -984,13 +817,11 @@ public class CitizenScreen extends PolishedScreen {
     private int jobToolSlotX(int panelX) { return panelX + PANEL_WIDTH - 14 - JOB_TOOL_SLOT; }
     private int jobLogBtnX(int panelX) { return panelX + PANEL_WIDTH - 14 - JOB_LOG_BTN; }
 
-    /** The status-headline label, from {@code bannerbound.citizen.job.status.<name>}. */
     private Component statusLine() {
         return Component.translatable(
             "bannerbound.citizen.job.status." + jobWorkStatus.name().toLowerCase(java.util.Locale.ROOT));
     }
 
-    /** Headline colour bucketed by {@link com.bannerbound.core.entity.CitizenWorkStatus.Category}. */
     private void drawSkillLine(GuiGraphics graphics, int x, int y) {
         Component tier = Component.translatable("bannerbound.skill."
                 + com.bannerbound.core.api.quality.QualityMath.skillTierKey(jobSkillXp))
@@ -1006,7 +837,6 @@ public class CitizenScreen extends PolishedScreen {
         graphics.fill(x, barY, x + (int) (barW * progress), barY + 3, 0xFF80FF20);
     }
 
-    /** Headline colour bucketed by {@link com.bannerbound.core.entity.CitizenWorkStatus.Category}. */
     private int statusColor() {
         return switch (jobWorkStatus.category()) {
             case GOOD -> 0xFF55DD55;
@@ -1023,7 +853,6 @@ public class CitizenScreen extends PolishedScreen {
         if (custom != null) {
             return Component.empty().append(custom);
         }
-        // The digger is a "Digger" until the Quarry research, then a "Quarryworker".
         if (DIGGER_TYPE.equals(typeId)) {
             return Component.translatable(jobPickaxeUnlocked
                 ? "bannerbound.job.diggers_slab" : "bannerbound.job.diggers_slab.base");
@@ -1031,7 +860,6 @@ public class CitizenScreen extends PolishedScreen {
         return Component.translatable("bannerbound.job." + (typeId == null || typeId.isEmpty() ? "unemployed" : typeId));
     }
 
-    /** Resolves a block id string to a Block; oak log on any failure. */
     private static net.minecraft.world.level.block.Block resolveLog(String id) {
         if (id != null && !id.isEmpty()) {
             ResourceLocation rl = ResourceLocation.tryParse(id);
@@ -1042,8 +870,6 @@ public class CitizenScreen extends PolishedScreen {
         return net.minecraft.world.level.block.Blocks.OAK_LOG;
     }
 
-    /** Builds the discoverable {@code *_log}/{@code *_stem} list for the preferred-wood picker —
-     *  mirrors the old Forester's Log screen's filter. */
     private void buildValidLogList() {
         validLogs.clear();
         for (net.minecraft.world.level.block.Block block : net.minecraft.core.registries.BuiltInRegistries.BLOCK) {
@@ -1059,13 +885,9 @@ public class CitizenScreen extends PolishedScreen {
             .compareTo(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(b)));
     }
 
-    /** Player-inventory slots holding a tool this job is allowed to use — i.e. whose item id is in
-     *  {@link #allowedToolItemIds} (the job's role tool at the settlement's current tool age or
-     *  lower: forester axes, digger shovels). */
     private void buildAxeSlots() {
         axeSlots.clear();
         if (this.minecraft == null || this.minecraft.player == null) return;
-        // The slot being filled decides which allow-list applies (primary tool vs the pickaxe slot).
         java.util.Set<Integer> allowed = toolPickPickaxe ? allowedPickaxeItemIds : allowedToolItemIds;
         net.minecraft.world.entity.player.Inventory inv = this.minecraft.player.getInventory();
         for (int i = 0; i < inv.getContainerSize(); i++) {
@@ -1082,12 +904,6 @@ public class CitizenScreen extends PolishedScreen {
         graphics.fill(x, y, x + 16, y + 16, 0xFF2A2A2A);
     }
 
-    /** Mirror of the TownHallScreen "statuses" tab layout — same row height, same golden-on-gray
-     *  text scheme, same time-left bar. Differences from the settlement statuses: the value column
-     *  is the signed happiness modifier (rendered with sign and the heart-colour matching the
-     *  direction) and infinite thoughts (UNEMPLOYED) render no time-bar. */
-    /** Satisfaction (0–100) with one pillar, computed client-side from the synced thought rows —
-     *  mirrors {@code Thoughts.categorySatisfaction} (BASE + Σ modifiers in that category, clamped). */
     private int categorySatisfaction(com.bannerbound.core.social.HappinessCategory cat) {
         int sum = com.bannerbound.core.social.Thoughts.BASE_HAPPINESS;
         for (ThoughtEntry t : thoughts) {
@@ -1101,7 +917,6 @@ public class CitizenScreen extends PolishedScreen {
             int listX = panelX + 14;
             int listW = PANEL_WIDTH - 28;
 
-            // ── Four happiness pillar gauges across the top ──
             com.bannerbound.core.social.HappinessCategory[] cats =
                 com.bannerbound.core.social.HappinessCategory.values();
             int ringTop = panelY + 50;
@@ -1114,7 +929,6 @@ public class CitizenScreen extends PolishedScreen {
                 com.bannerbound.core.social.HappinessCategory cat = cats[i];
                 int cx = listX + slotW * i + slotW / 2;
                 int sat = categorySatisfaction(cat);
-                // Track ring (dim) then the satisfaction fill, from the top, clockwise.
                 Arcs.drawRing(graphics, cx, ringCy, ringR, ringThick, -Math.PI / 2, Math.PI * 2, 1f, 0xFF2A2A2A);
                 Arcs.drawRing(graphics, cx, ringCy, ringR, ringThick, -Math.PI / 2, Math.PI * 2, sat / 100f, cat.color);
                 graphics.drawCenteredString(this.font, sat + "%", cx, ringCy - 4, 0xFFFFFFFF);
@@ -1132,15 +946,11 @@ public class CitizenScreen extends PolishedScreen {
                 graphics.drawCenteredString(this.font, empty,
                     panelX + PANEL_WIDTH / 2, listY + listH / 2 - 4, 0xFF888888);
             } else {
-                // Row heights are variable: a long label (e.g. "Had a great conversation with
-                // <name>") wraps onto extra lines instead of being clipped by the scissor, so each
-                // row is as tall as its wrapped label needs. Sum them for the scroll extent.
                 int totalH = 0;
                 for (ThoughtEntry t : thoughts) totalH += thoughtRowHeight(t, listW);
                 int maxScroll = Math.max(0, totalH - listH);
                 if (thoughtScroll > maxScroll) thoughtScroll = maxScroll;
                 if (thoughtScroll < 0) thoughtScroll = 0;
-                // Live world tick — passed into each row so the time bar shrinks in real time.
                 long nowGameTime = (this.minecraft != null && this.minecraft.level != null)
                     ? this.minecraft.level.getGameTime() : 0L;
                 int y = listY - thoughtScroll;
@@ -1154,7 +964,6 @@ public class CitizenScreen extends PolishedScreen {
             }
             graphics.disableScissor();
 
-            // Hovering a pillar gauge → that pillar's thoughts (grouped), drawn over the scissor.
             if (hovered >= 0) {
                 com.bannerbound.core.social.HappinessCategory hc = cats[hovered];
                 java.util.List<Component> tip = new java.util.ArrayList<>();
@@ -1178,24 +987,14 @@ public class CitizenScreen extends PolishedScreen {
         });
     }
 
-    /** One row in the Thoughts tab. Top line shows the signed modifier in green/red plus the
-     *  thought label; bottom line shows a thin time-left bar (omitted for infinite thoughts).
-     *  {@code nowGameTime} is the live world tick used to compute remaining duration — passing
-     *  it in (rather than capturing it once at open time) is what makes the bar shrink in real
-     *  time while the screen stays open. */
     private void drawThoughtRow(GuiGraphics graphics, int x, int y, int width,
                                  ThoughtEntry entry, long nowGameTime) {
-        // Sign-aware colour: positive modifiers in soft green, negative in soft red, zero in gray.
         int signColor = entry.modifier() > 0 ? 0xFF7BCB6F
                       : entry.modifier() < 0 ? 0xFFE57761
                       : 0xFFCCCCCC;
         Component prefixComp = Component.literal(thoughtPrefix(entry));
         graphics.drawString(this.font, prefixComp, x, y, signColor, false);
         int labelX = x + this.font.width(prefixComp) + 6;
-        // Label sits to the right of the modifier value, light-gray (matches TownHall statuses).
-        // Wrap to the remaining width so a long label (a conversation partner's name + glyphs)
-        // flows onto extra lines instead of being clipped by the list's scissor. Continuation
-        // lines align under the first label line, not under the modifier.
         List<FormattedCharSequence> lines = this.font.split(entry.label(),
             Math.max(1, width - (labelX - x)));
         int ly = y;
@@ -1203,8 +1002,6 @@ public class CitizenScreen extends PolishedScreen {
             graphics.drawString(this.font, line, labelX, ly, 0xFFE0E0E0, false);
             ly += this.font.lineHeight;
         }
-        // Time-left bar sits below the (possibly multi-line) label: empty/black background,
-        // golden fill. Infinite thoughts render a faint outline only — no "remaining" to show.
         int barY = y + Math.max(1, lines.size()) * this.font.lineHeight + 5;
         int barW = width;
         graphics.fill(x, barY, x + barW, barY + 3, 0xFF1A1A1A);
@@ -1218,15 +1015,10 @@ public class CitizenScreen extends PolishedScreen {
         }
     }
 
-    /** The signed-modifier prefix shown at the start of a thought row (e.g. {@code "+5"}). */
     private static String thoughtPrefix(ThoughtEntry entry) {
         return entry.modifier() > 0 ? "+" + entry.modifier() : String.valueOf(entry.modifier());
     }
 
-    /** Height of a thought row, accounting for label wrapping. Mirrors the layout in
-     *  {@link #drawThoughtRow}: N wrapped label lines, a 5px gap, then the 3px+outline time bar
-     *  and bottom padding. A single-line label yields {@link #THOUGHT_ROW_HEIGHT} (the old fixed
-     *  value), so short thoughts look exactly as before. */
     private int thoughtRowHeight(ThoughtEntry entry, int width) {
         int labelX = this.font.width(thoughtPrefix(entry)) + 6;
         int lines = Math.max(1, this.font.split(entry.label(), Math.max(1, width - labelX)).size());
@@ -1238,8 +1030,7 @@ public class CitizenScreen extends PolishedScreen {
             int listX = panelX + 14;
             int listY = panelY + 56;
             int listW = PANEL_WIDTH - 28;
-            int listH = panelHeight() - 56 - 36; // leave room for the cancel button strip
-            // Clip the rows so a long list doesn't paint over the cancel button.
+            int listH = panelHeight() - 56 - 36;
             graphics.enableScissor(listX, listY, listX + listW, listY + listH);
             if (relationships.isEmpty()) {
                 Component empty = Component.translatable("bannerbound.citizen.relationships.empty")
@@ -1262,11 +1053,6 @@ public class CitizenScreen extends PolishedScreen {
         });
     }
 
-    /**
-     * One row in the Relationships tab: name on the left, score bar on the right with the tier
-     * label centred above and {@code -100 / 0 / 100} ticks under it. Layout proportions match the
-     * user's sketch (name takes ~40% of the row width, bar takes the remainder).
-     */
     private void drawRelationshipRow(GuiGraphics graphics, int x, int y, int width, RelationshipEntry entry) {
         int nameW = Math.min(90, width / 2);
         int barX = x + nameW + 6;
@@ -1274,16 +1060,11 @@ public class CitizenScreen extends PolishedScreen {
         int barY = y + 14;
         int barH = 5;
 
-        // Name on the left, vertically centred against the bar row — clipped to its column so a
-        // long name never paints into the score bar (substrByWidth keeps the glyph/tint styles).
         graphics.drawString(this.font,
             net.minecraft.locale.Language.getInstance().getVisualOrder(
                 this.font.substrByWidth(entry.name(), nameW)),
             x, y + 8, 0xFFFFFFFF, false);
 
-        // Family is a special tier — no score bar, just a centred "Family" label in a warm
-        // colour. The data side still ships score=100, but rendering a bar implies a movable
-        // value, which Family doesn't have.
         if (entry.isFamily()) {
             Component familyLabel = Component.literal(RelationshipTier.FAMILY.displayLabel())
                 .withStyle(ChatFormatting.LIGHT_PURPLE);
@@ -1292,27 +1073,21 @@ public class CitizenScreen extends PolishedScreen {
             return;
         }
 
-        // Tier label centred above the bar.
         RelationshipTier tier = RelationshipTier.of(entry.score());
         Component tierLabel = Component.literal(tier.displayLabel()).withStyle(ChatFormatting.GRAY);
         graphics.drawCenteredString(this.font, tierLabel,
             barX + barW / 2, y, 0xFFBBBBBB);
 
-        // Two-tone bar: red on the negative half, green on the positive half.
         int zeroX = barX + barW / 2;
         graphics.fill(barX, barY, zeroX, barY + barH, BAR_RED);
         graphics.fill(zeroX, barY, barX + barW, barY + barH, BAR_GREEN);
-        // Faint outline so the bar reads on a dark panel.
         graphics.renderOutline(barX - 1, barY - 1, barW + 2, barH + 2, 0xFF000000);
 
-        // White marker dot at the score position. Clamp to [-100, 100] so a stray over-clamped
-        // value still draws inside the bar.
         int clamped = Math.max(-100, Math.min(100, entry.score()));
         int dotX = barX + (int) Math.round((clamped + 100) / 200.0 * barW);
         int dotR = 2;
         graphics.fill(dotX - dotR, barY - 1, dotX + dotR, barY + barH + 1, BAR_DOT);
 
-        // Tick labels under the bar.
         int tickY = barY + barH + 2;
         graphics.drawString(this.font, "-100", barX - 2, tickY, 0xFF888888, false);
         String zero = "0";
@@ -1322,9 +1097,6 @@ public class CitizenScreen extends PolishedScreen {
             barX + barW - this.font.width(hundred) + 2, tickY, 0xFF888888, false);
     }
 
-    /**
-     * "Health: ♥♥♥♡ (cur/max)" — each heart represents 2 HP, mirroring the vanilla HUD scale.
-     */
     private void drawHeartRow(GuiGraphics graphics, int x, int y, String labelKey,
                                float current, float max) {
         MutableComponent label = Component.translatable(labelKey).withStyle(ChatFormatting.GRAY);
@@ -1346,21 +1118,6 @@ public class CitizenScreen extends PolishedScreen {
             iconsX + iconCount * 9 + 6, y, 0xFFFFFFFF, false);
     }
 
-    /**
-     * Centered "Happiness" title + a tri-colour bar (red / yellow / green) with the happiness
-     * face glyph sitting on the bar at the current value's position. The bar's segment widths
-     * are 0–40 % (red), 40–70 % (yellow), 70–100 % (green) — matching the thresholds
-     * {@link Icons#happiness} uses to pick the face, so the icon's expression always aligns
-     * with the colour band underneath it.
-     *
-     * <p>The face glyph IS the indicator (no separate dot) — its colour shows the mood, its
-     * x-position shows the score. Mirrors the user's sketch: title above, bar in the middle
-     * with the icon-as-indicator, "0" / "100" labels under the bar ends.
-     *
-     * @param centerX horizontal centre of the panel (bar centred here, title centred here)
-     * @param y       top of the block (title baseline approximately {@code y + font.lineHeight})
-     * @param width   bar width
-     */
     private Component drawHappinessBlock(GuiGraphics graphics, int centerX, int y, int width,
                                      int current, int max, int mouseX, int mouseY) {
         Component title = Component.translatable("bannerbound.citizen.happiness")
@@ -1373,21 +1130,16 @@ public class CitizenScreen extends PolishedScreen {
         int redEnd    = barX + Math.round(width * HAPPINESS_MID_RATIO);
         int yellowEnd = barX + Math.round(width * HAPPINESS_HIGH_RATIO);
         int barEnd    = barX + width;
-        // Three segments, painted flat — the visual interest is the icon-indicator, not bar gloss.
         graphics.fill(barX,      barY, redEnd,    barY + barH, HAPPINESS_RED);
         graphics.fill(redEnd,    barY, yellowEnd, barY + barH, HAPPINESS_YELLOW);
         graphics.fill(yellowEnd, barY, barEnd,    barY + barH, HAPPINESS_GREEN);
 
-        // "0" / "100" tick labels under the bar ends.
         int tickY = barY + barH + 2;
         graphics.drawString(this.font, "0", barX - 2, tickY, 0xFFCCCCCC, false);
         String hundred = "100";
         graphics.drawString(this.font, hundred,
             barEnd - this.font.width(hundred) + 2, tickY, 0xFFCCCCCC, false);
 
-        // Happiness icon as the indicator — colour reflects mood, x-position reflects score.
-        // Centre the glyph on the bar's vertical midline so it overlaps the bar like the dot
-        // in the sketch.
         double ratio = max > 0 ? (double) current / (double) max : 0.5;
         if (ratio < 0) ratio = 0; else if (ratio > 1) ratio = 1;
         int iconCenterX = barX + (int) Math.round(width * ratio);
@@ -1397,15 +1149,10 @@ public class CitizenScreen extends PolishedScreen {
         graphics.drawString(this.font, icon,
             iconCenterX - iconW / 2, iconY, 0xFFFFFFFF, false);
 
-        // Hover anywhere over the title-through-tick-labels band → return the explainer tooltip
-        // (exact score + the mood effects) for the caller to draw last, above the other rows.
         boolean hover = mouseX >= barX - 2 && mouseX <= barEnd + 2 && mouseY >= y && mouseY <= tickY + this.font.lineHeight;
         return hover ? happinessTooltip(current, max) : null;
     }
 
-    /** Builds the happiness hover tooltip: the exact score, then the active mood band's effects.
-     *  Bands match {@link com.bannerbound.core.entity.CitizenEntity#happinessBand} so the promised
-     *  numbers are exactly what the citizen experiences. */
     private Component happinessTooltip(int current, int max) {
         MutableComponent tip = Component.translatable("bannerbound.citizen.happiness.tooltip.value",
             current, max).withStyle(ChatFormatting.WHITE);
@@ -1428,14 +1175,6 @@ public class CitizenScreen extends PolishedScreen {
         return tip;
     }
 
-    /**
-     * "Stamina: [▓▓▓▓░░░░░░] (cur/max)" — a thin horizontal bar with a 1px frame; fill color
-     * shifts green → yellow → red as the citizen depletes. Numeric count follows.
-     */
-    /** Step 9 polish: stat row with an INVERTED severity palette — green at zero, yellow
-     *  in the middle, red as the value climbs. Same shape as {@link #drawStaminaRow} but
-     *  the colour gradient flips because high resentment is BAD (unlike high stamina).
-     *  Used for the viewer-only resentment bar. */
     private void drawInvertedBar(GuiGraphics graphics, int x, int y, String labelKey,
                                   int current, int max) {
         MutableComponent label = Component.translatable(labelKey).withStyle(ChatFormatting.GRAY);
@@ -1449,9 +1188,9 @@ public class CitizenScreen extends PolishedScreen {
         if (max > 0 && current > 0) {
             double ratio = (double) current / max;
             int fillW = Math.max(1, (int) Math.round(barW * ratio));
-            int color = ratio >= 0.5 ? 0xFFCC3322  // red — hates you
-                      : ratio >= 0.25 ? 0xFFCCAA22 // yellow — wary
-                      : 0xFF44CC44;                 // green — at peace
+            int color = ratio >= 0.5 ? 0xFFCC3322
+                      : ratio >= 0.25 ? 0xFFCCAA22
+                      : 0xFF44CC44;
             graphics.fill(barX, barY, barX + fillW, barY + barH, color);
         }
         String countText = String.format("(%s/%s)", current, max);
@@ -1468,16 +1207,15 @@ public class CitizenScreen extends PolishedScreen {
         int barW = 80;
         int barH = 6;
 
-        // Frame + empty fill.
         graphics.fill(barX - 1, barY - 1, barX + barW + 1, barY + barH + 1, 0xFF202020);
         graphics.fill(barX, barY, barX + barW, barY + barH, 0xFF000000);
 
         if (max > 0 && current > 0) {
             double ratio = (double) current / max;
             int fillW = Math.max(1, (int) Math.round(barW * ratio));
-            int color = ratio >= 0.5 ? 0xFF44CC44   // green
-                      : ratio >= 0.25 ? 0xFFCCAA22 // yellow
-                      : 0xFFCC3322;                 // red
+            int color = ratio >= 0.5 ? 0xFF44CC44
+                      : ratio >= 0.25 ? 0xFFCCAA22
+                      : 0xFFCC3322;
             graphics.fill(barX, barY, barX + fillW, barY + barH, color);
         }
 
@@ -1515,8 +1253,6 @@ public class CitizenScreen extends PolishedScreen {
             final int panelX = (this.width - PANEL_WIDTH) / 2;
             final int panelY = panelTop();
             if (jobOverlay != JobOverlay.NONE) {
-                // Overlay open: a click inside the list selects a row. Clicks elsewhere fall through
-                // to super so the Back / Cancel buttons work (no accidental close on stray clicks).
                 int ox = overlayX();
                 int oy = overlayY();
                 if (mouseX >= ox && mouseX < ox + overlayW() && mouseY >= oy && mouseY < oy + overlayH()) {
@@ -1541,7 +1277,6 @@ public class CitizenScreen extends PolishedScreen {
                     }
                     return true;
                 }
-                // Quarryworker pickaxe (second) slot.
                 if (DIGGER_TYPE.equals(jobTypeId) && jobPickaxeUnlocked) {
                     int psy = toolY + 20;
                     if (mouseX >= tsx && mouseX < tsx + JOB_TOOL_SLOT && mouseY >= psy && mouseY < psy + JOB_TOOL_SLOT) {
@@ -1569,7 +1304,6 @@ public class CitizenScreen extends PolishedScreen {
 
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        // Escape closes an open Job overlay (the slot/log/job picker) instead of the whole screen.
         if (keyCode == org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE
                 && activeTab == Tab.JOB && jobOverlay != JobOverlay.NONE) {
             closeJobOverlay();
@@ -1578,12 +1312,10 @@ public class CitizenScreen extends PolishedScreen {
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
-    /** Handles a click on row {@code idx} of the currently-open Job overlay, then closes it. */
     private void onJobOverlayPick(int idx) {
         switch (jobOverlay) {
             case JOB_PICK -> {
                 int offset = jobPickOffset();
-                // Leading "— Make idle —" row → unassign (empty job).
                 String type = (offset == 1 && idx == 0) ? "" : jobUnlocked.get(idx - offset);
                 net.neoforged.neoforge.network.PacketDistributor.sendToServer(
                     new com.bannerbound.core.network.AssignCitizenJobPayload(entityId, type));
@@ -1601,32 +1333,30 @@ public class CitizenScreen extends PolishedScreen {
                     new com.bannerbound.core.network.SetCitizenToolPayload(entityId, slot, toolPickPickaxe));
             }
             case FORAGE_PICK -> {
-                // Multi-toggle, not select-and-close: flip this category and leave the picker open.
                 com.bannerbound.core.api.forager.ForageCategory cat =
                     com.bannerbound.core.api.forager.ForageCategory.byOrdinal(idx);
-                if (cat == null || (forageUnlockedBits & cat.bit()) == 0) return;   // locked → ignore
+                if (cat == null || (forageUnlockedBits & cat.bit()) == 0) return;
                 boolean nowEnabled = (forageEnabledBits & cat.bit()) == 0;
-                forageEnabledBits = nowEnabled                                       // optimistic local flip
+                forageEnabledBits = nowEnabled
                     ? (forageEnabledBits | cat.bit()) : (forageEnabledBits & ~cat.bit());
                 net.neoforged.neoforge.network.PacketDistributor.sendToServer(
                     new com.bannerbound.core.network.SetForageTargetPayload(entityId, cat.ordinal(), nowEnabled));
-                return;   // keep the picker open
+                return;
             }
             case PREY_PICK -> {
-                // Same multi-toggle pattern as the forager picker.
                 if (idx < 0 || idx >= preyList.size()) return;
                 String id = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
                     .getKey(preyList.get(idx)).toString();
                 boolean nowEnabled = hunterPreyOff.contains(id);
-                if (nowEnabled) hunterPreyOff.remove(id); else hunterPreyOff.add(id);   // optimistic flip
+                if (nowEnabled) hunterPreyOff.remove(id); else hunterPreyOff.add(id);
                 net.neoforged.neoforge.network.PacketDistributor.sendToServer(
                     new com.bannerbound.core.network.SetHunterPreyPayload(entityId, id, nowEnabled));
-                return;   // keep the picker open
+                return;
             }
             case SETTINGS -> {
                 if (idx < 0 || idx >= settingsOptions.size()) return;
                 JobOption opt = settingsOptions.get(idx);
-                if (!opt.enabled()) return;   // greyed (e.g. no rod) → keep the overlay open
+                if (!opt.enabled()) return;
                 opt.action().run();
             }
             case NONE -> { return; }
@@ -1636,8 +1366,6 @@ public class CitizenScreen extends PolishedScreen {
 
     @Override
     protected void renderPolishedBackdrop(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-        // Pull live stats from the entity before the renderable callbacks fire so the bars reflect
-        // current state (stamina ticking down mid-chop, health changing on damage, etc.).
         refreshFromEntity();
     }
 
@@ -1651,12 +1379,8 @@ public class CitizenScreen extends PolishedScreen {
     private int overlayX() { return (this.width - PANEL_WIDTH) / 2 + 12; }
     private int overlayY() { return panelTop() + 50; }
     private int overlayW() { return PANEL_WIDTH - 24; }
-    /** Leaves room below the list for the Back button (jobBackBtnY = panelHeight()-52) + a gap. */
     private int overlayH() { return panelHeight() - 50 - 56; }
 
-    /** The job picker leads with a "— Make idle —" row when the citizen is currently employed under
-     *  a government (one-click unassign as part of "Change job"). Anarchy has no free unassign, and
-     *  an already-unemployed citizen has nothing to clear, so the row is hidden in both cases. */
     private boolean showMakeIdleRow() {
         return jobOverlay == JobOverlay.JOB_PICK && jobCanManage && !jobAnarchy && !jobTypeId.isEmpty();
     }
@@ -1683,7 +1407,6 @@ public class CitizenScreen extends PolishedScreen {
         graphics.renderOutline(x, y, w, h, 0xFF8B8B8B);
         int rows = jobOverlayRowCount();
         if (rows == 0) {
-            // The tool picker's "empty" reads differently from the job/log pickers — call it out.
             String key = jobOverlay == JobOverlay.TOOL_PICK
                 ? "bannerbound.citizen.job.no_axes" : "bannerbound.citizen.job.picker_empty";
             graphics.drawCenteredString(this.font,
@@ -1718,7 +1441,6 @@ public class CitizenScreen extends PolishedScreen {
                 if (hover && opt.tooltip() != null) hoverDesc = opt.tooltip();
                 continue;
             }
-            // The leading "— Make idle —" row of the job picker (one-click unassign). No icon.
             if (jobOverlay == JobOverlay.JOB_PICK && offset == 1 && i == 0) {
                 graphics.drawString(this.font,
                     Component.translatable("bannerbound.citizen.job.make_idle")
@@ -1731,7 +1453,6 @@ public class CitizenScreen extends PolishedScreen {
             switch (jobOverlay) {
                 case JOB_PICK -> {
                     String type = jobUnlocked.get(i - offset);
-                    // Icon is the settlement's current tool-age tool for the job (server-resolved).
                     icon = itemFromId((i - offset) < jobUnlockedIcons.size()
                         ? jobUnlockedIcons.get(i - offset) : 0);
                     label = jobTitle(type);
@@ -1751,8 +1472,6 @@ public class CitizenScreen extends PolishedScreen {
                 }
                 default -> { icon = net.minecraft.world.item.ItemStack.EMPTY; label = Component.empty(); }
             }
-            // Job icons are representative tools that may be undiscovered → bypass the "?" swap.
-            // Log / tool rows render real (known) items, so the bypass is a harmless no-op there.
             boolean bypass = jobOverlay == JobOverlay.JOB_PICK;
             if (bypass) UnknownItemHelper.setBypassUnknownSwap(true);
             graphics.renderItem(icon, x + 3, rowY + 2);
@@ -1767,16 +1486,12 @@ public class CitizenScreen extends PolishedScreen {
             graphics.fill(trackX, y + 1, trackX + 3, y + h - 1, 0xFF0A0A0A);
             graphics.fill(trackX, thumbY, trackX + 3, thumbY + thumbH, 0xFF606060);
         }
-        // Job description on hover — drawn last so it sits above the overlay box. Wrapped so a
-        // one-liner doesn't run off the panel.
         if (hoverDesc != null) {
             graphics.renderTooltip(this.font,
                 this.font.split(hoverDesc, 180), mouseX, mouseY);
         }
     }
 
-    /** One row of the forager's gather-targets picker: a category icon, the label in
-     *  green (ON) / red (OFF) / grey (LOCKED), and the matching state word right-aligned. */
     private void renderForageRow(GuiGraphics graphics, int idx, int x, int rowY, int w) {
         com.bannerbound.core.api.forager.ForageCategory cat =
             com.bannerbound.core.api.forager.ForageCategory.byOrdinal(idx);
@@ -1784,7 +1499,6 @@ public class CitizenScreen extends PolishedScreen {
         boolean unlocked = (forageUnlockedBits & cat.bit()) != 0;
         boolean enabled = unlocked && (forageEnabledBits & cat.bit()) != 0;
         int color = !unlocked ? 0xFF777777 : enabled ? 0xFF55DD55 : 0xFFDD5555;
-        // Category items may be undiscovered — the icon is a UI glyph, so bypass the unknown "?" swap.
         UnknownItemHelper.setBypassUnknownSwap(true);
         graphics.renderItem(forageIcon(cat), x + 3, rowY + 2);
         UnknownItemHelper.setBypassUnknownSwap(false);
@@ -1795,8 +1509,6 @@ public class CitizenScreen extends PolishedScreen {
         graphics.drawString(this.font, state, x + w - 8 - this.font.width(state), rowY + 6, color, false);
     }
 
-    /** One row of the hunter's prey picker: the species' spawn-egg icon, its name in green (ON) /
-     *  red (OFF), and the matching state word right-aligned. Every tagged species defaults ON. */
     private void renderPreyRow(GuiGraphics graphics, int idx, int x, int rowY, int w) {
         if (idx < 0 || idx >= preyList.size()) return;
         net.minecraft.world.entity.EntityType<?> type = preyList.get(idx);
@@ -1817,7 +1529,6 @@ public class CitizenScreen extends PolishedScreen {
         graphics.drawString(this.font, state, x + w - 8 - this.font.width(state), rowY + 6, color, false);
     }
 
-    /** A representative item icon for each forage category. */
     private static net.minecraft.world.item.ItemStack forageIcon(
             com.bannerbound.core.api.forager.ForageCategory cat) {
         net.minecraft.world.item.Item item = switch (cat) {

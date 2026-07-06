@@ -21,10 +21,10 @@ import net.minecraft.world.item.crafting.RecipeHolder;
 import net.minecraft.world.level.Level;
 
 /**
- * Server-authoritative: after vanilla computes the crafting result, clear it if the player's civ
- * doesn't know yet either (a) any input item, or (b) the result item itself — you can't craft
- * <i>toward</i> something you haven't researched. Covers both the 3x3 crafting table and the 2x2
- * inventory grid (both use this static helper).
+ * Server-authoritative research gate on crafting. After vanilla computes the result, clear it if
+ * the player's civ hasn't researched either (a) any input item, or (b) the result item itself - you
+ * can't craft toward something you haven't researched, even when every ingredient is already known.
+ * Covers both the 3x3 crafting table and the 2x2 inventory grid, which share this static helper.
  */
 @Mixin(CraftingMenu.class)
 @ApiStatus.Internal
@@ -51,8 +51,6 @@ public class CraftingMenuMixin {
                 return;
             }
         }
-        // Gate on the result too: a recipe whose output the civ hasn't researched yet can't be made,
-        // even when every ingredient is already known.
         ItemStack output = result.getItem(0);
         if (!output.isEmpty() && UnknownItemBlocker.isUnknownForPlayer(sp, output.getItem())) {
             result.setItem(0, ItemStack.EMPTY);

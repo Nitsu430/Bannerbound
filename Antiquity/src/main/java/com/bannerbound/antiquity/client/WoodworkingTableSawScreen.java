@@ -21,15 +21,21 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Transparent input layer for the carpenter's-table saw minigame. The world and table animation stay
- * visible behind a compact fletching-style HUD: no container, no inventory grid.
+ * Transparent input layer for the carpenter's-table saw minigame. The world and table animation
+ * stay visible behind a compact fletching-style HUD (progress bar + per-stroke pips): no container,
+ * no inventory grid. Input is vertical mouse drag while holding left-click - every
+ * TRAVEL_PER_STROKE px of |dragY| (motion under MOTION_EPS px is ignored) completes one stroke.
+ * All animation state lives in the static CarpentrySawState, which WoodworkingTableRenderer reads
+ * to drive the in-world saw scene; begin() in init() (with a camera-snapped scene yaw) and clear()
+ * in removed() bracket its lifetime, so the table renders normally again after any exit path.
+ * Completion sends CarpentryActionPayload.COMPLETE and closes the screen; closing early sends
+ * CANCEL. The saw sound only restarts once the previous instance finishes, with sawdust particles
+ * spawned at the table on each pulse.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class WoodworkingTableSawScreen extends Screen {
-    /** Pixels of vertical mouse travel that make up one saw stroke. */
     private static final double TRAVEL_PER_STROKE = 450.0;
-    /** Minimum |dragY| (px) that counts as sawing motion. */
     private static final double MOTION_EPS = 1.5;
 
     private final BlockPos pos;

@@ -18,7 +18,7 @@ import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
  * Loads the specialized-chunk distribution from {@code data/<ns>/chunk_resources/*.json} so it can be
- * retuned by hand and {@code /reload}ed — no recompile. Schema:
+ * retuned by hand and {@code /reload}ed - no recompile. Schema:
  * <pre>{@code
  * {
  *   "max_relief": 5,
@@ -33,7 +33,8 @@ import net.minecraft.util.profiling.ProfilerFiller;
  * }</pre>
  * Category keys are fixed ({@code aquatic}/{@code mountainous}/{@code plains}/{@code forest}/{@code other});
  * weight keys are {@link ChunkResource} names. If multiple files exist their categories merge (later wins).
- * With no file present, {@link ChunkResourceDistribution#defaults()} is used.
+ * With no file present (or every category empty), {@link ChunkResourceDistribution#defaults()} is used;
+ * {@link #get()} never returns null.
  */
 public class ChunkResourceLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "chunk_resources";
@@ -44,7 +45,6 @@ public class ChunkResourceLoader extends SimpleJsonResourceReloadListener {
         super(GSON, FOLDER);
     }
 
-    /** The active distribution (never null — falls back to {@link ChunkResourceDistribution#defaults()}). */
     public static ChunkResourceDistribution get() {
         return DISTRIBUTION;
     }

@@ -1,9 +1,7 @@
-// Save this class in your mod and generate all required imports
-
 /**
- * Made with Blockbench 5.1.4
- * Exported for Minecraft version 1.19 or later with Mojang mappings
- * @author Author
+ * Raw Blockbench 5.1.4 animation export (Mojang mappings, MC 1.19+) of the bellows "Push"
+ * animation - the top plate rotates and drops while the Spine leather squashes via Y-scale.
+ * Kept under resources as a reference; NOT on the compile path.
  */
 public class bellowsAnimation {
 	public static final AnimationDefinition Push = AnimationDefinition.Builder.withLength(1.0F)

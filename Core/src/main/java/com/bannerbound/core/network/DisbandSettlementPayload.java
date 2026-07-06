@@ -9,6 +9,8 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/** C->S: the player confirmed disbanding their settlement. Empty payload - the server acts on the
+ *  sender's own settlement. */
 @ApiStatus.Internal
 public record DisbandSettlementPayload() implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<DisbandSettlementPayload> TYPE =

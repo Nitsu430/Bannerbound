@@ -17,12 +17,16 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.entity.PartEntity;
 
 /**
- * A hittable sub-box of a {@link RaftEntity}. The raft is long, but a single entity AABB is a square
- * that can't rotate, so we hang a few of these parts on it (two for the deck halves, one for the bow
- * notch) and reposition them with the raft each tick — giving a raft-shaped, rotating click/attack
- * surface. Damage and interaction route back to the parent: the notch part ties the tow rope, the
- * deck parts board the raft. NeoForge includes part entities in {@code Level#getEntities}, so they
- * are picked for interaction exactly like a normal entity.
+ * A hittable sub-box of a {@link RaftEntity}. A single entity AABB is a square that cannot rotate,
+ * so the raft hangs several of these on itself (thin DECK slabs tiling the hull plus one bow
+ * NOTCH) and repositions them every tick, giving a raft-shaped, rotating click/attack/standing
+ * surface. NeoForge includes PartEntity in {@code Level#getEntities}, so parts are picked for
+ * interaction like normal entities; damage and interaction route to the parent (the NOTCH ties the
+ * tow rope, DECK boards/repairs), and is() treats a part as its parent for identity checks
+ * (leash/passenger tests). Only DECK parts are collidable -- and the parent excludes them from its
+ * own collision so it can't jam on itself; a GHOST raft's parts are neither collidable nor
+ * pickable, so the parent can't be reached through them at all. Parts are never saved, synced, or
+ * spawned on their own: the parent recreates them and assigns their contiguous entity ids.
  */
 public class RaftPart extends PartEntity<RaftEntity> {
     public enum Role { DECK, NOTCH }
@@ -49,21 +53,16 @@ public class RaftPart extends PartEntity<RaftEntity> {
     protected void addAdditionalSaveData(CompoundTag tag) {
     }
 
-    /** The deck halves are solid so you can stand and walk on the raft (the notch box is not). The
-     *  parent excludes these from its own collision so it doesn't get stuck on itself. A GHOST raft
-     *  (a fisher NPC's conjured vessel) is pure scenery — nothing about it collides. */
     @Override
     public boolean canBeCollidedWith() {
         return this.role == Role.DECK && !this.getParent().isGhost();
     }
 
-    /** Ghost rafts aren't clickable/attackable either — the player can't reach the parent through us. */
     @Override
     public boolean isPickable() {
         return !this.isRemoved() && !this.getParent().isGhost();
     }
 
-    /** Treat the part as its parent for "is this that entity?" checks (e.g. leash/passenger tests). */
     @Override
     public boolean is(Entity entity) {
         return this == entity || this.getParent() == entity;
@@ -91,7 +90,6 @@ public class RaftPart extends PartEntity<RaftEntity> {
         return this.size;
     }
 
-    /** Parts aren't saved or spawned on their own — the parent recreates them. */
     @Override
     public boolean shouldBeSaved() {
         return false;

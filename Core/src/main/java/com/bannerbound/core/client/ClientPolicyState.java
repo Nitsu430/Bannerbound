@@ -17,7 +17,11 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * Client mirror of the player's settlement's policy state, fed by {@link PolicyStateSyncPayload}
  * and read by the town hall's Policies tab. Static singleton, same shape as
- * {@link ClientResearchState} / {@link ClientSuggestionState}.
+ * {@link ClientResearchState} / {@link ClientSuggestionState}. {@code slotTypes} lists one entry
+ * per typed government slot ({@code PolicyType.name()}) plus a trailing {@code "SIGNATURE"} when the
+ * government has a signature slot, and the UI renders one slot per entry. Also tracks the pending
+ * change, per-member confirm votes (null = not voted, TRUE = agree, FALSE = disagree), and the
+ * per-policy suggestion map the Suggestions tab aggregates.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -56,8 +60,6 @@ public final class ClientPolicyState {
 
     public static List<String> getAvailable() { return available; }
     public static List<String> getActive() { return active; }
-    /** Ordered slot-type names: each typed slot's {@code PolicyType.name()}, then {@code "SIGNATURE"}
-     *  if the government has a signature slot. The UI renders one slot per entry. */
     public static List<String> getSlotTypes() { return slotTypes; }
     public static int getSlotCount() { return slotTypes.size(); }
     public static boolean hasPending() { return pendingSlot >= 0; }
@@ -66,7 +68,6 @@ public final class ClientPolicyState {
     public static String getPendingRemoveId() { return pendingRemoveId; }
     public static int getOnlineMemberCount() { return onlineMemberCount; }
 
-    /** This player's recorded confirm vote: null = hasn't voted, TRUE = agree, FALSE = disagree. */
     @Nullable
     public static Boolean getOwnConfirmVote(UUID self) {
         return confirmVotes.get(self);
@@ -83,10 +84,8 @@ public final class ClientPolicyState {
         return s == null ? List.of() : s;
     }
 
-    /** Full suggestion map — the Suggestions tab aggregates it into its row list. */
     public static Map<String, List<UUID>> getAllSuggestions() { return suggestions; }
 
-    /** Available policies that aren't already active — the set shown in the right-hand list. */
     public static List<String> getAvailableNotActive() {
         List<String> out = new ArrayList<>();
         for (String id : available) if (!active.contains(id)) out.add(id);

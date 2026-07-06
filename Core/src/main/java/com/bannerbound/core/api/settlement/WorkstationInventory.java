@@ -14,18 +14,15 @@ import net.minecraft.world.item.ItemStack;
  *
  * <p>This interface doubles as the Stocker's "collect from me" tag: {@code StockerWorkGoal}
  * drains every workstation whose block entity implements it, so a new workstation only has to
- * implement {@code WorkstationInventory} to be serviced — there is no separate type list to
+ * implement {@code WorkstationInventory} to be serviced -- there is no separate type list to
  * keep in sync.
  */
 @ApiStatus.Internal
 public interface WorkstationInventory {
-    /** The live backing inventory list. Mutating it is how the Stocker collects items. */
     NonNullList<ItemStack> items();
 
-    /** Marks the block entity dirty after the Stocker mutates {@link #items()}. */
     void setStockChanged();
 
-    /** True if every slot is empty — nothing for the Stocker to collect. */
     default boolean isStockEmpty() {
         for (ItemStack s : items()) {
             if (!s.isEmpty()) return false;

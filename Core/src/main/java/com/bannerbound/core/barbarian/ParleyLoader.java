@@ -20,8 +20,8 @@ import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
  * Loads per-camp-type parley offers from {@code data/<namespace>/barbarian_parley/*.json} (shipped by
- * Antiquity, loaded in Core so the messenger/parley code can resolve them without a Core→Antiquity
- * dependency — same arrangement as {@link BarbarianLoadoutLoader}). One file per {@link CampType}:
+ * Antiquity, loaded in Core so the messenger/parley code can resolve them without a Core->Antiquity
+ * dependency - same arrangement as {@link BarbarianLoadoutLoader}). One file per {@link CampType}:
  * <pre>
  * { "type": "raider",
  *   "greeting": "bannerbound.barbarian.parley.greeting.raider",
@@ -80,7 +80,6 @@ public final class ParleyLoader extends SimpleJsonResourceReloadListener {
         BannerboundCore.LOGGER.info("Loaded {} barbarian parley definitions", map.size());
     }
 
-    /** The parley offer for a camp type, or an empty default if none is authored. */
     public static Def forType(CampType type) {
         if (type == null) return EMPTY;
         return ENTRIES.getOrDefault(type.name().toLowerCase(java.util.Locale.ROOT), EMPTY);

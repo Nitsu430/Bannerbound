@@ -27,9 +27,16 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Pottery slab block entity. It mirrors the loose-pile station idiom, but exact matches can have
+ * Pottery slab block entity. Follows the loose-pile GhostRecipeWorkstation idiom (contents pile +
+ * floating ghost preview + slide-in animation), with one twist: an exact pile match can have
  * multiple recipe choices (for example, one clay block can become a pot, bucket, brick batch, or
- * crucible). The selected output is the floating preview; browse arrows cycle the exact choices.
+ * crucible), so the browse arrows cycle exact matches as well as partial-pile candidates.
+ * ghostChoice keeps the selection sticky across recomputes and ghostLocked pins it once the
+ * player has browsed or locked, so newly landing materials don't yank the choice; every offer is
+ * filtered through CraftGating research first, which is also why matchedRecipe() can return null
+ * on a seemingly complete pile. cachedResult is non-empty only on an exact match; inProgress
+ * holds the item being shaped during the minigame and blocks all pile mutation while set. Pile,
+ * ghost fields and animation state all mirror to the client via setChanged() block updates.
  */
 @ApiStatus.Internal
 public class PotterySlabBlockEntity extends BlockEntity implements GhostRecipeWorkstation {
@@ -97,7 +104,6 @@ public class PotterySlabBlockEntity extends BlockEntity implements GhostRecipeWo
         return lastSlideCell;
     }
 
-    /** The currently selected exact recipe, or null if the pile is incomplete/junk/locked. */
     public PotteryRecipe matchedRecipe() {
         List<PotteryRecipe> exact = researchedExactMatches();
         if (exact.isEmpty()) return null;

@@ -20,10 +20,16 @@ import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.item.Item;
 
 /**
- * Datapack loader for named stew recipes — every JSON under {@code data/<namespace>/stew_recipes/}.
+ * Datapack loader for named stew recipes - every JSON under {@code data/<namespace>/stew_recipes/}.
  * Server-side reload listener (registered in {@code AntiquityEvents}); re-read jar-side on remote
  * clients by {@code ClientDatapackRecipes} so a pot's stew tint/identity resolves there too. Named
- * recipes are overrides — any unmatched food mix still cooks into a generic stew in the pot.
+ * recipes are overrides - any unmatched food mix still cooks into a generic stew in the pot.
+ * findMatch picks the MOST SPECIFIC recipe covering the placed ingredient-type set (counts never
+ * change a stew's identity, only its food value): fewest tag-based ingredients wins, ties broken
+ * by more ingredients - so a beetroot-only pot is "Beetroot Stew" while carrot + beetroot falls
+ * back to the tag-based "Vegetable Stew". isStewIngredient lets the pot accept items with no
+ * standalone food value (e.g. mushrooms); without it those recipes would be unreachable because
+ * the inputs could never be added. all() is what the Cook NPC scans to pick what to brew next.
  */
 @ApiStatus.Internal
 public class StewRecipeManager extends SimpleJsonResourceReloadListener {
@@ -40,7 +46,6 @@ public class StewRecipeManager extends SimpleJsonResourceReloadListener {
         applyEntries(entries);
     }
 
-    /** Parse + store the loaded entries (reused by the client jar loader on remote clients). */
     public static void applyEntries(Map<ResourceLocation, JsonElement> entries) {
         Map<ResourceLocation, StewRecipe> loaded = new LinkedHashMap<>();
         for (Map.Entry<ResourceLocation, JsonElement> entry : entries.entrySet()) {
@@ -53,21 +58,16 @@ public class StewRecipeManager extends SimpleJsonResourceReloadListener {
         BannerboundAntiquity.LOGGER.info("Loaded {} stew recipe(s).", recipes.size());
     }
 
-    /** Every loaded named stew recipe — the Cook NPC scans these to pick what to brew next. */
     public static java.util.Collection<StewRecipe> all() {
         return recipes.values();
     }
 
-    /** The recipe stored under {@code id}, or {@code null}. */
     @Nullable
     public static StewRecipe byId(String id) {
         if (id == null || id.isEmpty()) return null;
         return recipes.get(ResourceLocation.parse(id));
     }
 
-    /** True if {@code item} appears in ANY named stew recipe — so the pot accepts ingredients that
-     *  aren't edible on their own (e.g. mushrooms, which have no standalone food value but make a
-     *  mushroom stew). Without this, such recipes would be unreachable: you couldn't add the inputs. */
     public static boolean isStewIngredient(Item item) {
         for (StewRecipe recipe : recipes.values()) {
             for (StewRecipe.Ing ing : recipe.ingredients()) {
@@ -77,10 +77,6 @@ public class StewRecipeManager extends SimpleJsonResourceReloadListener {
         return false;
     }
 
-    /** The best named recipe whose ingredient types cover {@code placedTypes} (counts don't change a
-     *  stew's identity, only its food value), or null. The MOST SPECIFIC match wins: fewest tag-based
-     *  ingredients first, then the most ingredients — so a beetroot-only pot is "Beetroot Stew", while
-     *  a carrot+beetroot mix (no specific recipe) falls back to the tag-based "Vegetable Stew". */
     @Nullable
     public static StewRecipe findMatch(Set<Item> placedTypes) {
         StewRecipe best = null;

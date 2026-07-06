@@ -12,17 +12,17 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * A plain cross-model ground plant (no collision, breaks if its support is removed) — the base for
- * the biome poison/remedy herbs (wolfsbane, yarrow, …). Rendered as a flat "X" via a
+ * A plain cross-model ground plant (no collision, breaks if its support is removed) - the base for
+ * the biome poison/remedy herbs (wolfsbane, yarrow, ...). Rendered as a flat "X" via a
  * {@code minecraft:block/cross} model with a cutout render type; survival rules come from
- * {@link BushBlock} (places on dirt/grass/farmland). The harvested block item is what the Mortar and
- * Pestle grinds into poison paste / antidote.
+ * {@link BushBlock} (places on dirt/grass/farmland). SHAPE is purely the hover outline and
+ * interaction box - a slim box hugging the art rather than a full bush cube; tune its px bounds to
+ * the texture. The harvested block item is what the Mortar and Pestle grinds into poison paste /
+ * antidote.
  */
 public class ForageFlowerBlock extends BushBlock {
     public static final MapCodec<ForageFlowerBlock> CODEC = simpleCodec(ForageFlowerBlock::new);
 
-    /** Slim selection/outline box hugging the plant rather than a full bush cube — tune these px
-     *  bounds to the art. (No collision; this is purely the hover outline + interaction shape.) */
     private static final VoxelShape SHAPE = Block.box(3.0, 0.0, 3.0, 13.0, 13.0, 13.0);
 
     public ForageFlowerBlock(BlockBehaviour.Properties properties) {

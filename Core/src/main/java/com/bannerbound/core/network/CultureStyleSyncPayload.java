@@ -13,8 +13,8 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: the list of available culture styles, so the founding screen's style picker
- * can list them. Three parallel lists — style id, its display name, and its preview-image
+ * Server -> client: the list of available culture styles, so the founding screen's style picker
+ * can list them. Three parallel lists - style id, its name translation key, and its preview-image
  * ResourceLocation string.
  */
 @ApiStatus.Internal

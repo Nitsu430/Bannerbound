@@ -31,18 +31,19 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.fml.ModList;
 
 /**
- * Loads the mod's custom datapack recipes ({@code data/<modid>/crafting_stone_recipes/}, …) on the
- * CLIENT, reading the JSON straight from this mod's own file. Those recipe managers are server-data
+ * Loads the mod's custom datapack recipes ({@code data/<modid>/crafting_stone_recipes/}, ...) on the
+ * CLIENT, reading the JSON straight from this mod's own jar file. The recipe managers are server-data
  * reload listeners, so their static lists are populated only where a server runs: in singleplayer /
- * on the host the integrated server shares the JVM, but on a <b>remote client</b> nothing ever fills
- * them — which is why JEI showed no custom recipes and the workstation ghost previews stayed blank
+ * on the LAN host the integrated server shares the JVM, but on a remote client nothing ever fills
+ * them -- which is why JEI showed no custom recipes and the workstation ghost previews stayed blank
  * for everyone but the host. The recipes ship in the jar, identical to the server's, so reading them
- * here client-side gives JEI and the renderers the same data.
+ * here gives JEI and the renderers the same data.
  *
  * <p>Registered as a client reload listener so it runs at startup (before JEI registers its recipes)
- * and on F3+T. It NO-OPs whenever an integrated server is present — there the server's own reload
+ * and on F3+T. It NO-OPs whenever an integrated server is present -- there the server's own reload
  * listener is authoritative (and may carry datapack overrides this jar-only read wouldn't), and the
- * two share the static lists, so we must not clobber it.
+ * two share the static lists, so it must not be clobbered. Loading is fully defensive: any read or
+ * parse failure logs and leaves that manager empty rather than throwing through the reload.
  */
 @OnlyIn(Dist.CLIENT)
 public final class ClientDatapackRecipes implements ResourceManagerReloadListener {
@@ -50,8 +51,7 @@ public final class ClientDatapackRecipes implements ResourceManagerReloadListene
 
     @Override
     public void onResourceManagerReload(ResourceManager resourceManager) {
-        // An integrated server (singleplayer / LAN host) populates these same statics from the real
-        // datapack stack in this JVM — leave its data alone. Only a true remote client needs us.
+        // Integrated server (SP/LAN host) fills these same statics in this JVM -> never clobber it.
         if (Minecraft.getInstance().getSingleplayerServer() != null) {
             return;
         }
@@ -64,9 +64,7 @@ public final class ClientDatapackRecipes implements ResourceManagerReloadListene
         load("grog_recipes", com.bannerbound.antiquity.recipe.GrogRecipeManager::applyEntries);
         load("stew_recipes", com.bannerbound.antiquity.recipe.StewRecipeManager::applyEntries);
         load("fletching_recipes", FletchingRecipeManager::applyEntries);
-        // NOTE: arrow_parts is intentionally NOT loaded here — it's pushed to clients by
-        // ArrowPartsSyncPayload on join/reload (covers singleplayer + remote + modpack-added parts),
-        // and a client F3+T must not clobber that synced set with only the jar's bundled parts.
+        // arrow_parts intentionally absent: ArrowPartsSyncPayload pushes it on join/reload, and a client F3+T must not clobber that synced set.
         load("anvil_recipes", com.bannerbound.antiquity.recipe.AnvilRecipeManager::applyEntries);
         load("metalworking", com.bannerbound.antiquity.metalworking.MetalworkingData::applyEntries);
         load("pottery_recipes", PotteryRecipeManager::applyEntries);
@@ -79,9 +77,6 @@ public final class ClientDatapackRecipes implements ResourceManagerReloadListene
         load("masonry_outputs", MasonryOutputManager::applyEntries);
     }
 
-    /** Read every {@code .json} under {@code data/<modid>/<folder>} in this mod's file and hand the
-     *  parsed entries to {@code sink} (the manager's {@code applyEntries}). Fully defensive — any
-     *  failure logs and leaves that manager empty rather than throwing through the reload. */
     private static void load(String folder, Consumer<Map<ResourceLocation, JsonElement>> sink) {
         Map<ResourceLocation, JsonElement> entries = new HashMap<>();
         try {

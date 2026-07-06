@@ -31,18 +31,18 @@ import net.minecraft.world.level.block.state.properties.EnumProperty;
 import net.minecraft.world.phys.BlockHitResult;
 
 /**
- * The formed Bloomery — a 1×1×2 multiblock built by stacking two mud-brick blocks and right-
- * clicking the lower one with a block of coal ({@code AntiquityEvents} handles that formation).
- * Occupies two block positions ({@link DoubleBlockHalf} LOWER/UPPER); the lower carries the
- * block entity and its renderer draws the whole model.
- * <ul>
- *   <li>Right-click with an item → puts the whole stack inside (door must be open, bloomery empty).</li>
- *   <li>Right-click empty-handed → takes the held stack back out (door must be open).</li>
- *   <li>Right-click with flint &amp; steel → ignites it (door must be open).</li>
- *   <li>Shift-right-click empty-handed → toggles the door.</li>
- * </ul>
- * Fire Sticks and Bellows are handled by the items themselves (a held charge), so this block
- * skips its own interactions for them — aiming at the bloomery starts the wind-up directly.
+ * The formed Bloomery -- a 1x1x2 multiblock created by stacking two mud-brick blocks and
+ * right-clicking the lower one with a block of coal (AntiquityEvents handles that formation). It
+ * occupies two positions via DoubleBlockHalf LOWER/UPPER: only the LOWER half carries the block
+ * entity and ticker, and its renderer draws the whole model. All interactions resolve through
+ * getController (the public overload resolves the controller from any position the multiblock
+ * occupies and is what BellowsBlock calls to pump heat). Right-click with an item puts the whole
+ * held stack inside (door open, bloomery empty); right-click empty-handed takes the held stack back
+ * out (door open); flint and steel ignites it (door open, damages the item); shift + empty hand
+ * toggles the door. Fire Sticks charge in the hand, so useItemOn answers
+ * SKIP_DEFAULT_BLOCK_INTERACTION for them -- the item's own use() then runs and the wind-up starts
+ * while aiming at the bloomery. Breaking either half makes the first segment clear its partner
+ * (UPDATE_SUPPRESS_DROPS) and return the two mud bricks plus any item still held inside.
  */
 public class BloomeryBlock extends Block implements EntityBlock {
     public static final MapCodec<BloomeryBlock> CODEC = simpleCodec(BloomeryBlock::new);
@@ -68,7 +68,6 @@ public class BloomeryBlock extends Block implements EntityBlock {
 
     @Override
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
-        // Only the lower segment carries the block entity (and its renderer).
         return state.getValue(HALF) == DoubleBlockHalf.LOWER ? new BloomeryBlockEntity(pos, state) : null;
     }
 
@@ -91,7 +90,6 @@ public class BloomeryBlock extends Block implements EntityBlock {
             return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
         }
 
-        // Flint & steel → ignite the bloomery (door must be open).
         if (stack.is(Items.FLINT_AND_STEEL)) {
             if (!controller.isOpen()) {
                 return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
@@ -103,13 +101,11 @@ public class BloomeryBlock extends Block implements EntityBlock {
             return ItemInteractionResult.sidedSuccess(level.isClientSide);
         }
 
-        // Fire Sticks charge in the hand — skip every block interaction (including the default
-        // empty-hand one) so the item's own use() runs and the wind-up starts right here.
         if (stack.is(BannerboundAntiquity.FIRE_STICKS.get())) {
+            // SKIP (not PASS) so no block interaction runs and FireSticks.use() starts the wind-up.
             return ItemInteractionResult.SKIP_DEFAULT_BLOCK_INTERACTION;
         }
 
-        // Any other item → put the whole held stack inside (door open, bloomery empty).
         if (stack.isEmpty() || !controller.isOpen() || !controller.getHeldItem().isEmpty()) {
             return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
         }
@@ -135,12 +131,10 @@ public class BloomeryBlock extends Block implements EntityBlock {
         if (controller == null) {
             return InteractionResult.PASS;
         }
-        // Shift → toggle the door.
         if (player.isSecondaryUseActive()) {
             controller.toggle();
             return InteractionResult.CONSUME;
         }
-        // Plain + empty hand → take the held stack back out (only through an open door).
         if (controller.isOpen() && !controller.getHeldItem().isEmpty()) {
             giveOrDrop(player, controller.extract());
             return InteractionResult.CONSUME;
@@ -148,13 +142,11 @@ public class BloomeryBlock extends Block implements EntityBlock {
         return InteractionResult.PASS;
     }
 
-    /** The block entity on the lower segment, resolving up/down from whichever segment was hit. */
     private static BloomeryBlockEntity getController(Level level, BlockPos pos, BlockState state) {
         BlockPos lower = state.getValue(HALF) == DoubleBlockHalf.LOWER ? pos : pos.below();
         return level.getBlockEntity(lower) instanceof BloomeryBlockEntity be ? be : null;
     }
 
-    /** Resolves the bloomery's controller from any block position it occupies, or {@code null}. */
     @Nullable
     public static BloomeryBlockEntity getController(Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
@@ -171,7 +163,6 @@ public class BloomeryBlock extends Block implements EntityBlock {
     protected void onRemove(BlockState oldState, Level level, BlockPos pos, BlockState newState, boolean moved) {
         if (!oldState.is(newState.getBlock())) {
             BlockPos partner = oldState.getValue(HALF) == DoubleBlockHalf.LOWER ? pos.above() : pos.below();
-            // The first segment to break clears its partner and returns the two mud bricks.
             if (level.getBlockState(partner).is(this)) {
                 if (!level.isClientSide) {
                     Block.popResource(level, pos, new ItemStack(Items.MUD_BRICKS, 2));

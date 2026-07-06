@@ -53,92 +53,100 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 
 /**
- * Throwaway driver for {@code /bannerbound trader_simulate <start> <end> [sailing]} — a single-trader
- * proof of the long-distance traversal model. Two liveness states, switched on observation:
+ * Single-trader long-distance traversal driver: powers /bannerbound trader_simulate (a throwaway
+ * debug run) and any number of adopted trade couriers (real roster citizens, typically trading
+ * stockers) driven point-to-point. Wire tickAll into ResearchEvents.onServerTick beside
+ * SimulationManager.tickAll. Sessions are transient (keyed by session id in SESSIONS); owners
+ * rebuild them after a restart, and completion fires JourneyListener exactly once on the main
+ * thread (fail reason in route_failed/muster_timeout/timeout/returned/lost/stopped).
  *
- * <ul>
- *   <li><b>REAL</b> — a real {@link CitizenEntity} carrying its own moving chunk-load ticket (a 5×5
- *       entity-ticking bubble). It walks/boats, lays road live, is robbable. Used whenever a player is
- *       near enough to see it.</li>
- *   <li><b>GHOST</b> — no entity, no ticket, <em>no chunk-load</em>. Its position advances by a clock
- *       at the cruise speed measured while it was real; road is recorded as data and materialized when
- *       a chunk later loads. Used whenever no player is near. The instant a player approaches, it
- *       re-materializes into a REAL entity at its dead-reckoned position (boat reconstructed if it's
- *       over deep water), so robbery/meet-on-road still work — there's just no one to rob a ghost.</li>
- * </ul>
+ * Two liveness states, switched on player observation:
+ *   REAL  - a real CitizenEntity carrying its own moving chunk-load ticket (an entity-ticking
+ *           bubble) so its AI runs off-screen. It walks/boats, lays road live, is robbable.
+ *   GHOST - no entity, no ticket, NO chunk-load. Its position advances by a clock at the cruise
+ *           speed measured while it was real; road is recorded as data (PENDING_ROAD) and
+ *           materialized when a chunk later loads. The instant a player nears it re-materializes as
+ *           REAL at its dead-reckoned position (boat rebuilt if over deep water). So the count of
+ *           simultaneously-REAL traders is bounded by player count, not trader count. The
+ *           realize/ghost band tracks the entity's real client-tracking range (real exactly when a
+ *           client would start receiving it -> no pop-in; ghost a few chunks past that -> no
+ *           pop-out; the gap is hysteresis). EXCEPTION: an adopted courier is a real roster citizen
+ *           and is NEVER ghosted or discarded - always REAL under the ticket for the whole trip.
  *
- * The count of simultaneously-real traders is therefore bounded by player count, not trader count.
+ * Routing runs OFF-THREAD (CompletableFuture) over PREDICTED terrain: noise-sampled getBaseHeight +
+ * sea level, so nothing is loaded or generated, as a coarse ROUTE_GRID A*. Real loaded-chunk
+ * surfaces near both endpoints are snapshotted on the main thread first and override the prediction,
+ * so routes follow player-built bridges rather than detour around them. Heights use OCEAN_FLOOR (the
+ * solid top under fluids) NOT WORLD_SURFACE, so sea - height reads true water depth instead of 0 at
+ * the surface. Deep water (> WADE_DEPTH) needs a boat when sailing / is impassable without; shallow
+ * water is waded. Every route stamps into a persistent ROAD_NETWORK the router discounts, so later
+ * journeys converge onto existing roads instead of laying parallel lines.
  *
- * <p>Still stubbed (next phase): the route is a straight-line waypoint chain — coarse heightmap A*
- * (proper land routing + water-avoidance for no-sailing) replaces it. While ghosting, the clock glides
- * straight over terrain/water it can't see; reality is consulted only on realize/road-materialize.
+ * Ghost-laid road outlives its session: drainReadyRoad polls on the MAIN thread (deliberately no
+ * chunk-load event -> no off-thread races) and materializes pending columns whenever their chunk
+ * is loaded, including long after the journey ended. paveColumn
+ * is public so stocker outpost runs lay the same road style (see StockerWorkGoal); adopted couriers
+ * pave WILDERNESS only (never a settlement claim), the debug trader paves everywhere.
+ *
+ * Spawned traders get their vanilla goal + target AI stripped so ONLY our navigation moves them
+ * (kills the idle-stroll interludes and the night invisibility-potion goal); navigation and move
+ * control still tick in Mob.serverAiStep independent of goals, so external moveTo drives them
+ * cleanly. Riderless boats are steered by hand every tick (an AI passenger never paddles);
+ * setPaddleState is synced so clients animate the oars. Water rules: waterDepth counts standing
+ * water from the surface down to the first non-water block, and nearestDryToward steps toward the
+ * target for a fully-dry shore column so disembarks never land in water.
+ *
+ * Open: replace the straight-line waypoint fallback (used when the sailing route plan returns null)
+ * with proper water-aware A*.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
 public final class TraderSimManager {
     private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("bannerbound-trader-sim");
 
-    /** Non-persistent ticket (auto-clears on restart, unlike {@code setChunkForced}). Radius 2 puts the
-     *  trader's own chunk at ENTITY_TICKING (ticket level 31 = 33 - radius) so its AI runs with no
-     *  player anywhere near — that's what makes a REAL trader keep walking off-screen. Valued by the
-     *  SESSION id (not the chunk) so two journeys crossing the same chunk never drop each other's. */
     private static final TicketType<UUID> TRADER_TICKET =
         TicketType.create("bannerbound_trader_sim", UUID::compareTo);
+    // radius 2 -> trader's chunk at ENTITY_TICKING (ticket level 31 = 33 - radius): AI ticks off-screen.
     private static final int TICKET_RADIUS = 2;
 
-    private static final int WAYPOINT_SPACING = 12;    // blocks between waypoints (straight-line fallback)
-    private static final double ARRIVE_RADIUS = 2.5;   // horizontal dist to count a waypoint reached
-    private static final int DENSIFY_STEP = 4;         // subdivide the coarse route to this spacing — smoother following
-    private static final int DEEP_WATER_GRACE = 40;    // ticks a no-sailing trader tries to climb out of water before giving up
-    private static final double MOVE_SPEED = 0.8;      // nav speed multiplier — citizen base is locked at 0.4, so ~0.32 (calm)
-    private static final int STUCK_TICKS = 80;         // ticks of no progress toward a waypoint before a nudge
-    private static final int MAX_NUDGES = 4;           // micro-hops over a ledge before we concede the leg
-    private static final double NUDGE_DIST = 2.0;      // how far each unstick hop carries the trader
-    private static final double STEP_HEIGHT = 1.0;     // climb 1-block terrace steps by walking, not jumping
-    private static final double BOAT_SPEED = 0.35;     // boat propulsion per tick across water
-    private static final double WATER_LOOKAHEAD = 2.0; // blocks ahead we sniff for water to board / land
-    private static final int WADE_DEPTH = 2;           // water this shallow is walked, not boated/blocked
-    private static final int BOARD_COOLDOWN = 30;      // ticks after stepping off before it may re-board
+    private static final int WAYPOINT_SPACING = 12;
+    private static final double ARRIVE_RADIUS = 2.5;
+    private static final int DENSIFY_STEP = 4;
+    private static final int DEEP_WATER_GRACE = 40;
+    private static final double MOVE_SPEED = 0.8;
+    private static final int STUCK_TICKS = 80;
+    private static final int MAX_NUDGES = 4;
+    private static final double NUDGE_DIST = 2.0;
+    private static final double STEP_HEIGHT = 1.0;
+    private static final double BOAT_SPEED = 0.35;
+    private static final double WATER_LOOKAHEAD = 2.0;
+    private static final int WADE_DEPTH = 2;
+    private static final int BOARD_COOLDOWN = 30;
 
-    // Realize-on-observe band is derived from the entity's real client-tracking range (see tickAll):
-    // become real exactly when a client would start receiving the entity (no pop-in), and ghost a few
-    // chunks past that (no pop-out), with the gap acting as hysteresis.
-    private static final double REALIZE_FLOOR = 64.0;  // never realize closer than this
-    private static final double GHOST_MARGIN = 48.0;   // ghost this far beyond the realize distance
-    private static final double GHOST_MIN_SPEED = 0.08;// clamp the measured cruise speed used by the ghost
+    private static final double REALIZE_FLOOR = 64.0;
+    private static final double GHOST_MARGIN = 48.0;
+    private static final double GHOST_MIN_SPEED = 0.08;
     private static final double GHOST_MAX_SPEED = 0.5;
 
-    private static final int ROUTE_GRID = 16;            // coarse A* node spacing (blocks) — bigger = far cheaper
-    private static final int ROUTE_MAX_EXPANSIONS = 60000; // headroom to route the long way around water
-    private static final double SLOPE_PENALTY = 0.6;     // cost per block of height change between nodes
-    private static final double WATER_PENALTY = 8.0;     // extra cost crossing deep water (sailing only)
-    private static final double ROAD_DISCOUNT = 0.2;     // an existing-road node costs this fraction → reuse roads
-    private static final int OVERRIDE_RADIUS = 12;       // chunks around start/end whose REAL surface
-                                                         // (incl. player bridges/builds) overrides the prediction
-    private static final int DRAIN_CHUNK_BUDGET = 8;   // chunks of pending road materialized per tick
+    private static final int ROUTE_GRID = 16;
+    private static final int ROUTE_MAX_EXPANSIONS = 60000;
+    private static final double SLOPE_PENALTY = 0.6;
+    private static final double WATER_PENALTY = 8.0;
+    private static final double ROAD_DISCOUNT = 0.2;
+    private static final int OVERRIDE_RADIUS = 12;
+    private static final int DRAIN_CHUNK_BUDGET = 8;
 
-    /** Every running journey, keyed by session id — the debug run and any number of adopted trade
-     *  couriers tick side by side. Sessions are transient; owners rebuild them after a restart. */
     private static final Map<UUID, TraderSimSession> SESSIONS = new java.util.LinkedHashMap<>();
-    /** The one {@code /bannerbound trader_simulate} session (stop()/isActive() scope to it). */
     private static UUID debugSessionId;
 
-    // Ghost-laid road persists independently of the session: recorded per chunk, materialized when that
-    // chunk next loads (a player visiting it / going to meet the trader), surviving the journey's end.
     private static final Map<Long, List<int[]>> PENDING_ROAD = new HashMap<>();
 
-    // The road *network*: grid cells that carry road, accumulated across every journey (persists for the
-    // JVM session). The router discounts these cells so new routes converge onto and follow existing
-    // roads instead of laying parallel lines. Concurrent set: route planning READS it off-thread while
-    // the main thread stamps new routes in.
+    // Concurrent: route planning READS this off-thread while the main thread stamps new routes in.
     private static final java.util.Set<Long> ROAD_NETWORK = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-    /** Completion callbacks for owned journeys (adopted couriers) — fired on the main thread exactly
-     *  once, after the session is torn down. Transient; the owner re-attaches on resume. */
     public interface JourneyListener {
         void onArrived(UUID journeyId);
 
-        /** {@code reason} ∈ route_failed / muster_timeout / timeout / returned / lost / stopped. */
         void onFailed(UUID journeyId, String reason);
     }
 
@@ -149,19 +157,15 @@ public final class TraderSimManager {
         return debugSessionId != null && SESSIONS.containsKey(debugSessionId);
     }
 
-    /** True while journey {@code id} is still running. */
     public static boolean hasSession(UUID id) {
         return id != null && SESSIONS.containsKey(id);
     }
 
-    /** Begins the DEBUG journey ({@code /bannerbound trader_simulate}): spawns a throwaway trader once
-     *  the off-thread route plan lands. Replaces any previous debug run; adopted courier journeys are
-     *  untouched. Returns null unless it can't even begin. */
     public static String start(MinecraftServer server, ServerPlayer initiator, BlockPos start, BlockPos end,
                                boolean sailing) {
         if (server == null) return "No server.";
         ServerLevel level = server.overworld();
-        stop(server); // clears any previous DEBUG session (plan pending or running)
+        stop(server);
 
         long now = level.getGameTime();
         double totalDist = Math.hypot((double) end.getX() - start.getX(), (double) end.getZ() - start.getZ());
@@ -171,7 +175,6 @@ public final class TraderSimManager {
         s.debug = true;
         s.gx = start.getX() + 0.5;
         s.gz = start.getZ() + 0.5;
-        // Snapshot real loaded-chunk surfaces (incl. player bridges) on the main thread, then plan off-thread.
         Map<Long, int[]> override = snapshotLoadedFloors(level, start, end);
         s.planFuture = CompletableFuture.supplyAsync(() -> planRoute(level, start, end, sailing, override));
         SESSIONS.put(s.id, s);
@@ -179,11 +182,6 @@ public final class TraderSimManager {
         return null;
     }
 
-    /** Begins an ADOPTED courier journey: {@code courier} (a real roster citizen, typically a trading
-     *  stocker) is driven from {@code from} to {@code to} by this sim — mustering toward {@code from}
-     *  while the route plan runs off-thread, then walking the waypoints. The citizen keeps its own AI
-     *  suspended via {@code CitizenEntity.isOnTradeJourney()} (the caller sets the journey id) and is
-     *  NEVER ghosted or discarded — it stays real under the moving ticket for the whole trip. */
     public static UUID startAdopted(MinecraftServer server, CitizenEntity courier, BlockPos from,
                                     BlockPos to, boolean sailing, JourneyListener listener) {
         ServerLevel level = server.overworld();
@@ -215,8 +213,6 @@ public final class TraderSimManager {
         return s.id;
     }
 
-    /** Ends journey {@code id} (adopted courier abort / owner cleanup). Fires the listener with
-     *  {@code reason} unless null. */
     public static void stopSession(MinecraftServer server, UUID id, String reason) {
         TraderSimSession s = SESSIONS.get(id);
         if (s == null) return;
@@ -227,8 +223,6 @@ public final class TraderSimManager {
         finishFailed(server, s, reason == null ? "stopped" : reason, null);
     }
 
-    /** Main-thread handoff once a session's off-thread plan is ready: set the waypoints (debug runs
-     *  also spawn their trader here), or fail the journey. */
     private static void onPlanReady(MinecraftServer server, TraderSimSession s, List<int[]> planned) {
         ServerLevel level = server.overworld();
         List<int[]> waypoints = planned;
@@ -238,10 +232,10 @@ public final class TraderSimManager {
                     "Couldn't reach — no land route without crossing water (try sailing).");
                 return;
             }
-            waypoints = buildWaypoints(s.start, s.end); // sailing: straight line, cross by boat
+            waypoints = buildWaypoints(s.start, s.end);
         }
-        waypoints = densify(waypoints, s.start); // tight following + stays on narrow bridges
-        addRouteToNetwork(s.start, waypoints); // becomes part of the network later routes reuse
+        waypoints = densify(waypoints, s.start);
+        addRouteToNetwork(s.start, waypoints);
 
         long now = level.getGameTime();
         s.waypoints = waypoints;
@@ -266,7 +260,6 @@ public final class TraderSimManager {
         }
     }
 
-    /** Total length of the planned path (start → each waypoint), for a fair time budget on detours. */
     private static double routePathLength(BlockPos start, List<int[]> waypoints) {
         double len = 0.0;
         double px = start.getX() + 0.5, pz = start.getZ() + 0.5;
@@ -278,11 +271,10 @@ public final class TraderSimManager {
         return len;
     }
 
-    /** Per-tick driver. Wire into {@code ResearchEvents.onServerTick} next to {@link SimulationManager#tickAll}. */
     public static void tickAll(MinecraftServer server) {
         if (server == null) return;
         ServerLevel level = server.overworld();
-        drainReadyRoad(level); // turn ghost-laid road into blocks in chunks that just loaded (runs even idle)
+        drainReadyRoad(level);
         if (SESSIONS.isEmpty()) return;
         for (TraderSimSession s : new ArrayList<>(SESSIONS.values())) {
             tickSession(server, level, s);
@@ -292,7 +284,6 @@ public final class TraderSimManager {
     private static void tickSession(MinecraftServer server, ServerLevel level, TraderSimSession s) {
         long now = level.getGameTime();
 
-        // Resolve this session's off-thread route plan the tick it lands.
         if (s.planFuture != null && s.planFuture.isDone()) {
             List<int[]> planned;
             try {
@@ -303,18 +294,16 @@ public final class TraderSimManager {
             }
             s.planFuture = null;
             onPlanReady(server, s, planned);
-            if (!SESSIONS.containsKey(s.id)) return; // plan failure finished the session
+            if (!SESSIONS.containsKey(s.id)) return;
         }
 
-        // Adopted couriers muster toward the departure point while the plan is still cooking (and
-        // keep mustering after it lands, until they actually reach it).
         if (s.adopted && !s.mustered) {
             if (now >= s.musterDeadline) {
                 finishFailed(server, s, "muster_timeout", null);
                 return;
             }
             CitizenEntity courier = resolveAdopted(server, level, s);
-            if (courier == null) return; // lost-grace handling inside resolveAdopted
+            if (courier == null) return;
             followWithTicket(level, s, courier);
             if (horiz(courier.getX(), courier.getZ(), s.start.getX() + 0.5, s.start.getZ() + 0.5)
                     <= ARRIVE_RADIUS + 1.5) {
@@ -327,7 +316,7 @@ public final class TraderSimManager {
             }
             return;
         }
-        if (s.waypoints == null) return; // plan still pending (debug run waits in place)
+        if (s.waypoints == null) return;
 
         if (now >= s.maxGameTick) {
             finishFailed(server, s, "timeout", "Trader simulation hit its time budget — ended.");
@@ -336,26 +325,21 @@ public final class TraderSimManager {
 
         CitizenEntity trader;
         if (s.adopted) {
-            // Adopted couriers are ALWAYS real (a roster citizen is never discarded); no ghosting.
             trader = resolveAdopted(server, level, s);
             if (trader == null) return;
         } else {
-            // Resolve the trader's current position (live entity if REAL, dead-reckoned if GHOST).
             trader = null;
             if (!s.ghost) {
                 Entity e = s.traderId == null ? null : level.getEntity(s.traderId);
                 if (e instanceof CitizenEntity t && !t.isRemoved()) {
                     trader = t;
                 } else {
-                    ghostFromLastKnown(level, s); // entity vanished unexpectedly → ghost, don't end
+                    ghostFromLastKnown(level, s);
                 }
             }
             double px = trader != null ? trader.getX() : s.gx;
             double pz = trader != null ? trader.getZ() : s.gz;
 
-            // Switch liveness on observation. Realize exactly when a client would start receiving the
-            // entity (its tracking range, capped by server view distance) so there's no pop-in; ghost a
-            // few chunks past that so there's no pop-out; the gap is hysteresis.
             double nearest = nearestPlayerDist(server, px, pz);
             int trackChunks = Math.min(EntityType.WANDERING_TRADER.clientTrackingRange(),
                 server.getPlayerList().getViewDistance());
@@ -374,7 +358,7 @@ public final class TraderSimManager {
         } else {
             tickReal(server, level, s, now, trader);
         }
-        if (!SESSIONS.containsKey(s.id)) return; // a finish fired inside the tick
+        if (!SESSIONS.containsKey(s.id)) return;
 
         if (s.debug && now - s.lastProgressTick >= 40L) {
             s.lastProgressTick = now;
@@ -382,9 +366,6 @@ public final class TraderSimManager {
         }
     }
 
-    /** The adopted courier entity, with a lost-grace: a chunk-edge race can briefly lose the entity,
-     *  so keep the ticket parked at the last known spot and refetch; a courier missing for too long
-     *  (killed, or truly gone) fails the journey — the owner falls back to the clock. */
     private static CitizenEntity resolveAdopted(MinecraftServer server, ServerLevel level, TraderSimSession s) {
         Entity e = s.traderId == null ? null : level.getEntity(s.traderId);
         if (e instanceof CitizenEntity t && !t.isRemoved() && t.isAlive()) {
@@ -397,7 +378,6 @@ public final class TraderSimManager {
         return null;
     }
 
-    /** Moves the session's chunk-ticket bubble to follow {@code walker} into each new chunk. */
     private static void followWithTicket(ServerLevel level, TraderSimSession s, CitizenEntity walker) {
         ChunkPos tc = new ChunkPos(walker.blockPosition());
         if (!tc.equals(s.ticketCenter)) {
@@ -409,8 +389,6 @@ public final class TraderSimManager {
         }
     }
 
-    /** Ends the DEBUG session and/or cancels its pending plan (adopted journeys are untouched —
-     *  they end via {@link #stopSession} or their own completion). */
     public static void stop(MinecraftServer server) {
         TraderSimSession s = debugSessionId == null ? null : SESSIONS.get(debugSessionId);
         debugSessionId = null;
@@ -442,10 +420,8 @@ public final class TraderSimManager {
         finish(server, s, why, false);
     }
 
-    /** Tears the session down (ticket, boat, spawned entity — adopted couriers are NOT discarded)
-     *  and fires the completion listener exactly once. */
     private static void finish(MinecraftServer server, TraderSimSession s, String why, boolean arrived) {
-        if (SESSIONS.remove(s.id) == null) return; // already finished on another path
+        if (SESSIONS.remove(s.id) == null) return;
         if (s.id.equals(debugSessionId)) debugSessionId = null;
         if (server == null) return;
         ServerLevel level = server.overworld();
@@ -461,7 +437,6 @@ public final class TraderSimManager {
             }
         }
         if (s.adopted) {
-            // The courier is a real roster citizen — restore what adoption changed and leave it be.
             Entity e = s.traderId == null ? null : level.getEntity(s.traderId);
             if (e instanceof CitizenEntity courier && !Double.isNaN(s.prevStepHeight)) {
                 AttributeInstance step = courier.getAttribute(Attributes.STEP_HEIGHT);
@@ -481,10 +456,6 @@ public final class TraderSimManager {
         }
     }
 
-    // ─── liveness transitions ─────────────────────────────────────────────────────────────────────
-
-    /** REAL → GHOST: snapshot position, tear down the entity + boat + ticket (stops all chunk-load).
-     *  Never called for adopted couriers — a roster citizen is never discarded. */
     private static void ghostify(ServerLevel level, TraderSimSession s, CitizenEntity trader) {
         s.gx = trader.getX();
         s.gy = trader.getY();
@@ -502,12 +473,10 @@ public final class TraderSimManager {
         }
     }
 
-    /** GHOST → REAL: load the chunk at the dead-reckoned position and spawn the entity there, putting it
-     *  in a boat if it's over deep water (so a player who arrives mid-crossing sees it boated). */
     private static CitizenEntity realize(ServerLevel level, TraderSimSession s) {
         int bx = (int) Math.floor(s.gx);
         int bz = (int) Math.floor(s.gz);
-        level.getChunk(bx >> 4, bz >> 4); // force the chunk present so we can read ground + spawn
+        level.getChunk(bx >> 4, bz >> 4);
         boolean overDeep = s.sailing && isDeepWaterColumn(level, bx, bz);
         int surfaceY = level.getHeight(Heightmap.Types.WORLD_SURFACE, bx, bz);
         double y = overDeep ? surfaceY : groundY(level, bx, bz);
@@ -532,8 +501,6 @@ public final class TraderSimManager {
         return trader;
     }
 
-    /** Defensive: the real entity disappeared (chunk edge race) — convert to a ghost at the last known
-     *  position instead of ending the whole journey. */
     private static void ghostFromLastKnown(ServerLevel level, TraderSimSession s) {
         s.ghost = true;
         s.boatId = null;
@@ -547,8 +514,6 @@ public final class TraderSimManager {
         CitizenEntity trader = BannerboundCore.CITIZEN.get().create(level);
         if (trader == null) return null;
 
-        // Identity: borrow the initiator's settlement (banner colour, era) if they have one, else a
-        // detached citizen with a null settlement (safe — every getSettlement() caller null-checks).
         Settlement set = s.initiator != null ? SettlementData.get(level).getByPlayer(s.initiator) : null;
         Era era = set != null ? set.age() : SettlementData.get(level).getWorldAge();
         CitizenGender gender = level.random.nextBoolean() ? CitizenGender.MALE : CitizenGender.FEMALE;
@@ -556,21 +521,17 @@ public final class TraderSimManager {
         trader.initializeCitizen(set != null ? set.id() : null,
             CitizenNameLoader.randomName(level.random, era, gender), gender, era, color);
         trader.setCompliance(100);
-        trader.markSimulated(); // not saved to NBT; not part of any settlement roster
+        trader.markSimulated();
 
         trader.moveTo(x, y, z, 0.0F, 0.0F);
-        // Speed: the base is hard-locked to 0.4 by CitizenEntity.recomputeSpeedModifier, so we DON'T set
-        // it — we drive the calm pace via the MOVE_SPEED navigation multiplier instead (and the ghost
-        // measures whatever the real cruise turns out to be, so the two stay matched).
+        // Don't set base movement speed: recomputeSpeedModifier hard-locks it to 0.4; pace comes from the MOVE_SPEED nav multiplier.
         AttributeInstance step = trader.getAttribute(Attributes.STEP_HEIGHT);
-        if (step != null) step.setBaseValue(STEP_HEIGHT); // walk up terrace ledges instead of stalling
-        stripGoals(trader); // ONLY our navigation drives it — no citizen work/patrol/wander goals
+        if (step != null) step.setBaseValue(STEP_HEIGHT);
+        stripGoals(trader);
         if (trader.getNavigation() instanceof GroundPathNavigation gpn) gpn.setCanFloat(s.sailing);
         if (!level.addFreshEntity(trader)) return null;
         return trader;
     }
-
-    // ─── GHOST tick (computed clock, no chunk access) ─────────────────────────────────────────────
 
     private static void tickGhost(MinecraftServer server, ServerLevel level, TraderSimSession s) {
         int[] wp = s.waypoints.get(s.index);
@@ -595,9 +556,6 @@ public final class TraderSimManager {
         }
     }
 
-    /** Remember a road column the ghost glided over, bucketed by chunk, to materialize when that chunk
-     *  next loads. If the chunk happens to be loaded right now (a player is near the ghost), queue it
-     *  for materialization next tick. */
     private static void recordGhostRoad(TraderSimSession s, int x, int z) {
         if (x == s.lastGhostRoadX && z == s.lastGhostRoadZ) return;
         s.lastGhostRoadX = x;
@@ -606,14 +564,10 @@ public final class TraderSimManager {
             .add(new int[] { x, z });
     }
 
-    // ─── REAL tick (live entity, walks/boats, lays road, robbable) ────────────────────────────────
-
     private static void tickReal(MinecraftServer server, ServerLevel level, TraderSimSession s, long now,
                                  CitizenEntity trader) {
-        trader.setAirSupply(trader.getMaxAirSupply()); // prototype safety: the sim trader never drowns
+        trader.setAirSupply(trader.getMaxAirSupply());
 
-        // Measure cruise speed (only while actually moving, so pauses don't drag it down) and keep the
-        // ghost mirror current so a later ghostify has the exact position + matching speed.
         if (!Double.isNaN(s.lastX)) {
             double disp = horiz(trader.getX(), trader.getZ(), s.lastX, s.lastZ);
             if (disp > 0.05) s.observedSpeed = clampSpeed(s.observedSpeed * 0.8 + disp * 0.2);
@@ -624,13 +578,11 @@ public final class TraderSimManager {
         s.gy = trader.getY();
         s.gz = trader.getZ();
 
-        // Move the force-ticket bubble to follow the trader into each new chunk.
         followWithTicket(level, s, trader);
 
         boolean boating = trader.isPassenger() && trader.getVehicle() instanceof Boat;
-        if (!boating) paveUnder(level, trader, s); // never pave water
+        if (!boating) paveUnder(level, trader, s);
 
-        // Advance past any waypoints we've already reached.
         int[] wp = s.waypoints.get(s.index);
         double d = horiz(trader.getX(), trader.getZ(), wp[0] + 0.5, wp[1] + 0.5);
         while (d <= ARRIVE_RADIUS) {
@@ -648,7 +600,6 @@ public final class TraderSimManager {
             d = horiz(trader.getX(), trader.getZ(), wp[0] + 0.5, wp[1] + 0.5);
         }
 
-        // Track genuine progress (closing the gap to the waypoint), shared by the stuck checks below.
         if (d < s.bestDist - 0.25) {
             s.bestDist = d;
             s.noProgressTicks = 0;
@@ -657,15 +608,12 @@ public final class TraderSimManager {
             s.noProgressTicks++;
         }
 
-        // Sniff ahead: only *deep* water (> WADE_DEPTH) needs a boat / blocks a no-sailing trader.
         int[] ahead = lookAhead(trader, wp, WATER_LOOKAHEAD);
         boolean deepAhead = isDeepWaterColumn(level, ahead[0], ahead[1]);
         boolean deepHere = isDeepWaterColumn(level, trader.getBlockX(), trader.getBlockZ());
 
         if (boating) {
             Boat boat = (Boat) trader.getVehicle();
-            // Step off only onto DRY land toward the waypoint; keep the boat going until it's in reach.
-            // Short cooldown stops the edge depth-flicker from immediately re-boarding it.
             int[] dry = nearestDryToward(level, trader, wp, 4);
             if (dry != null || s.noProgressTicks > STUCK_TICKS * 2) {
                 int[] target = dry != null ? dry : nearestDryToward(level, trader, wp, 16);
@@ -682,7 +630,6 @@ public final class TraderSimManager {
                 driveBoat(boat, wp);
             }
         } else if (s.sailing && now >= s.noBoatUntil && (deepAhead || deepHere)) {
-            // Sailing → board an oak boat at the deep water just ahead and float across.
             int bx = deepAhead ? ahead[0] : trader.getBlockX();
             int bz = deepAhead ? ahead[1] : trader.getBlockZ();
             int by = level.getHeight(Heightmap.Types.WORLD_SURFACE, bx, bz);
@@ -694,9 +641,6 @@ public final class TraderSimManager {
                 resetLeg(s);
             }
         } else {
-            // No-sailing in deep water: first try to RECOVER for a grace window — hop back onto the
-            // nearest dry ground toward the waypoint (e.g. back onto a bridge it slipped off) and keep
-            // going; never drown. Only if it stays water-locked do we give up and turn back.
             if (!s.sailing && deepHere) {
                 s.deepWaterTicks++;
                 int[] dry = nearestDryToward(level, trader, wp, 6);
@@ -715,21 +659,18 @@ public final class TraderSimManager {
                 return;
             }
             s.deepWaterTicks = 0;
-            // On foot. Re-issue the path whenever navigation goes idle.
             if (trader.getNavigation().isDone()) {
                 int wy = groundY(level, wp[0], wp[1]);
                 trader.getNavigation().moveTo(wp[0] + 0.5, wy, wp[1] + 0.5, MOVE_SPEED);
             }
             if (!s.sailing && deepAhead && s.noProgressTicks > STUCK_TICKS * 2) {
-                // No sailing and a deep-water wall we can't get past on foot.
                 s.noProgressTicks = 0;
                 if (!s.returning) {
                     beginReturn(server, s, trader);
                 } else {
-                    finishFailed(server, s, "returned", s.pendingFail); // blocked again heading home
+                    finishFailed(server, s, "returned", s.pendingFail);
                 }
             } else if (s.noProgressTicks > STUCK_TICKS && !(deepAhead && !s.sailing)) {
-                // Progress-based unstick over land ledges (one leg at a time, never skip ahead).
                 s.noProgressTicks = 0;
                 s.nudges++;
                 if (s.nudges <= MAX_NUDGES) {
@@ -744,7 +685,7 @@ public final class TraderSimManager {
                     trader.getNavigation().stop();
                     s.bestDist = horiz(nx + 0.5, nz + 0.5, wp[0] + 0.5, wp[1] + 0.5);
                 } else if (s.returning) {
-                    finishFailed(server, s, "returned", s.pendingFail); // wedged heading home
+                    finishFailed(server, s, "returned", s.pendingFail);
                 } else {
                     int wy = groundY(level, wp[0], wp[1]);
                     trader.moveTo(wp[0] + 0.5, wy, wp[1] + 0.5);
@@ -756,7 +697,6 @@ public final class TraderSimManager {
         }
     }
 
-    /** Turn the trader around: rebuild the route from here back to the origin and head home. */
     private static void beginReturn(MinecraftServer server, TraderSimSession s, CitizenEntity trader) {
         s.returning = true;
         s.pendingFail = "Couldn't reach the destination — can't cross water.";
@@ -766,15 +706,6 @@ public final class TraderSimManager {
         message(server, s, "Trader hit impassable water — turning back.");
     }
 
-    // ─── road materialization (ghost-laid road → blocks, lazily as chunks load) ────────────────────
-
-    /** Materialize ghost-laid road in chunks that just loaded (queued by {@link #onChunkLoad}). Runs
-     *  every tick regardless of an active session, so road shows up whenever you walk/teleport to it —
-     *  including after the journey has ended. */
-    /** Materialize ghost-laid road into blocks for any pending chunk that is currently loaded. Polled
-     *  on the main thread (no chunk-load event → no off-thread races), a few times a second, regardless
-     *  of an active session — so road shows up whenever you walk/teleport to it, including long after
-     *  the journey ended. Chunks not yet visited stay pending. */
     private static void drainReadyRoad(ServerLevel level) {
         if (PENDING_ROAD.isEmpty() || level.getGameTime() % 10L != 0L) return;
         int chunkBudget = DRAIN_CHUNK_BUDGET;
@@ -782,7 +713,7 @@ public final class TraderSimManager {
         while (it.hasNext() && chunkBudget > 0) {
             Map.Entry<Long, List<int[]>> e = it.next();
             ChunkPos cp = new ChunkPos(e.getKey());
-            if (!level.hasChunk(cp.x, cp.z)) continue; // not visited yet — leave it pending
+            if (!level.hasChunk(cp.x, cp.z)) continue;
             for (int[] pt : e.getValue()) {
                 pave3Wide(level, pt[0], pt[1]);
             }
@@ -790,8 +721,6 @@ public final class TraderSimManager {
             chunkBudget--;
         }
     }
-
-    // ─── helpers ────────────────────────────────────────────────────────────────────────────────
 
     private static double nearestPlayerDist(MinecraftServer server, double px, double pz) {
         ServerLevel overworld = server.overworld();
@@ -824,8 +753,6 @@ public final class TraderSimManager {
         return out;
     }
 
-    /** Subdivides a coarse route into ~{@link #DENSIFY_STEP}-block hops so the trader follows it tightly
-     *  (vanilla nav gets little room to weave, and it stays on narrow bridges). */
     private static List<int[]> densify(List<int[]> wps, BlockPos start) {
         List<int[]> out = new ArrayList<>();
         double px = start.getX();
@@ -844,11 +771,6 @@ public final class TraderSimManager {
 
     private record RouteNode(long node, double f) {}
 
-    /** Plans a route from {@code start} to {@code end} over PREDICTED terrain — noise-sampled
-     *  {@code getBaseHeight} + sea level, so nothing is loaded or generated — as a coarse 8-block-grid
-     *  A*. Prefers gentle land; with sailing it may cross deep water at a cost, without sailing deep
-     *  water is impassable. Returns the waypoint chain, or null when no route exists (the no-sailing
-     *  water-locked case) or the search caps out. */
     private static List<int[]> planRoute(ServerLevel level, BlockPos start, BlockPos end, boolean sailing,
                                          Map<Long, int[]> override) {
         ChunkGenerator gen = level.getChunkSource().getGenerator();
@@ -873,11 +795,11 @@ public final class TraderSimManager {
             if (++expansions > ROUTE_MAX_EXPANSIONS) return null;
             long cur = open.poll().node();
             if (cur == endN) return rebuildRoute(cameFrom, cur, end, override);
-            if (!closed.add(cur)) continue; // already finalized via a cheaper path
+            if (!closed.add(cur)) continue;
             ChunkPos cp = new ChunkPos(cur);
             double curG = gScore.getOrDefault(cur, Double.MAX_VALUE);
             int curFloor = routeHeight(gen, rs, level, height, override, cp.x, cp.z);
-            int curTravel = (sea - curFloor) > WADE_DEPTH ? sea : curFloor; // boats ride the surface; feet the ground
+            int curTravel = (sea - curFloor) > WADE_DEPTH ? sea : curFloor;
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
                     if (dx == 0 && dz == 0) continue;
@@ -886,12 +808,12 @@ public final class TraderSimManager {
                     if (closed.contains(nb)) continue;
                     int nFloor = routeHeight(gen, rs, level, height, override, ngx, ngz);
                     boolean deep = (sea - nFloor) > WADE_DEPTH;
-                    if (!sailing && deep) continue; // deep water is impassable on foot
+                    if (!sailing && deep) continue;
                     int nTravel = deep ? sea : nFloor;
                     double dist = (dx != 0 && dz != 0 ? 1.4142 : 1.0) * ROUTE_GRID;
                     double slope = Math.abs(nTravel - curTravel);
                     double cost = dist * (1.0 + SLOPE_PENALTY * slope / ROUTE_GRID) + (deep ? WATER_PENALTY * dist : 0.0);
-                    if (ROAD_NETWORK.contains(nb)) cost *= ROAD_DISCOUNT; // strongly prefer existing roads
+                    if (ROAD_NETWORK.contains(nb)) cost *= ROAD_DISCOUNT;
                     double tentative = curG + cost;
                     if (tentative < gScore.getOrDefault(nb, Double.MAX_VALUE)) {
                         cameFrom.put(nb, cur);
@@ -901,7 +823,7 @@ public final class TraderSimManager {
                 }
             }
         }
-        return null; // open set exhausted with no path
+        return null;
     }
 
     private static double routeHeuristic(int ax, int az, int bx, int bz) {
@@ -910,14 +832,11 @@ public final class TraderSimManager {
         return Math.sqrt(dx * dx + dz * dz);
     }
 
-    /** Predicted SOLID-floor height at a grid node, cached. Gen-free (samples the noise router, not
-     *  blocks). OCEAN_FLOOR (not WORLD_SURFACE) so over a lake this is the bed, below sea level — that's
-     *  what lets {@code sea - height} read the real water depth instead of 0 at the water's surface. */
     private static int routeHeight(ChunkGenerator gen, RandomState rs, ServerLevel level,
                                    Map<Long, Integer> cache, Map<Long, int[]> override, int gx, int gz) {
         long key = ChunkPos.asLong(gx, gz);
         int[] ov = override.get(key);
-        if (ov != null) return ov[0]; // real surface (sees player bridges/builds) in loaded areas
+        if (ov != null) return ov[0];
         Integer h = cache.get(key);
         if (h != null) return h;
         int hv = gen.getBaseHeight(gx * ROUTE_GRID, gz * ROUTE_GRID, Heightmap.Types.OCEAN_FLOOR_WG, level, rs);
@@ -925,11 +844,6 @@ public final class TraderSimManager {
         return hv;
     }
 
-    /** Snapshots the REAL surface (OCEAN_FLOOR — solid top, ignoring fluids, so a bridge over water
-     *  reads as ground) of currently-loaded chunks near both endpoints, on the main thread. Per grid
-     *  cell (= one chunk at this grid size) it keeps the highest solid surface found, so a thin bridge
-     *  through the cell still makes it crossable. The off-thread router prefers these over the
-     *  prediction, so it routes over player-built bridges/terrain instead of around them. */
     private static Map<Long, int[]> snapshotLoadedFloors(ServerLevel level, BlockPos start, BlockPos end) {
         Map<Long, int[]> out = new HashMap<>();
         snapshotAround(level, out, start);
@@ -958,7 +872,6 @@ public final class TraderSimManager {
                         }
                     }
                 }
-                // {highest solid surface, and the column where it is} — grid cell == chunk at ROUTE_GRID 16.
                 out.put(ChunkPos.asLong(cx, cz), new int[] { best, bx, bz });
             }
         }
@@ -971,7 +884,7 @@ public final class TraderSimManager {
         while (c != null) {
             int[] ov = override.get(c);
             if (ov != null) {
-                pts.add(new int[] { ov[1], ov[2] }); // aim at the real surface column (the bridge), not the corner
+                pts.add(new int[] { ov[1], ov[2] });
             } else {
                 ChunkPos cp = new ChunkPos(c);
                 pts.add(new int[] { cp.x * ROUTE_GRID, cp.z * ROUTE_GRID });
@@ -979,12 +892,10 @@ public final class TraderSimManager {
             c = cameFrom.get(c);
         }
         Collections.reverse(pts);
-        pts.add(new int[] { endPos.getX(), endPos.getZ() }); // finish exactly on the target
+        pts.add(new int[] { endPos.getX(), endPos.getZ() });
         return pts;
     }
 
-    /** Stamps every grid cell along the route into the persistent road network, so later journeys (real
-     *  or ghost) prefer to converge onto and follow it rather than laying a parallel line. */
     private static void addRouteToNetwork(BlockPos start, List<int[]> waypoints) {
         double px = start.getX();
         double pz = start.getZ();
@@ -1003,10 +914,6 @@ public final class TraderSimManager {
         }
     }
 
-    /** Lays a 1-wide trail under the trader: dirt → path, stone/sand/gravel → gravel, anything else
-     *  (logs, planks, ores, water…) left alone so we never pave a build. Adopted couriers only pave
-     *  WILDERNESS — never inside any settlement's claim (a trade route must not path-ify a town's
-     *  lawns; the debug trader keeps paving everywhere, it's a terraforming test). */
     private static void paveUnder(ServerLevel level, CitizenEntity trader, TraderSimSession s) {
         BlockPos feet = trader.blockPosition();
         if (feet.equals(s.lastRoadPos)) return;
@@ -1018,7 +925,6 @@ public final class TraderSimManager {
         pave3Wide(level, feet.getX(), feet.getZ());
     }
 
-    /** Paves a 3-wide trail centred on (cx,cz): the column plus its four orthogonal neighbours. */
     private static void pave3Wide(ServerLevel level, int cx, int cz) {
         paveColumn(level, cx, cz);
         paveColumn(level, cx + 1, cz);
@@ -1027,26 +933,20 @@ public final class TraderSimManager {
         paveColumn(level, cx, cz - 1);
     }
 
-    /** Replaces one column's surface with a randomized road material — but only a solid, dry, non-tree
-     *  block (never air, water, plants, leaves or logs), and never an existing road block (so the mix
-     *  doesn't reshuffle on every pass). Public: stocker outpost runs lay the SAME road style,
-     *  column by column so their territory gate applies per block (see StockerWorkGoal). */
     public static void paveColumn(ServerLevel level, int x, int z) {
         BlockPos ground = new BlockPos(x, groundY(level, x, z) - 1, z);
         BlockState surface = level.getBlockState(ground);
-        if (!surface.blocksMotion()) return;                                      // solid blocks only
-        if (surface.is(BlockTags.LEAVES) || surface.is(BlockTags.LOGS)) return;   // don't pave trees
-        if (!level.getFluidState(ground.above()).isEmpty()) return;              // not submerged
-        if (isRoad(surface)) return;                                             // already paved
+        if (!surface.blocksMotion()) return;
+        if (surface.is(BlockTags.LEAVES) || surface.is(BlockTags.LOGS)) return;
+        if (!level.getFluidState(ground.above()).isEmpty()) return;
+        if (isRoad(surface)) return;
         level.setBlock(ground, roadMaterial(level.getRandom()), 2);
     }
 
-    /** The road palette test — shared with the stocker's "already on a road? don't pave" check. */
     public static boolean isRoad(BlockState s) {
         return s.is(Blocks.DIRT_PATH) || s.is(Blocks.GRAVEL) || s.is(Blocks.COARSE_DIRT);
     }
 
-    /** 70% packed dirt path, 15% gravel, 15% coarse dirt. */
     private static BlockState roadMaterial(RandomSource r) {
         int roll = r.nextInt(100);
         if (roll < 70) return Blocks.DIRT_PATH.defaultBlockState();
@@ -1054,7 +954,6 @@ public final class TraderSimManager {
         return Blocks.COARSE_DIRT.defaultBlockState();
     }
 
-    /** Surface standing-Y at a column, scanning down past leaves/logs so waypoints sit on real ground. */
     private static int groundY(ServerLevel level, int x, int z) {
         int y = level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z);
         BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos();
@@ -1067,12 +966,8 @@ public final class TraderSimManager {
         return y;
     }
 
-    /** Clears the trader's own goal + target AI so ONLY our navigation moves it — kills the vanilla
-     *  idle-stroll interludes (and the night-time invisibility-potion goal). Navigation/move-control
-     *  still tick in {@code Mob.serverAiStep} independent of goals, so external {@code moveTo} drives
-     *  it cleanly. One-time at spawn; {@code goalSelector}/{@code targetSelector} are protected, hence
-     *  reflection (stable: the NeoForge runtime uses Mojang field names). */
     private static void stripGoals(CitizenEntity trader) {
+        // Reflection is stable: the NeoForge runtime uses Mojang field names; both selectors are protected in Mob.
         for (String field : new String[] { "goalSelector", "targetSelector" }) {
             try {
                 Field f = Mob.class.getDeclaredField(field);
@@ -1096,7 +991,6 @@ public final class TraderSimManager {
         s.nudges = 0;
     }
 
-    /** The block column {@code dist} blocks ahead of the trader toward its current waypoint. */
     private static int[] lookAhead(Entity trader, int[] wp, double dist) {
         double dx = (wp[0] + 0.5) - trader.getX();
         double dz = (wp[1] + 0.5) - trader.getZ();
@@ -1108,8 +1002,6 @@ public final class TraderSimManager {
         };
     }
 
-    /** First DRY column (no standing water at all) stepping from the entity toward {@code toward},
-     *  within {@code maxDist} blocks — solid shore to step off onto, so it never lands in water. */
     private static int[] nearestDryToward(ServerLevel level, Entity from, int[] toward, int maxDist) {
         double dx = (toward[0] + 0.5) - from.getX();
         double dz = (toward[1] + 0.5) - from.getZ();
@@ -1122,8 +1014,6 @@ public final class TraderSimManager {
         return null;
     }
 
-    /** Depth of standing water at column (x,z): water blocks from the surface down to the first
-     *  non-water block. 0 if the column is dry. */
     private static int waterDepth(ServerLevel level, int x, int z) {
         int top = level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) - 1;
         int min = level.getMinBuildHeight();
@@ -1136,8 +1026,6 @@ public final class TraderSimManager {
         return depth;
     }
 
-    /** Deep enough (> {@link #WADE_DEPTH}) that it must be boated — or, with no sailing, blocks the
-     *  route. Shallow 1-2 block water is walked straight through. */
     private static boolean isDeepWaterColumn(ServerLevel level, int x, int z) {
         return waterDepth(level, x, z) > WADE_DEPTH;
     }
@@ -1151,8 +1039,6 @@ public final class TraderSimManager {
         return boat;
     }
 
-    /** Drives a riderless boat toward the waypoint: face it and push horizontally, letting vanilla
-     *  buoyancy hold the surface. Runs each tick because an AI passenger never "paddles". */
     private static void driveBoat(Boat boat, int[] wp) {
         double dx = (wp[0] + 0.5) - boat.getX();
         double dz = (wp[1] + 0.5) - boat.getZ();
@@ -1163,7 +1049,7 @@ public final class TraderSimManager {
         Vec3 dm = boat.getDeltaMovement();
         boat.setDeltaMovement(dx / len * BOAT_SPEED, dm.y, dz / len * BOAT_SPEED);
         boat.hasImpulse = true;
-        boat.setPaddleState(true, true); // synced → client animates both oars rowing
+        boat.setPaddleState(true, true);
     }
 
     private static void broadcastProgress(MinecraftServer server, TraderSimSession s) {

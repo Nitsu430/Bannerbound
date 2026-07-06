@@ -29,10 +29,14 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 
 /**
- * Floats each herder pen's ANIMAL (its spawn egg) above the pen, with the assigned herder's face below it
- * when the pen is bound to one citizen (open pens show just the animal — any herder works them). The
- * herder-pen counterpart of {@link SeedMarkerRenderer}; only shows while the local player holds a Foreman's
- * Rod set to the "herder" type, so a digger/farmer rod doesn't see pen clutter.
+ * Floats each herder pen's ANIMAL (its familiar product item, spawn egg as fallback) above the pen, with
+ * the assigned herder's face below it when the pen is bound to one citizen (open pens show just the animal
+ * -- any herder works them). The herder-pen counterpart of {@link SeedMarkerRenderer}; only shows while the
+ * local player holds a Foreman's Rod set to the "herder" type, so a digger/farmer rod doesn't see pen
+ * clutter. Runs on the render thread from RenderLevelStageEvent (AFTER_TRANSLUCENT_BLOCKS). A breeding-
+ * quality percent (green/yellow/red) is billboarded above the egg for pens close enough to read, throttled
+ * by a client-side cache (recompute at most once per QUALITY_REFRESH ticks); before Animal Husbandry is
+ * researched breeding is off, so it shows "Locked" rather than a misleading number.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
@@ -41,13 +45,11 @@ public final class PenMarkerRenderer {
     private static final float ICON_SCALE = 1.6f;
     private static final float FACE_SIZE = 0.9f;
     private static final float FACE_DROP = 1.25f;
-    private static final float LABEL_RISE = 1.1f;        // breed-quality % sits above the animal egg
-    private static final int QUALITY_REFRESH = 20;       // recompute a pen's quality at most ~once/second
-    private static final double QUALITY_RANGE_SQ = 48.0 * 48.0;   // don't scan/label pens you can't read
+    private static final float LABEL_RISE = 1.1f;
+    private static final int QUALITY_REFRESH = 20;
+    private static final double QUALITY_RANGE_SQ = 48.0 * 48.0;
     private static final int FULLBRIGHT = 0x00F000F0;
 
-    /** Client-side throttled cache of pen breeding quality (percent), keyed by packed pen anchor. Scanning a
-     *  pen every frame would be wasteful, so we recompute at most every {@link #QUALITY_REFRESH} ticks. */
     private record Quality(long tick, int pct) {}
     private static final java.util.Map<Long, Quality> QUALITY_CACHE = new java.util.HashMap<>();
 
@@ -71,7 +73,7 @@ public final class PenMarkerRenderer {
         PoseStack pose = event.getPoseStack();
         MultiBufferSource.BufferSource buffer = mc.renderBuffers().bufferSource();
         ItemRenderer itemRenderer = mc.getItemRenderer();
-        java.util.Map<java.util.UUID, com.bannerbound.core.entity.CitizenEntity> citizens = null; // lazy
+        java.util.Map<java.util.UUID, com.bannerbound.core.entity.CitizenEntity> citizens = null;
 
         for (BlockSelection sel : ClientSelectionState.getAll()) {
             if (sel.kind() != BlockSelection.Kind.WORKSTATION) continue;
@@ -80,7 +82,7 @@ public final class PenMarkerRenderer {
             if (type == null) continue;
             ItemStack icon = productIcon(type);
 
-            double cx = sel.minX() + 0.5;            // pen markers are a single point (the clicked anchor)
+            double cx = sel.minX() + 0.5;
             double cy = sel.minY() + 1.0 + Y_OFFSET;
             double cz = sel.minZ() + 0.5;
 
@@ -93,12 +95,8 @@ public final class PenMarkerRenderer {
                 net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY, pose, buffer, mc.level, 0);
             pose.popPose();
 
-            // Breeding-quality readout above the egg (green/yellow/red %) — "is this pen good enough?". Only
-            // for pens close enough to read; throttled so we don't flood-scan the pen every frame. If the
-            // settlement hasn't researched Animal Husbandry, breeding is off entirely → show that instead of
-            // a misleading percentage.
             if (cam.distanceToSqr(cx, cy, cz) <= QUALITY_RANGE_SQ) {
-                if (!ClientResearchState.hasFlag(com.bannerbound.core.event.AnimalBreedingGate.FLAG)) {
+                if (!ClientResearchState.hasFlag(com.bannerbound.core.event.VanillaGates.FLAG)) {
                     drawLabel(pose, buffer, mc.font, "Locked",
                         cx - cam.x, cy - cam.y + LABEL_RISE, cz - cam.z, yaw, pitch, 0xFFAAAAAA);
                 } else {
@@ -110,7 +108,6 @@ public final class PenMarkerRenderer {
                 }
             }
 
-            // Bound to one herder → show their face below the animal. Open pens (any herder) show none.
             if (!sel.targetsAllWorkers()) {
                 if (citizens == null) citizens = collectCitizens(mc);
                 com.bannerbound.core.entity.CitizenEntity owner = citizens.get(sel.assignedCitizenId());
@@ -158,8 +155,6 @@ public final class PenMarkerRenderer {
             .setNormal(0f, 0f, 1f);
     }
 
-    /** The icon for a pen's animal — its familiar PRODUCT (beef/egg/pork/mutton/leather), which reads more
-     *  clearly to the player than a spawn egg. Falls back to the spawn egg, then wheat, for anything else. */
     private static ItemStack productIcon(EntityType<?> type) {
         net.minecraft.world.item.Item item;
         if (type == EntityType.COW) item = Items.BEEF;
@@ -174,8 +169,6 @@ public final class PenMarkerRenderer {
         return new ItemStack(item);
     }
 
-    /** This pen's breeding quality as a percent (0-100), or -1 if the enclosure isn't currently valid.
-     *  Throttled via {@link #QUALITY_CACHE} so we scan a pen at most once per {@link #QUALITY_REFRESH} ticks. */
     private static int quality(net.minecraft.world.level.Level level, BlockSelection sel) {
         long key = new BlockPos(sel.minX(), sel.minY(), sel.minZ()).asLong();
         long now = level.getGameTime();
@@ -189,21 +182,19 @@ public final class PenMarkerRenderer {
         return q.pct();
     }
 
-    /** Green at/above 65%, yellow 40-64%, red below — a quick "good enough?" read. ARGB (opaque). */
     private static int qualityColor(int pct) {
         if (pct >= 65) return 0xFF55FF55;
         if (pct >= 40) return 0xFFFFFF55;
         return 0xFFFF5555;
     }
 
-    /** Billboarded text centred at the camera-relative offset (mirrors ChunkTypeOverlayRenderer's label). */
     private static void drawLabel(PoseStack pose, MultiBufferSource buffer, Font font, String text,
                                   double dx, double dy, double dz, float yaw, float pitch, int color) {
         pose.pushPose();
         pose.translate(dx, dy, dz);
         pose.mulPose(com.mojang.math.Axis.YP.rotationDegrees(-yaw));
         pose.mulPose(com.mojang.math.Axis.XP.rotationDegrees(pitch));
-        pose.scale(-0.025f, -0.025f, 0.025f);   // font renders +Y down + tiny world-space scale
+        pose.scale(-0.025f, -0.025f, 0.025f);   // font renders +Y down, so negate Y; tiny world-space scale.
         org.joml.Matrix4f m = pose.last().pose();
         float x = -font.width(text) / 2f;
         font.drawInBatch(text, x, 0f, color, false, m, buffer, Font.DisplayMode.SEE_THROUGH, 0, FULLBRIGHT);

@@ -11,10 +11,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: assign ({@code assign=true}) or unassign a citizen to/from a workshop, from the
- * workshop menu's worker rows. The server re-checks capacity + the crafter research unlock, writes
- * BOTH sides (citizen job/binding + workshop roster), and re-sends the menu snapshot so the screen
- * refreshes.
+ * C->S: assign (assign=true) or unassign a citizen to/from a workshop, from the workshop menu's
+ * worker rows. The server re-checks capacity and the crafter research unlock, writes BOTH sides
+ * (citizen job/binding + workshop roster), and re-sends the menu snapshot so the screen refreshes.
  */
 @ApiStatus.Internal
 public record AssignWorkshopWorkerPayload(String workshopId, String citizenId, boolean assign,

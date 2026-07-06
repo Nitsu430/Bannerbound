@@ -18,27 +18,26 @@ import net.minecraft.world.item.UseAnim;
 import net.minecraft.world.level.Level;
 
 /**
- * A slingshot — the crude, pre-Archery ranged weapon, fletched before the bow. Draws like a bow
- * (hold to wind up, release to fire) and flings a {@link ThrownRock} from the inventory as ammo
- * (any {@link ThrownRockBlockItem}: stone / sandstone / red sandstone rock). A slung rock hits far
- * harder than a hand throw ({@link #ROCK_DAMAGE} vs 1) and shatters into the matching stone's break
- * particles, but it is plainly worse than a bow: a slower, more arcing, less accurate shot with no
- * arrow-tier velocity. Quality (rolled at the fletching station) scales its durability; it takes one
- * point of wear per shot, like a bow.
+ * A slingshot - the crude, pre-Archery ranged weapon, fletched before the bow. Draws like a bow
+ * (hold to wind up, release to fire; the BOW use-anim plus the pull/pulling item-model predicates
+ * drive the draw-frame sprites) and flings a {@link ThrownRock} using any {@link ThrownRockBlockItem}
+ * in the inventory (stone / sandstone / red sandstone rock) as ammo; the fired stack is carried on
+ * the projectile so it renders and shatters as that stone (creative players with no ammo default to
+ * a stone rock). A slung rock hits far harder than a hand throw ({@link #ROCK_DAMAGE} vs 1) and
+ * trades the hand-throw's stun for that lethality, but it is plainly worse than a bow: launch speed
+ * ramps 1.4->2.4 over a ~1.1s charge (vanilla BowItem's accelerating power curve; a hand throw is
+ * 1.5, an arrow far faster) and spread tightens 6->2 degrees toward full draw where a bow holds ~1.
+ * Releasing under {@link #MIN_FIRE_POWER} of a full draw is a dud (no shot). Quality (rolled at the
+ * fletching station) steadies the shot and scales durability; it takes one point of wear per shot,
+ * like a bow.
  */
 public class SlingshotItem extends Item {
-    /** Ticks of draw for a full-power shot (~1.1s). */
     private static final int FULL_DRAW_TICKS = 22;
-    /** Launch speed at no draw / full draw — well under an arrow's, a touch above a hand throw (1.5). */
     private static final float MIN_SPEED = 1.4F;
     private static final float MAX_SPEED = 2.4F;
-    /** Spread (degrees) at full draw / no draw — looser than a bow throughout (~1°), but a sling is
-     *  still far steadier than a wild hand throw at full stretch. */
     private static final float MIN_INACCURACY = 2.0F;
     private static final float MAX_INACCURACY = 6.0F;
-    /** Damage a slung rock deals on a direct hit. */
     private static final float ROCK_DAMAGE = 4.0F;
-    /** Below this draw fraction the release is a dud (no shot). */
     private static final float MIN_FIRE_POWER = 0.12F;
 
     public SlingshotItem(Properties properties) {
@@ -49,9 +48,8 @@ public class SlingshotItem extends Item {
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack slingshot = player.getItemInHand(hand);
         if (findRock(player).isEmpty() && !player.getAbilities().instabuild) {
-            return InteractionResultHolder.fail(slingshot); // no ammo → nothing to load
+            return InteractionResultHolder.fail(slingshot);
         }
-        // The first pull — the elastic stretching back.
         level.playSound(null, player.getX(), player.getY(), player.getZ(),
             BannerboundAntiquity.SLING_PULL.get(), SoundSource.PLAYERS, 0.8F, 1.0F);
         player.startUsingItem(hand);
@@ -60,7 +58,7 @@ public class SlingshotItem extends Item {
 
     @Override
     public UseAnim getUseAnimation(ItemStack stack) {
-        return UseAnim.BOW; // pull-back pose; the draw-frame sprites are driven by the pull/pulling model predicates
+        return UseAnim.BOW;
     }
 
     @Override
@@ -76,7 +74,7 @@ public class SlingshotItem extends Item {
         int charge = getUseDuration(slingshot, entity) - timeLeft;
         float power = drawPower(charge);
         if (power < MIN_FIRE_POWER) {
-            return; // barely stretched — no shot
+            return;
         }
         boolean creative = player.getAbilities().instabuild;
         ItemStack rock = findRock(player);
@@ -89,15 +87,13 @@ public class SlingshotItem extends Item {
 
         if (!level.isClientSide) {
             ThrownRock thrown = new ThrownRock(level, player);
-            // Carry the actual rock type fired so it renders + shatters as that stone (default a
-            // stone rock for the creative-player-with-no-ammo case).
             ItemStack ammo = rock.isEmpty() ? new ItemStack(BannerboundAntiquity.STONE_ROCK_ITEM.get()) : rock;
             thrown.setItem(ammo.copyWithCount(1));
             thrown.setImpactDamage(ROCK_DAMAGE);
-            thrown.setStun(false); // the sling trades the hand-throw's stun for lethality
+            thrown.setStun(false);
             float speed = Mth.lerp(power, MIN_SPEED, MAX_SPEED);
-            float inaccuracy = Mth.lerp(power, MAX_INACCURACY, MIN_INACCURACY) // tighter at full draw
-                * (2.0F - QualityTier.of(slingshot).statMultiplier()); // better-made → steadier
+            float inaccuracy = Mth.lerp(power, MAX_INACCURACY, MIN_INACCURACY)
+                * (2.0F - QualityTier.of(slingshot).statMultiplier());
             thrown.shootFromRotation(player, player.getXRot(), player.getYRot(), 0.0F, speed, inaccuracy);
             level.addFreshEntity(thrown);
         }
@@ -109,14 +105,12 @@ public class SlingshotItem extends Item {
         player.getCooldowns().addCooldown(this, 10);
     }
 
-    /** Bow-style power curve: ramps over {@link #FULL_DRAW_TICKS}, accelerating toward full draw. */
     private static float drawPower(int charge) {
         float f = charge / (float) FULL_DRAW_TICKS;
         f = (f * f + f * 2.0F) / 3.0F;
         return Mth.clamp(f, 0.0F, 1.0F);
     }
 
-    /** The first throwable rock found in the player's inventory (empty if none). */
     private static ItemStack findRock(Player player) {
         Inventory inv = player.getInventory();
         for (int i = 0; i < inv.getContainerSize(); i++) {

@@ -17,39 +17,33 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Resident picker opened from the House Block status panel's "Assign" button. Lists every
- * citizen in the settlement in priority order:
- * <ol>
- *   <li>Current residents of this home — "Unassign" button (red label).</li>
- *   <li>Homeless citizens — "Assign" button (green label).</li>
- *   <li>Residents of other homes in the settlement — "Assign" button + small line showing the
- *       Chebyshev distance from their current home to this one.</li>
- * </ol>
- * Each click sends an {@link AssignCitizenToHomePayload}; the server re-sends the list and
- * {@link com.bannerbound.core.network.ClientPayloadHandler#handleHomeCitizenList} refreshes
- * this screen in place, so the player can do several assignments in one session without the
- * picker bouncing closed.
+ * Resident picker opened from the House Block status panel's "Assign" button. Lists every citizen
+ * in the settlement in priority order: current residents of this home first (red "Unassign"), then
+ * homeless citizens (green "Assign"), then residents of other homes (green "Assign" plus a small
+ * line showing the Chebyshev distance from their current home to this one). Sorted RESIDENT then
+ * HOMELESS then OTHER, alphabetically within the first two buckets and by ascending distance within
+ * OTHER (closest other-home resident first -- likeliest to poach); stable within a bucket so
+ * re-renders do not shuffle rows.
+ *
+ * <p>Each click sends an {@link AssignCitizenToHomePayload}; the server re-sends the list and
+ * {@link com.bannerbound.core.network.ClientPayloadHandler#handleHomeCitizenList} calls
+ * {@link #refresh} to rebuild this screen in place, so the player can make several assignments in
+ * one session without the picker bouncing closed. The list scrolls in 1-row steps by mouse wheel
+ * when it overflows MAX_VISIBLE_ROWS (thin track, no drag handle); scrollOffset is clamped and
+ * preserved across refreshes. ROW_HEIGHT is taller than the plain worker picker to leave room for
+ * the "lives X blocks away" line under OTHER rows.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class HomeResidentPickerScreen extends PolishedScreen {
     private static final int PANEL_WIDTH = 260;
     private static final int PANEL_HEIGHT = 220;
-    /** Per-row height — a touch taller than WorkerPickerScreen's 22 because "other" rows need
-     *  to also fit a small "lives X blocks from here" line under the action button. */
     private static final int ROW_HEIGHT = 26;
-    /** Visible rows in the scroll window. The list scrolls vertically when {@code ordered.size()}
-     *  exceeds this — mouse wheel moves the window in 1-row steps. */
     private static final int MAX_VISIBLE_ROWS = 6;
-    /** Scroll-track width on the right edge of the list. Just a thin coloured bar — no drag
-     *  handle, mouse wheel is the only scroll input. */
     private static final int SCROLL_TRACK_WIDTH = 4;
 
     private UUID homeId;
-    /** Sorted list — set in {@link #init()} from the latest payload data. The picker is
-     *  recreated wholesale via {@link #refresh} on each refresh, so this is final per-instance. */
     private List<HomeCitizenListPayload.Entry> ordered;
-    /** Top-row index currently visible. Bounded to {@code [0, max(0, ordered.size() - MAX_VISIBLE_ROWS)]}. */
     private int scrollOffset = 0;
 
     public HomeResidentPickerScreen(HomeCitizenListPayload payload) {
@@ -58,10 +52,6 @@ public class HomeResidentPickerScreen extends PolishedScreen {
         this.ordered = sortByPriority(payload.entries());
     }
 
-    /** Replace data + re-init for an open picker. Same pattern as ExpandTerritoryScreen.refreshData.
-     *  Preserves the scroll position across refreshes when possible — players doing several
-     *  assignments in a row stay in the same window of the list instead of jumping back to the
-     *  top after every click. Re-clamps in case the list shrank below the previous offset. */
     public void refresh(HomeCitizenListPayload payload) {
         this.homeId = payload.homeId();
         this.ordered = sortByPriority(payload.entries());
@@ -79,9 +69,6 @@ public class HomeResidentPickerScreen extends PolishedScreen {
         if (scrollOffset > max) scrollOffset = max;
     }
 
-    /** Priority sort: RESIDENT first (alphabetically), then HOMELESS (alphabetically), then OTHER
-     *  by ascending distance (closest other-home residents first — most likely candidate to
-     *  poach). Stable within bucket so re-renders don't shuffle order on the player. */
     private static List<HomeCitizenListPayload.Entry> sortByPriority(List<HomeCitizenListPayload.Entry> in) {
         List<HomeCitizenListPayload.Entry> out = new ArrayList<>(in);
         out.sort(Comparator
@@ -96,8 +83,6 @@ public class HomeResidentPickerScreen extends PolishedScreen {
         clampScroll();
         final int panelX = (this.width - PANEL_WIDTH) / 2;
         final int panelY = (this.height - PANEL_HEIGHT) / 2;
-        // List body sits inset from the panel by 12 on the left, plus an extra column on the
-        // right reserved for the scroll-track when there's more than one window of rows.
         final int rowX = panelX + 12;
         final boolean hasOverflow = ordered.size() > MAX_VISIBLE_ROWS;
         final int rowWidth = PANEL_WIDTH - 24 - (hasOverflow ? SCROLL_TRACK_WIDTH + 4 : 0);
@@ -118,7 +103,6 @@ public class HomeResidentPickerScreen extends PolishedScreen {
                 return;
             }
 
-            // Distance lines under each OTHER row in the current window.
             int listTop = panelY + 30;
             for (int i = 0; i < visibleCount; i++) {
                 HomeCitizenListPayload.Entry entry = ordered.get(firstIndex + i);
@@ -131,9 +115,6 @@ public class HomeResidentPickerScreen extends PolishedScreen {
                     rowX, rowY + 14, 0xFF808080, false);
             }
 
-            // Scroll-track + thumb on the right edge of the list, only shown when overflow
-            // exists. Thumb length proportional to the visible-fraction; thumb position
-            // proportional to scrollOffset / maxScroll.
             if (hasOverflow) {
                 int trackX = panelX + PANEL_WIDTH - 12 - SCROLL_TRACK_WIDTH;
                 int trackY = listTop;
@@ -150,8 +131,6 @@ public class HomeResidentPickerScreen extends PolishedScreen {
         for (int i = 0; i < visibleCount; i++) {
             HomeCitizenListPayload.Entry entry = ordered.get(firstIndex + i);
             boolean isResident = entry.role() == HomeCitizenListPayload.Role.RESIDENT;
-            // Action button — single line for RESIDENT and HOMELESS (height 20), shortened so
-            // the "lives X blocks away" line below has room when role==OTHER.
             int btnHeight = (entry.role() == HomeCitizenListPayload.Role.OTHER) ? 14 : 20;
             Component label;
             if (isResident) {
@@ -183,8 +162,6 @@ public class HomeResidentPickerScreen extends PolishedScreen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        // 1 row per wheel notch. Negative scrollY (wheel toward user) = scroll down = higher
-        // index visible at top. Re-layouts widgets so the button positions track the new window.
         if (maxScroll() > 0) {
             int prev = scrollOffset;
             scrollOffset -= (int) Math.signum(scrollY);

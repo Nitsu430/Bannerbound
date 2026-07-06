@@ -5,16 +5,19 @@ import org.jetbrains.annotations.ApiStatus;
 import net.minecraft.world.entity.ai.goal.PanicGoal;
 
 /**
- * Citizen-flavoured panic goal that yields whenever a brawl retaliation is queued. The
- * vanilla {@link PanicGoal} at priority 1 should be preempted by {@link BrawlRetaliationGoal}
- * at priority 0 via the standard goal-selector flag-replacement rule, but in practice that
- * preemption races against the same-tick start of PanicGoal — the citizen kept running
- * instead of swinging back.
+ * Citizen-flavoured panic goal with two hard overrides on vanilla {@link PanicGoal}:
  *
- * <p>Subclassing PanicGoal and overriding {@link #canUse} + {@link #canContinueToUse} to
- * explicitly check {@link CitizenEntity#getPendingRetaliationTargetId()} gives us a hard
- * guarantee: panic never starts (and any in-progress panic stops) while a counter-swing is
- * pending. The brawl retaliation always wins, no matter the tick interleaving.
+ * <p>1. It yields whenever a brawl retaliation is queued. Vanilla's priority-1 PanicGoal should be
+ * preempted by the priority-0 {@link BrawlRetaliationGoal} via the goal-selector flag-replacement
+ * rule, but that preemption races the same-tick start of PanicGoal and the citizen kept running
+ * instead of swinging back. Overriding {@link #canUse} + {@link #canContinueToUse} to check
+ * {@link CitizenEntity#getPendingRetaliationTargetId()} guarantees panic never starts (and any
+ * in-progress panic stops) while a counter-swing is pending - the brawl retaliation always wins,
+ * whatever the tick interleaving.
+ *
+ * <p>2. Guards hold the line: being hit by an enemy never makes a guard flee. The yield is
+ * surgical - a guard on fire / in lava / freezing still flees the hazard, otherwise a blanket
+ * no-panic would walk the watch straight into a lava pool. Only combat-hurt panic is dropped.
  */
 @ApiStatus.Internal
 public class CitizenPanicGoal extends PanicGoal {
@@ -27,13 +30,7 @@ public class CitizenPanicGoal extends PanicGoal {
 
     @Override
     public boolean canUse() {
-        // Block panic from starting while a retaliation swing is queued — the citizen is
-        // about to swing back, not run away. Once the swing lands (and pendingRetaliation is
-        // cleared) panic is free to take over the next tick.
         if (citizen.getPendingRetaliationTargetId() != null) return false;
-        // Guards hold the line: being hit by an enemy never makes them flee. The yield is SURGICAL,
-        // though — a guard on fire / in lava / freezing still flees the hazard (otherwise a blanket
-        // no-panic would walk the watch straight into a lava pool). Combat-hurt panic only is dropped.
         if (GuardWorkGoal.JOB_TYPE_ID.equals(citizen.getJobType())
                 && !citizen.isOnFire() && !citizen.isInLava() && !citizen.isFreezing()) {
             return false;
@@ -43,9 +40,6 @@ public class CitizenPanicGoal extends PanicGoal {
 
     @Override
     public boolean canContinueToUse() {
-        // Same gate on continuation: if the citizen gets hit mid-panic and the new hit
-        // schedules a retaliation, panic stops on the next tick so the brawl goal can grab
-        // MOVE and plant the citizen's feet.
         if (citizen.getPendingRetaliationTargetId() != null) return false;
         return super.canContinueToUse();
     }

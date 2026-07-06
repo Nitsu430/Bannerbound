@@ -11,7 +11,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: flip one of the open Stockpile terminal's toggles. {@code toggle} picks which
+ * Client -> server: flip one of the open Stockpile terminal's toggles. {@code toggle} picks which
  * flag ({@link #TOGGLE_DEPOSIT} = "let workers deposit here", {@link #TOGGLE_TAKE} = "let workers
  * take from here", {@link #TOGGLE_TRADE} = "show for trading") and {@code value} is its new state.
  * The server writes it onto the {@code Stockpile} record and invalidates the settlement

@@ -9,10 +9,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: the player's Choose-Faith vote. {@code optionKey} is one of
+ * C->S: the player's Choose-Faith vote. {@code optionKey} is one of
  * {@code found:ASTROLOGY}, {@code found:TOTEMIC} or {@code adopt:<faithUuid>};
  * {@code proposedName} carries the faith name for found-votes (the winning option's
- * earliest proposal names the faith — no second naming round-trip).
+ * earliest proposal names the faith - no second naming round-trip).
  */
 public record CastFaithVotePayload(String optionKey, String proposedName) implements CustomPacketPayload {
     public static final int MAX_OPTION_LENGTH = 64;

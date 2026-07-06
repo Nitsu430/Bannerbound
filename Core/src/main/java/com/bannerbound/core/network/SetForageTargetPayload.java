@@ -10,8 +10,8 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: toggle one of a forager citizen's gather categories on/off from the Job tab picker.
- *  {@code categoryOrdinal} is the {@link com.bannerbound.core.api.forager.ForageCategory} ordinal. */
+/** C->S: toggle one of a forager citizen's gather categories on/off from the Job tab picker.
+ *  categoryOrdinal is the com.bannerbound.core.api.forager.ForageCategory ordinal. */
 @ApiStatus.Internal
 public record SetForageTargetPayload(int entityId, int categoryOrdinal, boolean enabled)
         implements CustomPacketPayload {

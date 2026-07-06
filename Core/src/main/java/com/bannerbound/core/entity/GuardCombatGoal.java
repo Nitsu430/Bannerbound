@@ -28,72 +28,65 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * The guard's <b>combat AI</b> — the "much better than self-defence" fight (GUARD_PLAN.md). Registered
- * at <b>priority 0</b> for every citizen but only {@link #canUse() usable} when the citizen holds the
- * guard job, so {@link CitizenCombatGoal} (which yields for guards) never competes for the slot. A
- * plain {@link Goal} (not a {@link WorkGoal}), so it keeps fighting even when the work brain is
- * throttled (Village+ ambient brain / no player nearby).
+ * The guard's combat AI (GUARD_PLAN.md) -- the "much better than self-defence" fight. A plain Goal
+ * (not a WorkGoal) registered at priority 0 for every citizen but only usable while the citizen holds
+ * the guard job, so CitizenCombatGoal (which yields for guards) never competes for the slot; being a
+ * plain Goal it keeps fighting when the work brain is throttled (Village+ ambient brain / no player
+ * nearby). GuardTargetingGoal owns the target field and picks who to fight; this goal does the moving
+ * and swinging on whatever target that set.
  *
  * <p>What makes it better than the baseline chase-and-swing:
- * <ul>
- *   <li><b>Leash to home</b> — a guard only engages hostiles inside the settlement's claims or within
- *       {@link #DEFENSE_BAND_CHUNKS} chunks of them, so it never suicide-chases a fleeing raider into
- *       the wild to be swarmed. The one exemption is the guard's live <b>retaliation target</b>
- *       ({@link CitizenEntity#isGuardRetaliationTarget}): whoever is actively damaging this guard is
- *       fair game even from outside the band, so the watch can't be plinked from past the border.</li>
- *   <li><b>The weapon in hand is REAL</b> — damage and swing speed are read off the actual job-tool
- *       {@link ItemStack}'s attribute modifiers (a bronze sword hits harder than a bone club because
- *       the item says so), scaled by craftsmanship {@link QualityTier} and the guard's own
- *       {@code guards_post} mastery. No weapon in storage → the guard fights with its FISTS
- *       (1.0 damage, slow) — stocking the armory is a real logistics decision, not a cosmetic one.</li>
- *   <li><b>Ranged guards</b> — a guard whose drawn weapon is a bow ({@code #bannerbound:hunter_bows})
- *       or a sling ({@code #bannerbound:guard_slings}) fights at range: windup telegraph, planted
- *       shot, back-pedal when the enemy closes, advance when out of range or sight. Arrows are
- *       {@code Pickup.DISALLOWED} (no farming); sling rocks fire through the
- *       {@link HunterHooks.Extension#shootSling} seam (Antiquity spawns the {@code ThrownRock}).</li>
- * </ul>
+ * - Leash to home: a guard only engages hostiles inside the settlement's claims or within
+ *   DEFENSE_BAND_CHUNKS (2) chunks of them, so it never suicide-chases a fleeing raider into the wild
+ *   to be swarmed. The one exemption is the live retaliation target (isGuardRetaliationTarget):
+ *   whoever is actively damaging this guard is fair game even from outside the band, so the watch can't
+ *   be plinked from past the border. withinDefenseBand is shared with GuardTargetingGoal so acquisition
+ *   and the fight agree on "home ground"; it fails open for an unclaimed settlement.
+ * - The weapon in hand is REAL: melee damage and swing speed are read off the actual job-tool
+ *   ItemStack's attribute modifiers (a bronze sword hits harder than a bone club because the item says
+ *   so), scaled by craftsmanship QualityTier and the guard's guards_post mastery (novice x1.0 -> master
+ *   x1.5). No weapon -> fists (1.0 damage, slow); stocking the armory is a real logistics decision. Each
+ *   landed hit grants 0.1 job XP so the tank earns too; the kill itself pays 1.0 via GuardCombatEvents.
+ * - Ranged guards: a guard drawing a bow (#bannerbound:hunter_bows) or sling (#bannerbound:guard_slings)
+ *   fights at range -- windup telegraph, planted shot, back-pedal when the enemy closes, advance when
+ *   out of range or sight, and sidestep when a same-settlement citizen stands in the fire lane (the
+ *   projectile-immunity net in GuardCombatEvents makes a stray shot harmless; the sidestep is what the
+ *   player SEES). Arrows are Pickup.DISALLOWED so guards can't be arrow-farmed; sling rocks fire through
+ *   HunterHooks.shootSling (Antiquity spawns the ThrownRock). An arrow's real hit is baseDamage x
+ *   velocity, so the base is derived from the intended hit at fire time.
+ * - Melee footwork: while a swing recovers a guard GIVES GROUND (short fencing step) instead of trading
+ *   free hits, then steps back in the moment its cooldown is ready -- the fight oscillates in place (net
+ *   drift ~0) rather than migrating. Inverted against a RANGED enemy: crowd it, never hand an archer its
+ *   preferred range.
  *
- * <p>It also keeps {@link CitizenCombatGoal}'s creeper-swell yield — but only when the guard is
- * actually inside blast radius, so an archer guard keeps shooting a lit creeper from safety while a
- * melee guard sprints clear (the priority-0 {@code AvoidEntityGoal} takes over).
+ * <p>It keeps CitizenCombatGoal's creeper-swell yield, but only when this guard is close enough to eat
+ * the blast (CREEPER_YIELD_SQ) -- an archer keeps shooting a lit creeper from safety while a melee guard
+ * flees (the priority-0 AvoidEntityGoal takes over). Couriers on a trade journey never fight (killable
+ * cargo). Windup/cooldown constants match BarbarianRangedGoal's bowman.
  */
 @ApiStatus.Internal
 public class GuardCombatGoal extends Goal {
     private static final double BARE_HAND_DAMAGE = 1.0;
     private static final int BARE_HAND_COOLDOWN_TICKS = 20;
-    private static final double MELEE_REACH_SQ = 4.0;       // ~2 blocks, matches CitizenCombatGoal
+    private static final double MELEE_REACH_SQ = 4.0;
     private static final int REPATH_INTERVAL = 10;
-    /** A guard fights hostiles inside our claims or within this many chunks of them; beyond that it
-     *  breaks off rather than chase into the wild (anti-swarm leash). */
     private static final int DEFENSE_BAND_CHUNKS = 2;
-    /** Mastery adds up to this fraction to a guard's hit (novice ×1.0 → master ×1.5). */
     private static final double SKILL_DAMAGE_BONUS = 0.5;
-    /** Creeper-swell yield only inside this radius² — melee guards flee the blast, archers keep
-     *  shooting from safety. */
-    private static final double CREEPER_YIELD_SQ = 49.0;    // 7 blocks
-    /** Melee recovery footwork: while the swing recovers, give ground whenever the enemy is
-     *  inside this radius² — don't stand chest-to-chest trading free hits. */
+    private static final double CREEPER_YIELD_SQ = 49.0;
     private static final double FENCING_SPACE_SQ = 3.0 * 3.0;
-    /** How far one fencing back-step retreats (short — the guard steps back IN to strike the
-     *  moment its cooldown is ready, so the fight oscillates rather than migrating). */
     private static final double FENCING_STEP_BLOCKS = 3.5;
 
-    // ── Ranged (bow / sling) ────────────────────────────────────────────────────────────────
-    private static final double RANGED_TOO_CLOSE_SQ = 36.0;   // < 6 blocks → back-pedal
-    /** One ranged kite back-pedal — long, to reopen real shooting distance. */
+    private static final double RANGED_TOO_CLOSE_SQ = 36.0;
     private static final double RANGED_KITE_STEP_BLOCKS = 8.0;
     private static final double BOW_RANGE_SQ = 24.0 * 24.0;
     private static final double SLING_RANGE_SQ = 16.0 * 16.0;
-    private static final int BOW_WINDUP_TICKS = 14;           // matches BarbarianRangedGoal's bowman
+    private static final int BOW_WINDUP_TICKS = 14;
     private static final int SLING_WINDUP_TICKS = 12;
     private static final int BOW_SHOT_COOLDOWN = 30;
     private static final int SLING_SHOT_COOLDOWN = 25;
     private static final float ARROW_VELOCITY = 1.6F;
     private static final float ARROW_INACCURACY = 4.0F;
-    /** Intended full hit of a guard's bow shot before quality/skill scaling (an arrow's real damage
-     *  is {@code baseDamage × velocity}, so the base is derived from this at fire time). */
     private static final double BOW_HIT_DAMAGE = 6.0;
-    /** Sling rock hit before quality/skill scaling — matches the player slingshot's rock. */
     private static final double SLING_HIT_DAMAGE = 4.0;
 
     private final CitizenEntity citizen;
@@ -113,12 +106,11 @@ public class GuardCombatGoal extends Goal {
 
     @Override
     public boolean canUse() {
-        if (citizen.isOnTradeJourney()) return false; // couriers don't fight — killable cargo
+        if (citizen.isOnTradeJourney()) return false;
         if (!citizen.isGuard()) return false;
         LivingEntity t = citizen.getTarget();
         if (t == null || !t.isAlive()) return false;
         if (shouldYieldToCreeper(t)) return false;
-        // Leash: defend home ground — except vs whoever is actively damaging this guard.
         if (!withinDefenseBand(t) && !citizen.isGuardRetaliationTarget(t)) return false;
         target = t;
         return true;
@@ -129,12 +121,9 @@ public class GuardCombatGoal extends Goal {
         if (!citizen.isGuard()) return false;
         if (target == null || !target.isAlive()) return false;
         if (shouldYieldToCreeper(target)) return false;
-        // Target fled the band → break off, unless it's the guard's live retaliation attacker.
         return withinDefenseBand(target) || citizen.isGuardRetaliationTarget(target);
     }
 
-    /** Yield to the flee-creeper goal once the fuse is lit — but only when this guard is close
-     *  enough to eat the blast. A ranged guard at distance keeps firing. */
     private boolean shouldYieldToCreeper(LivingEntity t) {
         return t instanceof Creeper c && c.getSwellDir() > 0
             && citizen.distanceToSqr(c) < CREEPER_YIELD_SQ;
@@ -168,27 +157,21 @@ public class GuardCombatGoal extends Goal {
         windupTicks = 0;
         if (citizen.isUsingItem()) citizen.stopUsingItem();
         citizen.getNavigation().stop();
-        // Leave citizen.getTarget() to GuardTargetingGoal — it owns the target field and reassigns or
-        // clears it next pass (a guard breaking off one raider re-picks the next there, not nearest).
+        // Do NOT clear citizen.getTarget() here: GuardTargetingGoal owns that field and re-picks the next raider.
         if (stashedMainHand != null) {
             citizen.setItemSlot(EquipmentSlot.MAINHAND, stashedMainHand);
             stashedMainHand = null;
         }
     }
 
-    // ─── Melee ──────────────────────────────────────────────────────────────────────────────
-
     private void meleeTick(ItemStack weapon) {
         double dSq = citizen.distanceToSqr(target);
         if (attackCooldown <= 0) {
-            // Swing ready: close and strike.
             if (dSq <= MELEE_REACH_SQ) {
                 citizen.getNavigation().stop();
                 citizen.swing(InteractionHand.MAIN_HAND);
                 target.hurt(citizen.damageSources().mobAttack(citizen), (float) meleeDamage(weapon));
                 attackCooldown = meleeCooldownTicks(weapon);
-                // A sliver of XP per landed hit — the tank earns too, not just the kill-stealer.
-                // The kill itself pays 1.0 via GuardCombatEvents (covers arrows/slings as well).
                 citizen.grantJobXp(GuardWorkGoal.JOB_TYPE_ID, 0.1f, "guard");
             } else if (--repathCooldown <= 0 || citizen.getNavigation().isDone()) {
                 citizen.getNavigation().moveTo(target, speedModifier);
@@ -196,13 +179,6 @@ public class GuardCombatGoal extends Goal {
             }
             return;
         }
-        // Recovery FOOTWORK — what separates a trained guard from a brawling citizen: while the
-        // swing recovers, GIVE GROUND instead of standing chest-to-chest trading free hits. The
-        // strike's knockback opens the gap; the enemy spends the whole cooldown window closing it,
-        // and the guard steps back in the moment the next swing is ready (the branch above). Net
-        // drift ≈ 0 — the fight oscillates in place instead of migrating. Exception: never back
-        // off from a RANGED enemy (that's handing an archer its preferred range) — crowd it so it
-        // has to keep repositioning instead of shooting.
         if (targetShootsBack()) {
             if (dSq > MELEE_REACH_SQ && (--repathCooldown <= 0 || citizen.getNavigation().isDone())) {
                 citizen.getNavigation().moveTo(target, speedModifier);
@@ -217,17 +193,12 @@ public class GuardCombatGoal extends Goal {
         }
     }
 
-    /** True when the current target fights at range — a kiting barbarian bowman or anything
-     *  holding a projectile weapon (skeleton bow, pillager crossbow, an enemy slinger). Melee
-     *  footwork inverts against these: crowd, never give ground. */
     private boolean targetShootsBack() {
         if (target instanceof CombatantCitizen cc && cc.prefersRanged()) return true;
         return target.getMainHandItem().getItem()
             instanceof net.minecraft.world.item.ProjectileWeaponItem;
     }
 
-    /** The held weapon's own attack damage × craftsmanship quality × guard mastery. Bare hands
-     *  when the armory had nothing — weak on purpose: stock weapons or field a weak watch. */
     private double meleeDamage(ItemStack weapon) {
         if (weapon.isEmpty()) return BARE_HAND_DAMAGE * skillMultiplier();
         return GuardWorkGoal.weaponAttackDamage(weapon)
@@ -235,7 +206,6 @@ public class GuardCombatGoal extends Goal {
             * skillMultiplier();
     }
 
-    /** Ticks between swings from the held weapon's attack-speed attribute (bare hands: slow). */
     private int meleeCooldownTicks(ItemStack weapon) {
         if (weapon.isEmpty()) return BARE_HAND_COOLDOWN_TICKS;
         double atkSpeed = GuardWorkGoal.weaponAttackSpeed(weapon);
@@ -243,15 +213,12 @@ public class GuardCombatGoal extends Goal {
         return Math.max(5, (int) Math.round(20.0 / atkSpeed));
     }
 
-    // ─── Ranged ─────────────────────────────────────────────────────────────────────────────
-
     private void rangedTick(ServerLevel sl, ItemStack weapon) {
         boolean sling = GuardWorkGoal.isSlingWeapon(weapon);
         double dSq = citizen.distanceToSqr(target);
         boolean los = citizen.getSensing().hasLineOfSight(target);
 
         if (windupTicks > 0) {
-            // Planted, drawing. Release when the telegraph elapses (or the shot window broke).
             if (--windupTicks == 0) {
                 if (los && target.isAlive()) fire(sl, weapon, sling);
                 if (citizen.isUsingItem()) citizen.stopUsingItem();
@@ -267,24 +234,19 @@ public class GuardCombatGoal extends Goal {
                 repathCooldown = REPATH_INTERVAL;
             }
         } else if (attackCooldown <= 0) {
-            // Hold-fire discipline: a fellow citizen standing in the fire lane → sidestep for a
-            // clear angle instead of shooting through the shield line. (The projectile-immunity
-            // net in GuardCombatEvents means a mistake is harmless; this is what the player SEES.)
             if (friendlyInLane(sl)) {
                 sidestep();
-                attackCooldown = 8;   // re-check the lane shortly, don't thrash every tick
+                attackCooldown = 8;
                 return;
             }
-            // In the sweet spot with a clear line — plant feet and telegraph the shot.
             citizen.getNavigation().stop();
             windupTicks = sling ? SLING_WINDUP_TICKS : BOW_WINDUP_TICKS;
-            citizen.startUsingItem(InteractionHand.MAIN_HAND);   // bow-draw / sling-stretch pose
+            citizen.startUsingItem(InteractionHand.MAIN_HAND);
         } else {
             citizen.getNavigation().stop();
         }
     }
 
-    /** True when a same-settlement citizen blocks the straight shot from our eyes to the target. */
     private boolean friendlyInLane(ServerLevel sl) {
         Vec3 from = citizen.getEyePosition();
         Vec3 to = new Vec3(target.getX(), target.getY(0.5), target.getZ());
@@ -299,7 +261,6 @@ public class GuardCombatGoal extends Goal {
         return false;
     }
 
-    /** Step a few blocks perpendicular to the fire lane, hunting for a clear angle. */
     private void sidestep() {
         Vec3 toTarget = target.position().subtract(citizen.position());
         Vec3 side = new Vec3(-toTarget.z, 0, toTarget.x).normalize()
@@ -319,9 +280,8 @@ public class GuardCombatGoal extends Goal {
         if (arrow == null) {
             arrow = new Arrow(sl, citizen, new ItemStack(Items.ARROW), citizen.getMainHandItem());
         }
-        // An arrow's real hit is baseDamage × velocity — derive the base from the intended hit.
         arrow.setBaseDamage(Math.max(2.0, BOW_HIT_DAMAGE * scaled / ARROW_VELOCITY));
-        arrow.pickup = AbstractArrow.Pickup.DISALLOWED;   // skeleton-style: guards can't be farmed
+        arrow.pickup = AbstractArrow.Pickup.DISALLOWED;
         float velocity = ARROW_VELOCITY * HunterHooks.get().bowVelocityFactor(weapon);
         double dx = target.getX() - citizen.getX();
         double dy = target.getY(0.3333) - arrow.getY();
@@ -333,8 +293,6 @@ public class GuardCombatGoal extends Goal {
             1.0F, 1.0F / (citizen.getRandom().nextFloat() * 0.4F + 0.8F));
     }
 
-    /** Back-pedal directly away from {@code t} by {@code blocks} — the long ranged-kite step and
-     *  the short melee fencing step share this (BarbarianRangedGoal's pattern). */
     private void backAwayFrom(LivingEntity t, double blocks) {
         Vec3 away = citizen.position().subtract(t.position());
         if (away.lengthSqr() < 1.0e-3) away = new Vec3(1, 0, 0);
@@ -342,9 +300,6 @@ public class GuardCombatGoal extends Goal {
         citizen.getNavigation().moveTo(dest.x, dest.y, dest.z, speedModifier);
     }
 
-    // ─── Shared ─────────────────────────────────────────────────────────────────────────────
-
-    /** Draw the guard's weapon (stashing whatever was held so {@link #stop} restores it). */
     private void equipWeapon() {
         stashedMainHand = citizen.getItemBySlot(EquipmentSlot.MAINHAND).copy();
         ItemStack weapon = GuardWorkGoal.currentWeapon(citizen);
@@ -353,29 +308,21 @@ public class GuardCombatGoal extends Goal {
         }
     }
 
-    /** Mastery scale: novice ×1.0 → master ×{@code 1 + SKILL_DAMAGE_BONUS}. */
     private double skillMultiplier() {
         return 1.0 + SKILL_DAMAGE_BONUS * jobSkill();
     }
 
-    /** This guard's {@code guards_post} mastery on the shared XP-saturation curve (0 novice → ~1 master). */
     private float jobSkill() {
         float xp = citizen.getJobXp(GuardWorkGoal.JOB_TYPE_ID);
         return xp / (xp + QualityMath.NPC_XP_HALF);
     }
 
-    /** True if {@code e} stands inside this guard's settlement claims or within
-     *  {@link #DEFENSE_BAND_CHUNKS} chunks of them — the leash that keeps the watch defending home
-     *  ground instead of chasing into the wild. */
     private boolean withinDefenseBand(LivingEntity e) {
         Settlement s = citizen.getSettlement();
         return citizen.level() instanceof ServerLevel && s != null
             && withinDefenseBand(s, e.blockPosition());
     }
 
-    /** True if {@code pos} is inside {@code s}'s claims or within {@link #DEFENSE_BAND_CHUNKS} chunks of
-     *  them — the shared guard leash, also used by {@link GuardTargetingGoal} so acquisition and the
-     *  fight agree on what counts as "home ground." Fails open for an unclaimed settlement. */
     static boolean withinDefenseBand(Settlement s, BlockPos pos) {
         Set<Long> claimed = s.claimedChunks();
         if (claimed.isEmpty()) return true;

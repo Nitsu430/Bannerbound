@@ -24,10 +24,17 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Datapack loader for Fletching Station recipes — reads every JSON under
- * {@code data/<namespace>/fletching_recipes/}. Server-side only (registered as a reload listener in
- * {@code AntiquityEvents}); the block entity syncs its matched result to clients itself. Recipes are
- * keyed by their file id so the minigame can resolve the matched recipe across the client round trip.
+ * Datapack loader for Fletching Station recipes - reads every JSON under
+ * {@code data/<namespace>/fletching_recipes/}. Registered as a server reload listener in
+ * {@code AntiquityEvents}; the block entity syncs its matched result to clients itself, and
+ * {@code applyEntries} is public so {@code ClientDatapackRecipes} can re-read the same JSONs on
+ * remote clients, where server datapacks don't reach. Recipes are also keyed by their file id
+ * ({@code idOf}/{@code byId}) so the stretch minigame can send the matched recipe across the
+ * client round trip and the server can resolve the result at completion. {@code find} returns the
+ * recipe whose counts EXACTLY equal the pile; {@code candidates} mirrors the crafting stone's:
+ * recipes the pile could still BECOME (placed items within required counts, at least one
+ * ingredient missing - an exact match is the craftable result, not a candidate), empty for an
+ * empty pile, sorted by result id so the renderer's ghost pick is stable across recomputes.
  */
 @ApiStatus.Internal
 public class FletchingRecipeManager extends SimpleJsonResourceReloadListener {
@@ -45,8 +52,6 @@ public class FletchingRecipeManager extends SimpleJsonResourceReloadListener {
         applyEntries(entries);
     }
 
-    /** Parse + store the loaded entries. Public so the client-side jar loader can reuse it on remote
-     *  clients, where server datapacks don't reach (see {@code ClientDatapackRecipes}). */
     public static void applyEntries(Map<ResourceLocation, JsonElement> entries) {
         List<FletchingRecipe> loaded = new ArrayList<>();
         Map<ResourceLocation, FletchingRecipe> ids = new HashMap<>();
@@ -64,12 +69,10 @@ public class FletchingRecipeManager extends SimpleJsonResourceReloadListener {
         BannerboundAntiquity.LOGGER.info("Loaded {} fletching recipe(s).", recipes.size());
     }
 
-    /** Every loaded fletching recipe (for the Fletcher NPC's "what can I craft" scan). */
     public static List<FletchingRecipe> all() {
         return recipes;
     }
 
-    /** The recipe whose ingredient counts EXACTLY equal the pile, or {@code null} if none. */
     @Nullable
     public static FletchingRecipe find(List<ItemStack> contents) {
         Map<Item, Integer> placed = new HashMap<>();
@@ -83,10 +86,6 @@ public class FletchingRecipeManager extends SimpleJsonResourceReloadListener {
         return null;
     }
 
-    /** Recipes the pile could still BECOME — every placed item appears in the recipe at no more
-     *  than its required count, and at least one ingredient is still missing (an exact match is the
-     *  craftable result, not a candidate). Empty pile → no candidates. Sorted by result id so the
-     *  renderer's ghost pick is stable across recomputes. Mirrors the crafting stone's. */
     public static List<FletchingRecipe> candidates(List<ItemStack> contents) {
         Map<Item, Integer> placed = new HashMap<>();
         for (ItemStack s : contents) {
@@ -110,7 +109,6 @@ public class FletchingRecipeManager extends SimpleJsonResourceReloadListener {
         return out;
     }
 
-    /** The file id of {@code recipe} (for sending across the minigame round trip), or {@code null}. */
     @Nullable
     public static ResourceLocation idOf(FletchingRecipe recipe) {
         for (Map.Entry<ResourceLocation, FletchingRecipe> e : byId.entrySet()) {
@@ -119,7 +117,6 @@ public class FletchingRecipeManager extends SimpleJsonResourceReloadListener {
         return null;
     }
 
-    /** Looks up a recipe by its file id (server resolves the result at minigame completion). */
     @Nullable
     public static FletchingRecipe byId(ResourceLocation id) {
         return byId.get(id);

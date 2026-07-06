@@ -13,7 +13,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server. The player confirmed edits to the farmer selection {@code rodId} from the
+ * Client -> server. The player confirmed edits to the farmer selection {@code rodId} from the
  * field-edit screen: a new crop ({@code seedItemId}) and the assigned worker ({@code assignedCitizen},
  * the zero UUID = open to all farmers). The server validates ownership + the crop + that the worker is
  * a farmer in the settlement before applying.

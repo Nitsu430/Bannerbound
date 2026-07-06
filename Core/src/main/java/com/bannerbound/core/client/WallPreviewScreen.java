@@ -17,15 +17,24 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Walls mode on the territory birdseye (WALLS_PLAN.md Phase 3, mockup images 2–3): reuses the
+ * Walls mode on the territory birdseye (WALLS_PLAN.md Phase 3, mockup images 2-3): reuses the
  * Expand Territory screen's synthetic camera, chunk slabs, pan/rotate and projection math, but
- * claiming is disabled — instead the wall layout is drawn as colored lines on the slab plane
- * and clicking a segment slot toggles a gate there. Construct / Cancel buttons drive
- * {@code WallService} via payloads; every server action replies with a refreshed payload that
- * {@link #refreshWalls} consumes in place.
+ * claiming is disabled -- instead the wall layout is drawn as colored lines on the slab plane
+ * and clicking a segment slot toggles a gate there. Construct / Cancel buttons drive WallService
+ * via payloads; every server action replies with a refreshed payload that refreshWalls consumes
+ * in place (lastPayload is kept whole so the Refine (3D) view can open with the same data).
  *
  * <p>Line drawing is screen-space: at the snapped cardinal yaws every border run projects to an
- * axis-aligned screen line, so simple filled rects suffice — no world-space geometry needed.
+ * axis-aligned screen line, so simple filled rects suffice -- no world-space geometry needed.
+ * Pieces are painted block-edge to block-edge so adjacent runs join into a continuous border
+ * (center-to-center drawing rendered 2-long segments as disconnected dashes).
+ *
+ * <p>PieceLite.kindOrdinal mirrors WallDesign.Kind: 0 = SEGMENT, 1 = CORNER, 2 = GATE. Gate
+ * placement is 1-block granular along a run and snaps to the side midpoint / parallel-side
+ * gates; snapKind records what the hover grabbed (0 = free, 1 = side midpoint, 2 = parallel
+ * gate), and gates are clamped so they never occupy a corner. planCurrent = false means the
+ * built wall is an OLDER design than the previewed layout. Gate toggles flash and play a door
+ * sound as feedback (all tuned playtest 2026-06-12).
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -36,28 +45,19 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
     private static final int COLOR_GATE = 0xFF35E065;
     private static final int COLOR_WATER_GAP = 0x903AA0FF;
     private static final int COLOR_HOVER = 0xFFFFFFFF;
-    /** Click/hover tolerance around a slot's line, in blocks. */
     private static final double PICK_RANGE = 2.5;
 
     private List<WallScreenPayloads.PieceLite> pieces;
     private boolean hasPlan;
     private int completeness;
-    /** Active gate design's length — hover shows the true span a placed gate would occupy. */
     private int gateLength;
-    /** Index into {@link #pieces} of the hovered gate-toggle candidate, or -1. */
     private int hoveredSlot = -1;
 
-    /** Kept whole so the Refine (3D) view can be opened with the same data. */
     private WallScreenPayloads.OpenWallPreview lastPayload;
 
-    // ─── Gate placement aids (playtest 2026-06-12) ─────────────────────────────────────────
-    /** Snap radius around the side midpoint / parallel gate centers, in blocks. */
     private static final double SNAP_RANGE = 3.0;
-    /** Gate add/remove flash duration. */
     private static final long FLASH_MS = 650;
-    /** Snap grabbed by the current hover: 0 = free, 1 = side midpoint, 2 = parallel gate. */
     private int snapKind;
-    /** The parallel-side gate the candidate aligned with (snapKind == 2). */
     @org.jetbrains.annotations.Nullable
     private WallScreenPayloads.PieceLite snapAlignedTo;
 
@@ -66,7 +66,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
 
     private final List<GateFlash> gateFlashes = new java.util.ArrayList<>();
 
-    /** False = the committed (built) wall is an OLDER design than the previewed layout. */
     private boolean planCurrent = true;
 
     public WallPreviewScreen(WallScreenPayloads.OpenWallPreview payload) {
@@ -79,7 +78,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         this.planCurrent = payload.planCurrent();
     }
 
-    /** Consumes a refreshed payload after a gate toggle / construct / cancel. */
     public void refreshWalls(WallScreenPayloads.OpenWallPreview payload) {
         List<WallScreenPayloads.PieceLite> before = this.pieces;
         this.lastPayload = payload;
@@ -90,8 +88,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         this.planCurrent = payload.planCurrent();
         refreshData(payload.base());
 
-        // Gate toggle feedback: diff the gate set, flash the changed spans (render pass) and
-        // play a door sound — clicks felt unacknowledged (playtest 2026-06-12).
         if (before != null) {
             java.util.Map<Long, WallScreenPayloads.PieceLite> oldGates = new java.util.HashMap<>();
             java.util.Map<Long, WallScreenPayloads.PieceLite> newGates = new java.util.HashMap<>();
@@ -134,17 +130,13 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
 
     @Override
     protected boolean drawsBaseHud() {
-        return false; // we draw our own header/hint — both drew over each other
+        return false;
     }
 
-    /** Whether the sender-only ghost preview is currently shown (client-side toggle state). */
     private boolean ghostPreviewShown = false;
 
-    /** Toolbar strip height — the grouped button bar at the bottom (drawn in renderBackground
-     *  so it sits UNDER the widgets but over the world). */
     private static final int TOOLBAR_H = 46;
 
-    /** File · Edit · View · Go — clicks checked first, dropdown drawn last. */
     @org.jetbrains.annotations.Nullable
     private WallMenuBar menuBar;
 
@@ -176,8 +168,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
                 WallMenuBar.Item.of("Back  (Esc)", this::onClose)))));
         int midX = this.width / 2;
         int by = this.height - 26;
-        // Grouped toolbar (View | Plan | Design) — "a bunch of buttons thrown together",
-        // playtest 2026-06-12. Group labels + separators render in renderBackground.
         addRenderableWidget(PolishButton.polished(previewLabel(), b -> {
                 ghostPreviewShown = !ghostPreviewShown;
                 b.setMessage(previewLabel());
@@ -206,7 +196,7 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
                 Component.translatable("bannerbound.wall_preview.refine"), b -> {
                 if (this.minecraft != null) {
                     WallRefineScreen refine = new WallRefineScreen(lastPayload);
-                    refine.setParentPreview(this); // Escape comes back HERE, data intact
+                    refine.setParentPreview(this);
                     this.minecraft.setScreen(refine);
                 }
             })
@@ -226,8 +216,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
     @Override
     public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         super.renderBackground(g, mouseX, mouseY, partialTick);
-        // Toolbar backdrop: under the widgets (renderBackground runs before them), over the
-        // world. Groups: View | Plan | Design.
         int midX = this.width / 2;
         int top = this.height - TOOLBAR_H;
         g.fill(0, top, this.width, this.height, 0xB80E0E12);
@@ -252,26 +240,22 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         if (phase != Phase.OPEN) return;
 
         hoveredSlot = pickSlot(mouseX, mouseY);
-        // Two passes: corners draw LAST so their 2×2 squares sit on top of the depth-1
-        // segment strips at the junctions (same precedence the blueprint uses) — drawing in
-        // list order let segments clip the corner squares.
+        // Corners draw LAST (pass 1) so their squares sit over the segment strips; list order
+        // let segments clip them.
         for (int pass = 0; pass < 2; pass++) {
             for (int i = 0; i < pieces.size(); i++) {
                 WallScreenPayloads.PieceLite piece = pieces.get(i);
-                boolean corner = piece.kindOrdinal() == 1; // WallDesign.Kind.CORNER
+                boolean corner = piece.kindOrdinal() == 1;
                 if (corner != (pass == 1)) continue;
                 int color = piece.waterGap() ? COLOR_WATER_GAP : switch (piece.kindOrdinal()) {
                     case 1 -> COLOR_CORNER;
-                    case 2 -> COLOR_GATE; // WallDesign.Kind.GATE
+                    case 2 -> COLOR_GATE;
                     default -> COLOR_SEGMENT;
                 };
                 drawPieceRect(g, piece, piece.length(), i == hoveredSlot && piece.kindOrdinal() == 2
                     ? COLOR_HOVER : color);
             }
         }
-        // Gate toggle feedback: short flash where a gate was just added (white pop over the
-        // green) or removed (red fade-out) — "hard to tell when you removed/added another
-        // gate", playtest 2026-06-12. Paired with a door-sound in refreshWalls.
         long now = net.minecraft.Util.getMillis();
         gateFlashes.removeIf(f -> now - f.atMs() > FLASH_MS);
         for (GateFlash flash : gateFlashes) {
@@ -281,20 +265,13 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
                 (a << 24) | (flash.added() ? 0xFFFFFF : 0xF24545));
         }
 
-        // Hovering a SEGMENT previews the FULL gate span CENTERED on the mouse — placement is
-        // 1-block granular along the run (slot-snapped gates could never sit centered on a
-        // side, playtest 2026-06-12), so the hover shows exactly where a click would put it.
-        // A tick marks the side's midpoint; the span SNAPS to it and to gates on parallel
-        // sides, with a label + guide line saying which snap grabbed it.
         if (hoveredSlot >= 0 && pieces.get(hoveredSlot).kindOrdinal() == 0) {
             WallScreenPayloads.PieceLite p = pieces.get(hoveredSlot);
             long anchor = centeredGateAnchor(p, mouseX, mouseY);
             boolean alongIsX = Direction.from2DDataValue(p.outward2d()).getClockWise().getStepX() != 0;
-            // Midpoint tick (2 blocks wide), bright when the candidate snapped onto it.
             double sideCenter = runCenter(p, alongIsX);
             drawPieceRect(g, synthetic(p, (int) Math.floor(sideCenter) - 1, 2, 0), 2,
                 snapKind == 1 ? 0xE0FFE060 : 0x70FFFFFF);
-            // The candidate span itself, gently pulsing.
             int pulse = 195 + (int) (60 * Math.sin(now / 150.0));
             WallScreenPayloads.PieceLite ghost = new WallScreenPayloads.PieceLite(
                 BlockPos.getX(anchor), BlockPos.getZ(anchor), gateLength, p.depth(),
@@ -302,7 +279,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
                 p.minGround(), p.maxGround(), 0, false);
             drawPieceRect(g, ghost, gateLength,
                 (pulse << 24) | (snapKind != 0 ? 0xFFE060 : 0xFFFFFF));
-            // Alignment guide: a thin line across to the parallel gate this span mirrors.
             if (snapKind == 2 && snapAlignedTo != null) {
                 drawAlignGuide(g, p, snapAlignedTo, alongIsX);
             }
@@ -326,8 +302,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         if (menuBar != null) menuBar.render(g, mouseX, mouseY);
     }
 
-    /** Thin perpendicular guide between the gate candidate and the parallel gate it aligns
-     *  with — both share the snapped along-coordinate, so the line is axis-aligned. */
     private void drawAlignGuide(GuiGraphics g, WallScreenPayloads.PieceLite mine,
                                 WallScreenPayloads.PieceLite other, boolean alongIsX) {
         double alongC = coveredCenter(other);
@@ -343,24 +317,15 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         g.fill(x0, y0, Math.max(x1, x0 + 1), Math.max(y1, y0 + 1), 0x90FFE060);
     }
 
-    /**
-     * Fills a piece's FULL footprint (block-edge to block-edge, length × depth in world), with
-     * {@code lengthOverride} allowing the gate-span hover to paint a longer run than the piece
-     * itself. Edge-to-edge spans make adjacent pieces connect into a continuous border line
-     * (center-to-center drawing rendered 2-long segments as disconnected dashes) and corners
-     * show as proper N×N squares in every rotation.
-     */
     private void drawPieceRect(GuiGraphics g, WallScreenPayloads.PieceLite piece,
                                int lengthOverride, int color) {
         Direction outward = Direction.from2DDataValue(piece.outward2d());
         Direction along = outward.getClockWise();
         Direction inward = outward.getOpposite();
-        // Opposite footprint corner in block coords (start is always the (l=0,d=0) column).
         int endX = piece.startX() + along.getStepX() * (lengthOverride - 1)
                  + inward.getStepX() * (piece.depth() - 1);
         int endZ = piece.startZ() + along.getStepZ() * (lengthOverride - 1)
                  + inward.getStepZ() * (piece.depth() - 1);
-        // Block-EDGE bounds: min corner of the min block, max corner of the max block (+1).
         double minWX = Math.min(piece.startX(), endX);
         double maxWX = Math.max(piece.startX(), endX) + 1;
         double minWZ = Math.min(piece.startZ(), endZ);
@@ -372,13 +337,11 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         int maxX = Math.max(a[0], b[0]);
         int minY = Math.min(a[1], b[1]);
         int maxY = Math.max(a[1], b[1]);
-        // Depth-1 strips can project to <2 px at far zoom — keep the border readable.
         if (maxX - minX < 2) maxX = minX + 2;
         if (maxY - minY < 2) maxY = minY + 2;
         g.fill(minX, minY, maxX, maxY, color);
     }
 
-    /** Mirror of the base screen's chunkToScreen, for arbitrary world (x, z) block centers. */
     private int[] worldToScreen(double worldX, double worldZ) {
         Minecraft mc = this.minecraft;
         if (mc == null || mc.options == null || mc.getWindow() == null) return null;
@@ -404,7 +367,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         return new int[]{sx, sy};
     }
 
-    /** Inverse: mouse px → world (x, z) on the slab plane. Mirror of the base pickChunk. */
     private double[] mouseToWorld(int mouseX, int mouseY) {
         Minecraft mc = this.minecraft;
         if (mc == null || mc.options == null || mc.getWindow() == null) return null;
@@ -420,7 +382,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         return new double[]{dragCamX + offset[0], dragCamZ + offset[1]};
     }
 
-    /** Nearest SEGMENT/GATE slot whose line is within {@link #PICK_RANGE} of the mouse, or -1. */
     private int pickSlot(int mouseX, int mouseY) {
         double[] world = mouseToWorld(mouseX, mouseY);
         if (world == null) return -1;
@@ -429,7 +390,7 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         for (int i = 0; i < pieces.size(); i++) {
             WallScreenPayloads.PieceLite piece = pieces.get(i);
             if (piece.waterGap()) continue;
-            if (piece.kindOrdinal() != 0 && piece.kindOrdinal() != 2) continue; // SEGMENT or GATE
+            if (piece.kindOrdinal() != 0 && piece.kindOrdinal() != 2) continue;
             Direction along = Direction.from2DDataValue(piece.outward2d()).getClockWise();
             double x0 = piece.startX() + 0.5;
             double z0 = piece.startZ() + 0.5;
@@ -458,7 +419,7 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        // Menu bar first — its dropdown overlays the map and must win the click.
+        // Menu bar first: its dropdown overlays the map and must win the click.
         if (phase == Phase.OPEN && menuBar != null
             && menuBar.mouseClicked(mouseX, mouseY, button)) {
             return true;
@@ -468,8 +429,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         int slot = pickSlot((int) mouseX, (int) mouseY);
         if (slot < 0) return false;
         WallScreenPayloads.PieceLite piece = pieces.get(slot);
-        // Existing gate: toggle OFF by its exact anchor. Segment: place a gate CENTERED on
-        // the click — 1-block granularity, matching the hover preview.
         long anchor = piece.kindOrdinal() == 2
             ? BlockPos.asLong(piece.startX(), 0, piece.startZ())
             : centeredGateAnchor(piece, (int) mouseX, (int) mouseY);
@@ -477,16 +436,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         return true;
     }
 
-    /**
-     * Gate anchor whose span is centered on the mouse's along-axis position, at 1-block
-     * granularity (the layout engine truncates wall fillers into any gate start) — with
-     * SNAPPING to the side's midpoint and to gates on parallel sides (mirrored layouts in
-     * one click; "really hard to tell where it is centered", playtest 2026-06-12). Sets
-     * {@link #snapKind}/{@link #snapAlignedTo} as a side effect; render and click both call
-     * this, so what the hover shows is exactly what the click sends. The anchor is the
-     * CANONICAL piece start: on descending runs (west/north) that's the covered interval's
-     * MAX block. The cross coordinate rides the hovered run piece.
-     */
     private long centeredGateAnchor(WallScreenPayloads.PieceLite piece, int mouseX, int mouseY) {
         snapKind = 0;
         snapAlignedTo = null;
@@ -496,8 +445,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         boolean alongIsX = along.getStepX() != 0;
         double c = alongIsX ? world[0] : world[1];
 
-        // Snap targets, nearest wins: the hovered side's midpoint, then every gate on a
-        // PARALLEL side (same axis, different row) — its center along-coordinate.
         double best = c;
         double bestDist = SNAP_RANGE;
         double sideCenter = runCenter(piece, alongIsX);
@@ -513,7 +460,7 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
                 Direction.from2DDataValue(p.outward2d()).getClockWise().getStepX() != 0;
             if (pAlongIsX != alongIsX) continue;
             int cross = alongIsX ? p.startZ() : p.startX();
-            if (cross == myCross) continue; // same run — clicking that gate removes it
+            if (cross == myCross) continue;
             double center = coveredCenter(p);
             if (Math.abs(c - center) < bestDist) {
                 best = center;
@@ -523,23 +470,19 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
             }
         }
 
-        // Covered world interval [coveredMin, coveredMin + len) centered on the (snapped) c,
-        // CLAMPED so the whole span stays inside the run — gates must never eat into the
-        // corners ("you shouldn't be able to place gates at corners", playtest 2026-06-12);
-        // near a corner the ghost slides inward to the nearest legal spot instead.
         int coveredMin = (int) Math.floor(best - gateLength / 2.0 + 0.5);
         int[] run = runExtent(piece, alongIsX);
         if (run[1] - run[0] + 1 >= gateLength) {
             coveredMin = Math.max(run[0], Math.min(coveredMin, run[1] - gateLength + 1));
         }
         boolean ascending = along.getStepX() + along.getStepZ() > 0;
+        // Canonical anchor = piece start; on descending runs (W/N) that is the covered MAX block.
         int start = ascending ? coveredMin : coveredMin + gateLength - 1;
         return BlockPos.asLong(
             alongIsX ? start : piece.startX(), 0,
             alongIsX ? piece.startZ() : start);
     }
 
-    /** The whole side's covered along-axis interval [min, max] (same pieces as runCenter). */
     private int[] runExtent(WallScreenPayloads.PieceLite piece, boolean alongIsX) {
         int myCross = alongIsX ? piece.startZ() : piece.startX();
         int min = Integer.MAX_VALUE;
@@ -560,7 +503,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         return new int[]{min, max};
     }
 
-    /** The piece's covered along-axis world interval [min, max] (canonical start unwound). */
     private static int[] coveredInterval(WallScreenPayloads.PieceLite p) {
         Direction along = Direction.from2DDataValue(p.outward2d()).getClockWise();
         boolean alongIsX = along.getStepX() != 0;
@@ -569,14 +511,11 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         return step > 0 ? new int[]{s, s + p.length() - 1} : new int[]{s - (p.length() - 1), s};
     }
 
-    /** Block-edge center of the piece's covered interval. */
     private static double coveredCenter(WallScreenPayloads.PieceLite p) {
         int[] iv = coveredInterval(p);
         return (iv[0] + iv[1] + 1) / 2.0;
     }
 
-    /** Block-edge midpoint of the WHOLE side the piece belongs to (every same-outward,
-     *  same-row piece's covered interval, corners excluded). */
     private double runCenter(WallScreenPayloads.PieceLite piece, boolean alongIsX) {
         int myCross = alongIsX ? piece.startZ() : piece.startX();
         int min = Integer.MAX_VALUE;
@@ -594,7 +533,6 @@ public class WallPreviewScreen extends ExpandTerritoryScreen {
         return (min + max + 1) / 2.0;
     }
 
-    /** Synthetic run-aligned rect for drawing aids: covered interval → canonical start. */
     private static WallScreenPayloads.PieceLite synthetic(WallScreenPayloads.PieceLite tmpl,
                                                           int coveredMin, int length,
                                                           int kindOrdinal) {

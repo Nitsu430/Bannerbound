@@ -11,12 +11,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: rename a workshop from its menu. An empty {@code name} resets the workshop to
- * its derived-type display name. The server clamps length and requires the sender to be a member
- * of the owning settlement.
- *
- * @param workshopId the workshop's id (UUID string from {@code OpenWorkshopMenuPayload})
- * @param name       the new custom name ("" = reset to derived type)
+ * Client -> server: rename a workshop from its menu. workshopId is the workshop's UUID string from
+ * OpenWorkshopMenuPayload; an empty name resets the workshop to its derived-type display name. The
+ * server clamps length and requires the sender to be a member of the owning settlement.
  */
 @ApiStatus.Internal
 public record RenameWorkshopPayload(String workshopId, String name) implements CustomPacketPayload {

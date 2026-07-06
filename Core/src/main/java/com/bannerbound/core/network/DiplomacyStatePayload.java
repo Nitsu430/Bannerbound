@@ -13,6 +13,15 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/**
+ * S->C mirror of the Diplomacy tab: a Row per known settlement/city-state (stance, distance,
+ * pending/cooldown timers, peace-offer flags, capture state, and - city-states only - the
+ * comma-joined goods/seeks wares; settlement rows also carry a trade badge of unread proposals),
+ * plus a read-only BarbarianRow per known camp (name in the camp colour, CampRelationState ordinal
+ * where 0=hostile/1=neutral/2=friendly, score, distance/direction). Barbarian rows are
+ * informational only and render below the settlement/city-state rows. STANCE_* ints index
+ * Row.stance.
+ */
 @ApiStatus.Internal
 public record DiplomacyStatePayload(boolean rallying, int winnerCooldownSeconds, List<Row> rows,
                                     List<BarbarianRow> barbarianRows)
@@ -32,19 +41,16 @@ public record DiplomacyStatePayload(boolean rallying, int winnerCooldownSeconds,
         boolean canRaze,
         String objective,
         boolean cityState,
-        String goods,   // city-states only: comma-joined item ids of the best-stocked wares
-        String seeks,   // city-states only: comma-joined item ids of the active demand slots
-        boolean canTrade,  // settlements: the viewer may open a trade with this row
-        int tradeBadge     // settlements: unread trade proposals awaiting the viewer (0/1)
+        String goods,
+        String seeks,
+        boolean canTrade,
+        int tradeBadge
     ) {}
 
-    /** Read-only barbarian-camp standing: name (in the camp's colour), stance (CampRelationState
-     *  ordinal), numeric score, and distance/direction from the viewer's hall. No actions — these are
-     *  informational rows shown below the settlement/city-state rows. */
     public record BarbarianRow(
         String name,
-        int nameColor,        // RGB from the camp type's ChatFormatting
-        int relationOrdinal,  // CampRelationState ordinal (0=hostile,1=neutral,2=friendly)
+        int nameColor,
+        int relationOrdinal,
         int score,
         int distanceBlocks,
         String direction

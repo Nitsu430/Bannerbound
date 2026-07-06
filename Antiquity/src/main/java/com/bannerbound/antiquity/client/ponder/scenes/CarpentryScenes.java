@@ -16,8 +16,11 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Ponder storyboards for the Woodworking Table — a 2-block batch wood-working bench.
- * Scenes registered under {@code bannerboundantiquity:carpentry}.
+ * Ponder storyboards for the Woodworking Table - the 2-block batch wood-working bench (load a log
+ * budget, browse the floating ghost output, saw the whole batch with the bone-saw minigame).
+ * Scenes registered under {@code bannerboundantiquity:carpentry}. The table is built at runtime on
+ * the shared blank platform (see PonderUtil.basePlate); pile contents and insert animations are
+ * faked by rewriting the table BE's NBT rather than simulating real interactions.
  */
 @OnlyIn(Dist.CLIENT)
 public final class CarpentryScenes {
@@ -52,7 +55,6 @@ public final class CarpentryScenes {
         placeTable(scene, util);
         scene.idle(10);
 
-        // Load logs into the pile.
         scene.overlay().showControls(util.vector().topOf(main), Pointing.DOWN, 50)
             .rightClick().withItem(PonderUtil.stack("minecraft:oak_log", 8));
         scene.idle(5);
@@ -70,7 +72,6 @@ public final class CarpentryScenes {
             .placeNearTarget();
         scene.idle(80);
 
-        // Pick an output from the floating ghost.
         scene.overlay().showText(80)
             .text("A ghost output floats above; the arrows browse what your logs can become. Click to queue it.")
             .pointAt(util.vector().topOf(main).add(0, 0.8, 0))
@@ -78,7 +79,6 @@ public final class CarpentryScenes {
             .placeNearTarget();
         scene.idle(80);
 
-        // Saw it.
         scene.overlay().showControls(util.vector().topOf(main), Pointing.DOWN, 50)
             .rightClick().withItem(PonderUtil.stack("bannerboundantiquity:bone_saw"));
         scene.idle(5);

@@ -28,34 +28,40 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
 
 /**
- * Server-side logic for the chunk-claim expansion flow. Two entry points:
- * <ul>
- *   <li>{@link #buildScreenPayload} — assembles the snapshot the
- *       {@code ExpandTerritoryScreen} renders from. Includes own + foreign chunks in a 9×9
- *       window around the town hall, the resolved current tier cost, and a
- *       server-evaluated {@code canAfford} flag covering items + population + cap.</li>
- *   <li>{@link #tryClaim} — re-validates everything when the client clicks a chunk, consumes
- *       items, performs the claim, force-loads the chunk, increments the per-era expansion
- *       counter, broadcasts the global claim sync, and announces in chat.</li>
- * </ul>
- * Keep all validation here, NOT in the client: the screen is allowed to lie about what it
- * thinks is purchasable. Server is authoritative.
+ * Server-side logic for the chunk-claim expansion flow; all validation lives here, NEVER in the
+ * client, because the ExpandTerritoryScreen is allowed to lie about what is purchasable -- the
+ * server is authoritative. buildScreenPayload assembles the screen snapshot: own + foreign chunks
+ * in a WINDOW_RADIUS window (4 -> 9x9 centered on the town hall), per-chunk beauty (base +
+ * adjacency + effective), council-vote / chiefdom-suggestion markers, the resolved current tier
+ * cost, and a server-evaluated canAfford (items + population + cap). tryClaim re-validates on
+ * click, consumes items, claims, force-loads the chunk, increments the per-era expansion counter,
+ * broadcasts the global claim sync, and announces in chat.
+ *
+ * <p>Cost ladder: expansion progress is a single global index. totalExpansionCap sums
+ * maxExpansions for every era reached (a settlement advances one era at a time, so advancing only
+ * adds the new era's allowance and unused expansions carry forward), and resolveEraTier maps a
+ * global index onto the era whose ladder it falls in -- earlier eras are consumed first, so
+ * leftover antiquity expansions still cost antiquity prices -- plus the tier within that era; both
+ * return null at or past the cap.
+ *
+ * <p>tryClaim dispatches by government: NONE claims directly from the player's inventory; a
+ * Chiefdom chief claims directly (inventory + settlement chests); a Chiefdom non-chief toggles a
+ * suggestion marker (no chat -- the marker IS the feedback); Council toggles a vote and claims
+ * once the online-member threshold is met, sourcing resources from voters + settlement. There is
+ * no chat on vote cast/withdraw (the N/X marker is the feedback), but the "vote retracted, lacking
+ * resources" broadcast is kept because it is actionable. executeClaim is the shared path: it
+ * re-checks population and cost, consumes via SettlementInventoryHelper (stockpile -> workstation
+ * -> voter inventories), claims, and returns false when resources are missing so a council vote
+ * retracts. Council votes auto-expire after COUNCIL_VOTE_EXPIRY_MS (5 min, matching
+ * SettlementManager). isAdjacentToClaim is inlined to avoid dragging in command-package imports.
  */
 public final class TerritoryService {
-    /** Half-width of the chunk window we ship to the screen. 4 → 9×9 area centered on town hall. */
     private static final int WINDOW_RADIUS = 4;
 
     private TerritoryService() {}
 
-    /** A resolved expansion slot: which era's ladder it belongs to and the tier index within it. */
     private record EraTier(Era era, int tier) {}
 
-    /**
-     * Cumulative expansion cap — the sum of {@code maxExpansions} for every era the settlement has
-     * reached. A settlement only ever advances one era at a time, so "reached" means every era
-     * from the first up to (and including) its current age. Unused expansions therefore carry
-     * forward: advancing simply adds the new era's allowance on top.
-     */
     private static int totalExpansionCap(Settlement s) {
         int cap = 0;
         for (Era era : Era.values()) {
@@ -66,11 +72,6 @@ public final class TerritoryService {
         return cap;
     }
 
-    /**
-     * Maps a 0-based global expansion index onto the era whose cost ladder it falls in (earlier
-     * eras are consumed first, so leftover antiquity expansions still cost antiquity prices) plus
-     * the tier index within that era. Null when the index is at or past the cumulative cap.
-     */
     private static EraTier resolveEraTier(Settlement s, int globalIdx) {
         int acc = 0;
         for (Era era : Era.values()) {
@@ -85,8 +86,6 @@ public final class TerritoryService {
         return null;
     }
 
-    /** The cost-ladder entry for the {@code globalIdx}-th expansion, or null if that index is
-     *  past the cap or the resolved era's ladder has no such tier. */
     private static ChunkClaimCost resolveCost(Settlement s, int globalIdx, ResourceLocation biome) {
         EraTier et = resolveEraTier(s, globalIdx);
         if (et == null) return null;
@@ -115,7 +114,6 @@ public final class TerritoryService {
         }
 
         ResourceLocation biome = TerritoryBiomeResolver.majorityBiome(overworld, settlement);
-        // Progress is global now: expansions used vs. the cumulative cap across every era reached.
         int used = settlement.expansionsUsed();
         int totalCap = totalExpansionCap(settlement);
         ChunkClaimCost cur = resolveCost(settlement, used, biome);
@@ -135,8 +133,6 @@ public final class TerritoryService {
                 && InventoryItemHelper.hasAll(requester, cur.items());
         }
 
-        // Base beauty + adjacency bonus + effective beauty for every tracked (scored) chunk in
-        // the view window — claimed chunks and the claimable ring.
         List<Long> beautyChunks = new ArrayList<>();
         List<Integer> beautyTagIds = new ArrayList<>();
         List<Integer> beautyAdjacency = new ArrayList<>();
@@ -159,8 +155,6 @@ public final class TerritoryService {
             }
         }
 
-        // Chunk markers — Council votes (with the live threshold) AND Chiefdom suggestions.
-        // Empty for the inactive flavour; the client renders only the populated list.
         java.util.List<OpenExpandTerritoryScreenPayload.ChunkMarker> votes = new java.util.ArrayList<>();
         java.util.List<OpenExpandTerritoryScreenPayload.ChunkMarker> suggestions = new java.util.ArrayList<>();
         int threshold = 0;
@@ -197,11 +191,6 @@ public final class TerritoryService {
             votes, suggestions, threshold);
     }
 
-    /** Dispatcher: route the click through the right path for the settlement's government.
-     *  Chiefdom + non-chief → suggestion toggle (chat to chief); Chiefdom + chief → direct
-     *  claim using the chief's inventory + settlement chests; Council → vote toggle, claim
-     *  fires when threshold is met (resources sourced from voters + settlement); NONE →
-     *  direct claim (anarchy / pre-government). */
     public static void tryClaim(ServerPlayer player, long packedTarget) {
         MinecraftServer server = player.getServer();
         if (server == null) return;
@@ -214,8 +203,6 @@ public final class TerritoryService {
         }
         ChunkPos target = new ChunkPos(packedTarget);
 
-        // Pre-claim gates that always apply (regardless of gov type). Filtering here keeps
-        // the dispatch paths below short.
         if (settlement.claimedChunks().contains(packedTarget)) {
             err(player, "bannerbound.chunkclaim.error.already_yours");
             return;
@@ -232,15 +219,12 @@ public final class TerritoryService {
             return;
         }
 
-        // Dispatch by government.
         switch (settlement.governmentType()) {
             case CHIEFDOM -> {
                 if (settlement.canActWeighty(player.getUUID())) {
-                    // Chief: claim directly using their inventory + settlement chests.
                     executeClaim(server, overworld, data, settlement, player, target, packedTarget,
                         com.bannerbound.core.territory.SettlementInventoryHelper.singletonVoters(player));
                 } else {
-                    // Non-chief: toggle the suggestion marker for this chunk.
                     toggleChunkSuggestion(server, settlement, player, packedTarget);
                 }
             }
@@ -250,19 +234,12 @@ public final class TerritoryService {
         }
     }
 
-    /** Chiefdom non-chief: toggle a suggestion marker on this chunk. Per design: no chat
-     *  broadcasts — the visual marker update IS the feedback. Pushes a screen refresh to
-     *  every member so the marker shows up on the chief's screen too. */
     private static void toggleChunkSuggestion(MinecraftServer server, Settlement settlement,
                                                 ServerPlayer player, long packedTarget) {
         settlement.toggleExpansionSuggestion(packedTarget, player.getUUID());
         broadcastTerritoryRefresh(server, settlement);
     }
 
-    /** Council member: toggle vote, sweep expired votes, check threshold, fire claim if met.
-     *  Per design: no chat broadcasts on vote cast/withdraw — the screen marker (N/X) is the
-     *  feedback. The "vote retracted because we lack resources" broadcast (further down)
-     *  IS kept because it's actionable info, not vote-tally spam. */
     private static void tryCouncilVote(MinecraftServer server, ServerLevel overworld,
                                         SettlementData data, Settlement settlement,
                                         ServerPlayer player, ChunkPos target, long packedTarget) {
@@ -275,11 +252,9 @@ public final class TerritoryService {
         int needed = SettlementManager.councilExpandThreshold(onlineMembers);
 
         if (votes.size() < needed) {
-            // Still gathering. Refresh every member's screen so the vote tally updates live.
             broadcastTerritoryRefresh(server, settlement);
             return;
         }
-        // Threshold hit — assemble voter player list (online voters only) and execute.
         java.util.List<ServerPlayer> voters = new java.util.ArrayList<>(votes.size());
         for (java.util.UUID id : votes.keySet()) {
             ServerPlayer p = server.getPlayerList().getPlayer(id);
@@ -292,8 +267,6 @@ public final class TerritoryService {
         }
         boolean claimed = executeClaim(server, overworld, data, settlement, player, target, packedTarget, voters);
         if (!claimed) {
-            // Resource sourcing failed — clear the vote so the council can re-vote after
-            // gathering, and broadcast why.
             settlement.clearExpansionVotes(packedTarget);
             com.bannerbound.core.api.settlement.SettlementManager.broadcastToSettlement(
                 server, settlement,
@@ -303,9 +276,6 @@ public final class TerritoryService {
         }
     }
 
-    /** Shared claim-execution path: validates population + cost feasibility, consumes
-     *  resources (settlement → voter fallback), claims the chunk, broadcasts. Returns true
-     *  on success; false means the council vote should retract (resources missing). */
     private static boolean executeClaim(MinecraftServer server, ServerLevel overworld,
                                          SettlementData data, Settlement settlement,
                                          ServerPlayer triggeringPlayer, ChunkPos target,
@@ -339,8 +309,6 @@ public final class TerritoryService {
                 .withStyle(ChatFormatting.RED));
             return false;
         }
-        // Source check + consume go through the settlement-aware helper: stockpile →
-        // workstation inventories → voter player inventories.
         if (!com.bannerbound.core.territory.SettlementInventoryHelper.hasAll(
                 overworld, settlement, voters, cost.items())) {
             return false;
@@ -359,37 +327,27 @@ public final class TerritoryService {
                 authored -> authored.isEmpty() || authored.equals(chunkType), 1);
         }
         settlement.incrementExpansionsUsed();
-        // Clear any leftover vote / suggestion state on the claimed chunk — those markers
-        // have served their purpose now that the chunk is owned.
         settlement.clearExpansionVotes(packedTarget);
         settlement.clearExpansionSuggestions(packedTarget);
         data.setDirty();
         SettlementManager.broadcastClaims(server);
 
-        // Audio confirmation for the triggering player (works for both chief direct-claim and
-        // the council member whose vote landed the threshold).
         overworld.playSound(null,
             triggeringPlayer.getX(), triggeringPlayer.getY(), triggeringPlayer.getZ(),
             net.minecraft.sounds.SoundEvents.NOTE_BLOCK_BELL.value(),
             net.minecraft.sounds.SoundSource.PLAYERS,
             0.8f, 1.0f);
 
-        // Map-wide claim announcement (unchanged from pre-Step-7 behavior).
         Component announcement = Component.translatable(
             "bannerbound.territory.announce",
             triggeringPlayer.getName(), target.x, target.z, settlement.name())
             .withStyle(settlement.identityFormatting());
         server.getPlayerList().broadcastSystemMessage(announcement, false);
 
-        // Refresh every settlement member's territory screen — both for the chunk markers
-        // and for the new tier of costs.
         broadcastTerritoryRefresh(server, settlement);
         return true;
     }
 
-    /** Push a fresh OpenExpandTerritoryScreenPayload to every online settlement member who
-     *  might have the screen open. The screen tolerates re-receiving the payload via its
-     *  refreshData() handler (no flicker). */
     private static void broadcastTerritoryRefresh(MinecraftServer server, Settlement settlement) {
         ServerLevel overworld = server.overworld();
         for (java.util.UUID memberId : settlement.members()) {
@@ -400,12 +358,8 @@ public final class TerritoryService {
         }
     }
 
-    /** 5-min auto-expiry on Council expansion votes — matches the Choose-Government and
-     *  Chief-nomination expiries in {@link SettlementManager}. */
     private static final long COUNCIL_VOTE_EXPIRY_MS = SettlementManager.VOTE_EXPIRY_MS;
 
-    /** Same neighbourhood test the /bannerbound chunkclaim command uses. Inlined here so we don't
-     *  drag in command-package imports. */
     private static boolean isAdjacentToClaim(Settlement settlement, ChunkPos target) {
         int cx = target.x;
         int cz = target.z;
@@ -420,7 +374,6 @@ public final class TerritoryService {
         player.sendSystemMessage(Component.translatable(key).withStyle(ChatFormatting.RED));
     }
 
-    // Silence unused-import warning on HashSet (kept available for future expansion of this file).
     @SuppressWarnings("unused")
     private static void _keepImports() { new HashSet<Long>(); }
 }

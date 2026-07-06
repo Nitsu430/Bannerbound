@@ -15,14 +15,12 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client snapshot of the settlement's current unrest warnings (homelessness, looming
- * strikes, brewing coup, …). Each entry is an already-styled {@link Component} produced by
- * {@link com.bannerbound.core.api.settlement.SettlementManager#settlementWarnings}; an empty list
- * means "all clear". Sent alongside the town-hall open so {@code TownHallScreen} can render them
- * without recomputing.
- *
- * <p>The {@link Component} list piggy-backs on {@link ComponentSerialization#STREAM_CODEC} for
- * style preservation, same trick as {@link OpenHouseStatusPayload}.
+ * Server -> client snapshot of the settlement's current unrest warnings (homelessness, looming
+ * strikes, brewing coup, ...). Each entry is an already-styled Component produced by
+ * SettlementManager#settlementWarnings; an empty list means "all clear". Sent alongside the
+ * town-hall open so TownHallScreen can render them without recomputing. The Component list
+ * piggy-backs on ComponentSerialization#STREAM_CODEC for style preservation, same trick as
+ * OpenHouseStatusPayload.
  */
 @ApiStatus.Internal
 public record SettlementWarningsPayload(List<Component> warnings) implements CustomPacketPayload {

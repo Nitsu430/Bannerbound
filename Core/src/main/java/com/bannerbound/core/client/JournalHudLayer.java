@@ -27,7 +27,27 @@ import net.minecraft.util.FormattedCharSequence;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-/** Left-side objective tracker, below the era/year HUD. */
+/**
+ * Left-side objective tracker HUD, drawn just below the era/year readout. A singleton
+ * {@link LayeredDraw.Layer} ({@link #INSTANCE}) that renders the client's journal entries
+ * (quests, crises, tutorials) from {@link ClientJournalState#hudEntries()} as a stack of up to
+ * {@link #MAX_ENTRIES} panels anchored at the top-left ({@link #X},{@link #Y}). Client-only.
+ *
+ * <p>The panel is a fixed count of GUI-scaled pixels, so at a fixed GUI scale it balloons on a
+ * small monitor and shrinks to nothing on a 4K one. To hold it at a roughly constant screen
+ * fraction the whole layer is scaled by {@link HudScale#factor} - shared with the era/year banner
+ * and "Currently in" line above it, so the top-left cluster shrinks as one - laying entries out
+ * against the inflated logical space so the same margins/clamps apply, then letting the pose
+ * shrink it.
+ *
+ * <p>ENTRY_FIRST_SEEN / ROW_FIRST_SEEN / ROW_COMPLETED_SEEN hold per-entry and per-row first-seen
+ * millis that drive the enter/exit slide and completion flourish; each is pruned to what is still
+ * visible every frame. The panel is intentionally light and transparent with only a slim left
+ * accent bar (gold = crisis, red = quest, green = tutorial; resolved recolors green/red) so the
+ * tracker never blocks the world behind it. A "reach the target" (locator) objective row shows an
+ * 8-point compass bearing computed from the player's LIVE position, not a server-baked one, so it
+ * updates as you walk.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class JournalHudLayer implements LayeredDraw.Layer {
@@ -69,11 +89,6 @@ public final class JournalHudLayer implements LayeredDraw.Layer {
         long nowMs = Util.getMillis();
         float minimized = ClientJournalState.minimizeProgress(nowMs);
 
-        // Scale the whole layer down on small scaled resolutions so the panel keeps roughly the same
-        // fraction of the screen everywhere — shared with the era/year banner and "Currently in" line
-        // above it via HudScale, so the top-left cluster shrinks as one. Anchored at the top-left
-        // (X,Y); we lay out against the inflated logical space so the same margins/clamps still apply,
-        // then the pose shrinks it.
         float uiScale = HudScale.factor(mc);
         int screenW = Math.round(mc.getWindow().getGuiScaledWidth() / uiScale);
         int screenH = Math.round(mc.getWindow().getGuiScaledHeight() / uiScale);
@@ -181,11 +196,7 @@ public final class JournalHudLayer implements LayeredDraw.Layer {
 
     private static void drawEntry(GuiGraphics graphics, Font font, JournalSyncPayload.Entry entry,
                                   int x, int y, int width, int h, int alpha, long nowMs, Set<String> visibleRows) {
-        // Light, transparent panel (was a near-opaque box + full outline border that "hid the
-        // view too much"). Keep only the slim left accent bar so the tracker reads without
-        // blocking the world behind it.
         int bgAlpha = Math.min(120, Math.max(35, alpha - 70));
-        // Quests (e.g. driving out a barbarian camp) read RED, not the calm green of a tutorial.
         int accent = "CRISIS".equals(entry.type()) ? 0xFFD4AF37
             : "QUEST".equals(entry.type()) ? 0xFFE05050 : 0xFF7BCB6F;
         if (entry.resolved()) accent = entry.failed() ? 0xFFE57761 : 0xFF7BCB6F;
@@ -316,8 +327,6 @@ public final class JournalHudLayer implements LayeredDraw.Layer {
 
     private static String objectiveRowText(JournalSyncPayload.Entry entry,
                                            JournalSyncPayload.Objective objective) {
-        // A "reach the target" objective shows a compass bearing computed from the player's LIVE
-        // position (not a server-baked one), so it updates as you walk and tracks easily.
         if (!objective.complete() && entry.targetPos() != 0L && isLocator(objective.id())) {
             String dir = directionToTarget(entry.targetPos());
             if (dir != null) return objective.label() + " - to the " + dir;
@@ -329,7 +338,6 @@ public final class JournalHudLayer implements LayeredDraw.Layer {
         return "find_camp".equals(objectiveId);
     }
 
-    /** 8-point compass bearing from the client player to a packed BlockPos, or null if unavailable. */
     private static String directionToTarget(long packedTarget) {
         net.minecraft.client.player.LocalPlayer p = Minecraft.getInstance().player;
         if (p == null) return null;
@@ -339,7 +347,7 @@ public final class JournalHudLayer implements LayeredDraw.Layer {
         double adx = Math.abs(dx), adz = Math.abs(dz);
         String ns = dz < 0 ? "north" : "south";
         String ew = dx > 0 ? "east" : "west";
-        if (adx > adz * 2.414) return ew;   // tan(67.5°) sector split
+        if (adx > adz * 2.414) return ew;   // 2.414 = tan(67.5 deg), 8-point sector split
         if (adz > adx * 2.414) return ns;
         return ns + "-" + ew;
     }

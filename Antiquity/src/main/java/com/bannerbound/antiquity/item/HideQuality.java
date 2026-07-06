@@ -13,20 +13,21 @@ import net.minecraft.world.item.ItemStack;
 /**
  * Quality of a raw animal hide (the tannery's input), set at the moment the animal is obtained:
  * by hunting (the weapon used vs the animal's preferred weapon) or by herding (living conditions +
- * herder skill). Three tiers only — POOR / STANDARD / GREAT — and quality is <b>realized as the
- * QUANTITY of {@code scraped_hide}</b> the rack yields ({@link #scrapedYield()}); downstream tannery
- * items carry no quality. Distinct from Core's {@link com.bannerbound.core.api.quality.QualityTier}
- * (tool craftsmanship): this is Antiquity-local because nothing in Core reads it (the herder cull
- * path receives an already-tagged stack via {@code HerderHooks}).
+ * herder skill). Three tiers only - POOR / STANDARD / GREAT - and quality is realized as the
+ * QUANTITY of {@code scraped_hide} the rack yields ({@link #scrapedYield()}: 1/2/3); downstream
+ * tannery items carry no quality. {@link #of(ItemStack)} reads the {@code HIDE_QUALITY} data
+ * component, defaulting to STANDARD when absent. Distinct from Core's
+ * {@link com.bannerbound.core.api.quality.QualityTier} (tool craftsmanship): this is
+ * Antiquity-local because nothing in Core reads it (the herder cull path receives an
+ * already-tagged stack via {@code HerderHooks}).
  */
 public enum HideQuality implements StringRepresentable {
     POOR("poor", 1, ChatFormatting.RED, 0xFFFF5555),
     STANDARD("standard", 2, ChatFormatting.GRAY, 0xFFAAAAAA),
     GREAT("great", 3, ChatFormatting.GREEN, 0xFF55FF55);
 
-    /** Codec for persistence (the data component) — stored by serialized name. */
     public static final Codec<HideQuality> CODEC = StringRepresentable.fromEnum(HideQuality::values);
-    /** Stream codec for network sync (ordinal-based; compact and stable for an append-only enum). */
+    // Network codec is ordinal-based: this enum must stay append-only (never reorder/insert).
     public static final StreamCodec<ByteBuf, HideQuality> STREAM_CODEC =
         ByteBufCodecs.VAR_INT.map(i -> values()[i], HideQuality::ordinal);
 
@@ -47,27 +48,22 @@ public enum HideQuality implements StringRepresentable {
         return name;
     }
 
-    /** How many {@code scraped_hide} this hide yields at the rack (POOR=1, STANDARD=2, GREAT=3). */
     public int scrapedYield() {
         return scrapedYield;
     }
 
-    /** ChatFormatting for the tier word in tooltips. */
     public ChatFormatting format() {
         return format;
     }
 
-    /** Packed ARGB color for HUD/render use (matches {@link #format()}). */
     public int color() {
         return color;
     }
 
-    /** Localized tier name — {@code bannerboundantiquity.hide_quality.<name>}. */
     public Component displayName() {
         return Component.translatable("bannerboundantiquity.hide_quality." + name).withStyle(format);
     }
 
-    /** The quality carried by {@code stack}, or {@link #STANDARD} when it has none. */
     public static HideQuality of(ItemStack stack) {
         HideQuality q = stack.get(
             com.bannerbound.antiquity.BannerboundAntiquity.HIDE_QUALITY.get());

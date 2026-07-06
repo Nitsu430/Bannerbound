@@ -33,26 +33,40 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * The Fletcher's craft driver at a Fletching Station: picks any researched fletching recipe whose
- * ingredients the workshop storage holds, places the REAL items on the station pile (spectators
- * watch them appear), plays one stretch beat per recipe stretch (the player minigame's sound and
- * particles), and finishes by simulating the per-stretch scores through the SAME server-side
- * {@code QualityMath} path players use. Phase 2 simulates a journeyman's spread (mean ~70); the
- * Phase-3 NPC experience system replaces that constant with an XP-driven mean/variance.
+ * The Fletcher NPC's craft driver at a Fletching Station. chooseCraft serves player orders first
+ * (FIFO; orders outrank and ignore the min-stock governor; an order whose ingredients are missing
+ * is skipped, never blocking the rest of the queue), then positive min-stock deficits - the
+ * modular arrow before the JSON recipes (the bow). The modular arrow is ordered and min-stocked as
+ * ONE generic bare-stack "Arrow" (so it reads "Arrow", not "Flint Arrow"); the Fletcher assembles
+ * a batch of {@link ModularArrow#BATCH} from the BEST parts in storage (one tip + shaft + back per
+ * batch), so player-stocked metal heads are consumed before the basic flint/wood/feather the
+ * stocker auto-supplies. One batch craft fulfills its whole output count of queued order units.
+ *
+ * <p>Stocker surfaces: {@link #missingInputs} is the haul view (raws buffered to
+ * {@link #INPUT_BUFFER_CRAFTS} crafts); {@link #trueInputDemand} sizes inputs at the TRUE need
+ * (orders + min-stock deficit) so chain producers never craft a buffer's worth. arrowPartDemand
+ * auto-supplies the BASIC default parts, sized by crafts and reduced by the batches already
+ * makeable from stored parts (no double-hauling when the player stocked metal parts);
+ * retainedItems keeps EVERY arrow part while arrows are wanted so the stocker never hauls out the
+ * metal parts a player stocked to steer the Fletcher toward fancier arrows.
+ *
+ * <p>Presentation and quality reuse the player path: onStart places the real inputs on the
+ * station pile (the same pile renderer players watch), onBeat plays one stretch beat per recipe
+ * stretch (TICKS_PER_STRETCH ~ one deliberate player rep), and finish consumes the pile and rolls
+ * {@code QualityMath.simulateNpcTier} from the citizen's per-profession "fletchery" jobXp (a
+ * retrained fletcher remembers fletching): novices roll Crude/Standard, veterans reach MASTERWORK,
+ * the NPC-only tier. Craft XP itself is granted by CrafterWorkGoal (appeal-scaled), never here, so
+ * every executor pays the same per-profession bucket without duplicating the multiplier.
  */
 @ApiStatus.Internal
 public class FletcherExecutor implements WorkExecutor {
-    /** Ticks per simulated stretch (matches the feel of a deliberate player rep). */
     private static final int TICKS_PER_STRETCH = 36;
-    /** XP key — per-profession, so a retrained fletcher remembers fletching (Core jobXp map). */
     public static final String XP_KEY = "fletchery";
 
     @Override
     @Nullable
     public Craft chooseCraft(ServerLevel sl, com.bannerbound.core.api.settlement.Settlement settlement,
                              Workshop workshop, BlockPos workBlock) {
-        // Player orders first (FIFO; orders outrank + ignore the min-stock governor; an order
-        // whose ingredients are missing is skipped, never blocking the rest of the queue).
         for (net.minecraft.world.item.Item wanted
                 : com.bannerbound.core.api.workshop.Workshops.orderedItems(workshop)) {
             if (wanted == BannerboundAntiquity.ARROW.get()) {
@@ -66,7 +80,6 @@ public class FletcherExecutor implements WorkExecutor {
                 if (c != null) return c;
             }
         }
-        // Then positive min-stock deficits — the modular arrow first, then JSON recipes (the bow).
         if (com.bannerbound.core.api.workshop.Workshops.wantedByMinStock(
                 sl, settlement, workshop, new ItemStack(BannerboundAntiquity.ARROW.get()))) {
             Craft c = tryModularArrow(sl, workshop, workBlock);
@@ -81,10 +94,6 @@ public class FletcherExecutor implements WorkExecutor {
         return null;
     }
 
-    /** Assembles a batch of modular arrows from the BEST parts the workshop currently holds (so an
-     *  NPC consumes player-stocked metal heads/ingots before the basic flint/wood/feather the stocker
-     *  auto-supplies). One tip + one shaft + one back → a batch of {@link ModularArrow#BATCH}; null if
-     *  any part category is empty or the arrow isn't researched here. */
     @Nullable
     private Craft tryModularArrow(ServerLevel sl, Workshop workshop, BlockPos workBlock) {
         if (!CraftGating.canProduceAt(sl, workBlock, BannerboundAntiquity.ARROW.get())) return null;
@@ -102,7 +111,6 @@ public class FletcherExecutor implements WorkExecutor {
             beats * TICKS_PER_STRETCH, beats);
     }
 
-    /** The best-priority part of a slot whose ingredient the workshop storage holds, or null. */
     @Nullable
     private static ArrowPart firstAvailable(ServerLevel sl, Workshop workshop, String slot) {
         for (ArrowPart p : ArrowParts.sorted(slot)) {
@@ -111,11 +119,8 @@ public class FletcherExecutor implements WorkExecutor {
         return null;
     }
 
-    /** Crafts the stocker keeps an input buffer for, per wanted recipe. */
     private static final int INPUT_BUFFER_CRAFTS = 4;
 
-    /** Recipes this workshop currently WANTS (queued orders + positive min-stock deficits),
-     *  gating applied, input availability ignored — the stocker's planning view. */
     private static List<FletchingRecipe> wantedRecipes(ServerLevel sl,
             com.bannerbound.core.api.settlement.Settlement settlement,
             Workshop workshop, BlockPos workBlock) {
@@ -150,14 +155,9 @@ public class FletcherExecutor implements WorkExecutor {
     public List<ItemStack> trueInputDemand(ServerLevel sl,
             com.bannerbound.core.api.settlement.Settlement settlement,
             Workshop workshop, BlockPos workBlock) {
-        // Production sizing: no rolling buffer — a chain producer (e.g. the general-crafts stone
-        // making plant string) crafts only what the bow orders truly need, never a buffer's worth.
         return demandStacks(sl, settlement, workshop, workBlock, false);
     }
 
-    /** Per-input deficit for every wanted recipe. {@code bufferRaws} = the haul surface (inputs
-     *  pre-stocked to {@link #INPUT_BUFFER_CRAFTS} crafts); without it inputs are sized at the TRUE
-     *  need (orders + min-stock deficit) for chain production. */
     private List<ItemStack> demandStacks(ServerLevel sl,
             com.bannerbound.core.api.settlement.Settlement settlement,
             Workshop workshop, BlockPos workBlock, boolean bufferRaws) {
@@ -184,10 +184,6 @@ public class FletcherExecutor implements WorkExecutor {
         return out;
     }
 
-    /** Supply surface for the modular arrow: the BASIC flint/wood/feather parts the stocker should
-     *  haul in to keep a hands-off settlement producing arrows. Sized by CRAFTS (each batch = one part
-     *  of each), and reduced by however many batches the parts ALREADY in storage can make — so the
-     *  stocker doesn't double-haul when the player has stocked metal parts of their own. */
     private List<ItemStack> arrowPartDemand(ServerLevel sl,
             com.bannerbound.core.api.settlement.Settlement settlement,
             Workshop workshop, BlockPos workBlock, boolean bufferRaws) {
@@ -208,7 +204,6 @@ public class FletcherExecutor implements WorkExecutor {
             categoryCount(sl, workshop, ArrowPart.SLOT_BACK));
         int shortfall = Math.max(0, neededCrafts - makeable);
         if (shortfall <= 0) return List.of();
-        // Auto-supply the BASIC default parts. If a default isn't defined, supply nothing for that slot.
         net.minecraft.world.item.Item tipItem = ArrowParts.tipItem(ArrowParts.DEFAULT_TIP);
         net.minecraft.world.item.Item shaftItem = ArrowParts.shaftItem(ArrowParts.DEFAULT_SHAFT);
         net.minecraft.world.item.Item backItem = ArrowParts.backItem(ArrowParts.DEFAULT_BACK);
@@ -219,7 +214,6 @@ public class FletcherExecutor implements WorkExecutor {
         return out;
     }
 
-    /** Total of all of a part slot's ingredient items currently in workshop storage. */
     private static int categoryCount(ServerLevel sl, Workshop workshop, String slot) {
         int n = 0;
         for (ArrowPart p : ArrowParts.sorted(slot)) n += WorkshopStorage.count(sl, workshop, p.ingredient());
@@ -246,8 +240,6 @@ public class FletcherExecutor implements WorkExecutor {
         for (FletchingRecipe r : wantedRecipes(sl, settlement, workshop, workBlock)) {
             for (FletchingRecipe.Ing ing : r.ingredients()) keep.add(ing.item());
         }
-        // If arrows are wanted, keep EVERY arrow part — so the stocker never hauls out the metal
-        // heads/ingots a player stocked to steer the Fletcher toward fancier arrows.
         if (com.bannerbound.core.api.workshop.Workshops
                 .wantedByMinStock(sl, settlement, workshop, new ItemStack(BannerboundAntiquity.ARROW.get()))
             || com.bannerbound.core.api.workshop.Workshops
@@ -257,7 +249,6 @@ public class FletcherExecutor implements WorkExecutor {
         return keep;
     }
 
-    /** Gating + ingredient-availability check for one recipe; null when not craftable right now. */
     @Nullable
     private static Craft tryCraft(ServerLevel sl, Workshop workshop, BlockPos workBlock,
                                   FletchingRecipe recipe) {
@@ -279,15 +270,12 @@ public class FletcherExecutor implements WorkExecutor {
                 out.add(recipe.result().copy());
             }
         }
-        // The modular arrow is ordered/min-stocked as ONE generic "Arrow" (a bare stack, so it reads
-        // "Arrow" not "Flint Arrow"); the Fletcher assembles whichever variant the stocked parts allow.
         if (CraftGating.canProduceAt(sl, workBlock, BannerboundAntiquity.ARROW.get())) {
             out.add(new ItemStack(BannerboundAntiquity.ARROW.get()));
         }
         return out;
     }
 
-    /** A batch craft fulfills its whole output count of queued arrow units (one craft = a batch). */
     @Override
     public int fulfilledOrderUnits(ServerLevel sl, BlockPos workBlock, Craft craft, ItemStack output) {
         return Math.max(1, output.getCount());
@@ -295,7 +283,6 @@ public class FletcherExecutor implements WorkExecutor {
 
     @Override
     public void onStart(ServerLevel sl, CitizenEntity citizen, BlockPos workBlock, Craft craft) {
-        // Put the real items on the table, one by one — same pile players use, same renderer.
         if (sl.getBlockEntity(workBlock) instanceof FletchingStationBlockEntity be) {
             for (ItemStack input : craft.inputs()) {
                 for (int i = 0; i < input.getCount(); i++) {
@@ -319,13 +306,8 @@ public class FletcherExecutor implements WorkExecutor {
         if (sl.getBlockEntity(workBlock) instanceof FletchingStationBlockEntity be) {
             be.consumePile();
         }
-        // Simulate one score per stretch through the same XP-driven curve every crafter NPC uses
-        // (QualityMath.simulateNpcTier): novices roll Crude/Standard, veterans reliable Fine and
-        // regular MASTERWORK — the NPC-only tier.
         QualityTier tier = QualityMath.simulateNpcTier(
             sl.random, citizen.getJobXp(XP_KEY), Math.max(1, craft.beats()));
-        // XP for the craft is granted by CrafterWorkGoal (appeal-scaled) — not here, so every
-        // executor pays into the same per-profession bucket without duplicating the multiplier.
         ItemStack out = Fletching.applyQuality(craft.result().copy(), tier);
         sl.playSound(null, workBlock, SoundEvents.VILLAGER_WORK_FLETCHER,
             SoundSource.BLOCKS, 0.8F, 1.0F);
@@ -337,8 +319,7 @@ public class FletcherExecutor implements WorkExecutor {
 
     @Override
     public void onAbort(ServerLevel sl, CitizenEntity citizen, BlockPos workBlock, Craft craft) {
-        // The pile items are display copies of the withdrawn inputs (which the goal returns to
-        // storage) — clear them without dropping.
+        // Pile holds display copies; the goal returns the real withdrawn inputs -- clear, never drop.
         if (sl.getBlockEntity(workBlock) instanceof FletchingStationBlockEntity be) {
             be.consumePile();
         }

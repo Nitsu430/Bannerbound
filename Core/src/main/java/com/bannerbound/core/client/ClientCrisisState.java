@@ -8,7 +8,10 @@ import net.minecraft.core.BlockPos;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-/** Client mirror used by HUD layers and the town-hall world marker. */
+/**
+ * Client mirror of the settlement's crisis state ({@link CrisisStatePayload}), replaced wholesale
+ * on each sync. Read by HUD layers and the town-hall world marker.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientCrisisState {

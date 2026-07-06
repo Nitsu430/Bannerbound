@@ -13,11 +13,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: assign a citizen to a workstation. Used by both pickers — the worker-picker
- * (opened from the workstation GUI) and the workstation-picker (opened from the citizen GUI).
- * Either path resolves to the same server operation: link {@code citizenId} to {@code workstationPos}.
- * <p>
- * Passing a zero-bits UUID means "unassign whoever is currently working this station".
+ * C->S: assign a citizen to a workstation. Both pickers -- the worker-picker (from the
+ * workstation GUI) and the workstation-picker (from the citizen GUI) -- resolve to the same
+ * server op: link citizenId to workstationPos. A zero-bits UUID means "unassign whoever is
+ * currently working this station".
  */
 @ApiStatus.Internal
 public record AssignCitizenToWorkstationPayload(BlockPos workstationPos, UUID citizenId)

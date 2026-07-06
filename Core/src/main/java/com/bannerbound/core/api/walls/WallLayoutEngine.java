@@ -20,65 +20,58 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 
 /**
- * Computes a {@link WallPlan} from a settlement's claimed-chunk set, the terrain under the
- * border, and an active design set. Pure derivation — deterministic for (claims, terrain,
- * designs); callers freeze the result into {@link WallData} when the player commits.
+ * Computes a WallPlan from a settlement's claimed-chunk set, the terrain under the border, and an
+ * active design set. Pure derivation -- deterministic for (claims, terrain, designs); callers
+ * freeze the result into WallData when the player commits, after which the plan is fixed and later
+ * claim/terrain changes do nothing until an explicit re-adapt.
  *
- * <p>Pipeline (WALLS_PLAN.md §B):
+ * <p>Pipeline (WALLS_PLAN.md sec B):
  * <ol>
- *   <li><b>Border tracing</b> — chunk edges whose 4-neighbour is unclaimed, chained into closed
- *       loops walked with the interior on the RIGHT (so loops run clockwise and a right turn =
- *       convex corner, left = concave). Outposts ({@code workingClaims}) are excluded.</li>
- *   <li><b>Corners</b> — every loop vertex stamps the corner design into the N×N square inside
- *       the territory diagonal to the vertex's open side (one rule covers convex AND concave;
- *       the design's outward faces point at the missing/diagonal quadrant).</li>
- *   <li><b>Run fill</b> — straight runs (outermost block ring INSIDE the claim, clipped where
- *       corner squares overlap) tile with the segment design; a remainder that doesn't fit a
- *       full instance emits a truncated piece, never a hole.</li>
- *   <li><b>Terrain</b> — per-column ground via a walk-down from the motion-blocking heightmap
- *       through vegetation and water (all server-side; clients never compute Y). Slope ≤
- *       {@value #DRAPE_MAX_SLOPE} across the piece → DRAPE, else STEPPED at median ground + 1
- *       with foundation fill.</li>
- *   <li><b>Obstacles</b> — vegetation in the footprint is counted for the clear list; a piece
- *       where more than half the outer-row columns sit on ≥{@value #DEEP_WATER_DEPTH} water
- *       becomes a recorded water gap (water IS the wall there).</li>
+ *   <li>Border tracing -- chunk edges whose 4-neighbour is unclaimed, chained into closed loops
+ *       walked with the interior on the RIGHT (loops run clockwise; a right turn = convex corner,
+ *       left = concave). Outposts (workingClaims) are excluded.
+ *   <li>Corners -- every loop vertex stamps the corner design into the N x N square inside the
+ *       territory diagonal to the vertex's open side; the design's outward faces point at that
+ *       diagonal quadrant, one rule covering convex AND concave.
+ *   <li>Run fill -- straight runs (outermost block ring inside the claim, clipped where corner
+ *       squares overlap) tile with the segment design; a remainder that doesn't fit a full
+ *       instance emits a truncated piece, never a hole. Gate anchors truncate the filler into the
+ *       gate start so gates sit at 1-block granularity, but a gate must fit WHOLE.
+ *   <li>Terrain -- per-column ground via a walk-down from the motion-blocking heightmap through
+ *       vegetation and water. Placement is top-aligned onto a level top; a run-level chain
+ *       (assignRunTops) keeps one walkable top across slopes -- high ground buries base courses
+ *       (omitted, cheaper), dips get foundation fill up to MAX_FOUNDATION_COURSES.
+ *   <li>Obstacles -- footprint vegetation is counted for the clear list; a piece whose outer row
+ *       is mostly DEEP_WATER_DEPTH+ water becomes a recorded water gap (water IS the wall there).
  * </ol>
+ *
+ * <p>Ground is defined by the WALL_GROUND data tag, never by mere solidity: the existing wall, a
+ * house straddling the border, or any player build reads as an OBSTACLE red-marked at true ground
+ * level, not a surface to stack on (playtest 2026-06-11: solidity-based ground stacked walls on
+ * walls). WALL_CLEARABLE (plus vegetation tags, replaceables, and empty-collision blocks such as
+ * the Antiquity surface rocks) is removable decor. Both tags are data-driven so expansions extend
+ * them without touching Core. The ground walk is server-side ONLY (client heightmaps past
+ * WORLD_SURFACE/MOTION_BLOCKING are garbage) and passes committed-plan positions (existingWall)
+ * through as air so a re-run never stacks a second wall on the half-built one (idempotent). Gate
+ * anchors are packed (x,0,z) piece-start positions recorded from this same deterministic tiling,
+ * so they stay stable across recomputes.
  */
 public final class WallLayoutEngine {
 
-    /**
-     * Blocks the wall footprint treats as removable decor (cleared by builders / marked red),
-     * never as ground — on top of the built-in heuristics (vegetation tags, replaceables, and
-     * anything with an empty collision shape, which catches the Antiquity surface rocks).
-     * Data-driven so expansions tag their own minor blocks without touching Core.
-     */
     public static final net.minecraft.tags.TagKey<net.minecraft.world.level.block.Block> WALL_CLEARABLE =
         net.minecraft.tags.TagKey.create(net.minecraft.core.registries.Registries.BLOCK,
             net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("bannerbound", "wall_clearable"));
 
-    /**
-     * What counts as TERRAIN for the wall's ground walk. Ground is defined by this data tag —
-     * never by mere solidity — so the existing wall, a house straddling the border, or any
-     * player build is an OBSTACLE the plan reds-out at true ground level instead of a surface
-     * to stack the wall on (playtest lesson 2026-06-11: solidity-based ground stacked walls on
-     * walls). Vanilla terrain + ores + terracottas ship in Core's
-     * {@code data/bannerbound/tags/block/wall_ground.json}; expansions append their own.
-     */
     public static final net.minecraft.tags.TagKey<net.minecraft.world.level.block.Block> WALL_GROUND =
         net.minecraft.tags.TagKey.create(net.minecraft.core.registries.Registries.BLOCK,
             net.minecraft.resources.ResourceLocation.fromNamespaceAndPath("bannerbound", "wall_ground"));
 
-    /** Max ground-Y spread across a piece that still drapes (hybrid-by-steepness rule). */
     public static final int DRAPE_MAX_SLOPE = 1;
-    /** Water at least this deep turns a piece slot into a water gap instead of a wall. */
     public static final int DEEP_WATER_DEPTH = 4;
-    /** Cap on the ground walk-down, so a wall over a jungle canopy can't scan to bedrock. */
     private static final int GROUND_SCAN_CAP = 48;
 
     private WallLayoutEngine() {
     }
-
-    // ─── Result types ───────────────────────────────────────────────────────────────────────
 
     public record Stats(int loops, int convexCorners, int concaveCorners,
                         int segments, int truncatedSegments, int gates, int waterGaps,
@@ -89,50 +82,28 @@ public final class WallLayoutEngine {
     public record LayoutResult(WallPlan plan, Stats stats, List<String> warnings) {
     }
 
-    // ─── Internal geometry types ──────────────────────────────────────────────────────────────
-
-    /** A directed border edge between chunk-lattice vertices, interior on the right. */
     private record Edge(int vx, int vz, Direction dir) {
         int endVx() { return vx + dir.getStepX(); }
         int endVz() { return vz + dir.getStepZ(); }
     }
 
-    /** A loop vertex where direction changes: {@code in} arrives, {@code out} leaves. */
     private record Corner(int vx, int vz, Direction in, Direction out) {
         boolean convex() {
-            // Interior-on-right walking: clockwise loops, so a clockwise turn is convex.
             return out == in.getClockWise();
         }
     }
 
-    /** A straight border run between two corners, in chunk-lattice vertex coords. */
     private record Run(int vx, int vz, Direction dir, int lengthChunks, Corner startCorner, Corner endCorner) {
     }
 
-    /** Per-column terrain sample. {@code obstacleBlocks} = non-terrain structures in the
-     *  column (player builds, old walls) — red-marked, never built on, never auto-cleared. */
     private record Ground(int groundY, int waterDepth, int clearBlocks, int obstacleBlocks) {
     }
 
-    // ─── Entry point ──────────────────────────────────────────────────────────────────────────
-
-    /** Convenience overload for callers with no existing committed plan and no gates. */
     public static LayoutResult compute(ServerLevel level, Settlement settlement, WallDesignSet designs) {
         return compute(level, settlement, designs, it.unimi.dsi.fastutil.longs.LongSets.EMPTY_SET,
             it.unimi.dsi.fastutil.longs.LongSets.EMPTY_SET);
     }
 
-    /**
-     * @param existingWall packed positions the settlement considers wall (blueprint ∪ obsolete
-     *        ∪ builtWall). The ground walk passes through these as if they were air —
-     *        otherwise re-running the layout would read the half-built wall as terrain and
-     *        stack a second wall on top of it. Makes re-construct idempotent.
-     * @param gateAnchors packed (x, 0, z) piece-start positions the player marked as gates in
-     *        the preview. The run fill emits the GATE design at a slot whose start matches an
-     *        anchor — anchors are recorded from this same deterministic tiling, so they're
-     *        stable across recomputes; anchors that no longer match any slot (border moved)
-     *        are silently ignored.
-     */
     public static LayoutResult compute(ServerLevel level, Settlement settlement, WallDesignSet designs,
                                        it.unimi.dsi.fastutil.longs.LongSet existingWall,
                                        it.unimi.dsi.fastutil.longs.LongSet gateAnchors) {
@@ -195,7 +166,6 @@ public final class WallLayoutEngine {
             }
         }
 
-        // Stats that need the sampled terrain: mode split, foundation volume, clear volume.
         for (WallPiece piece : pieces) {
             if (piece.waterGap()) continue;
             if (piece.mode() == WallPiece.Mode.DRAPE) draped++;
@@ -213,15 +183,6 @@ public final class WallLayoutEngine {
         return new LayoutResult(new WallPlan(pieces), stats, warnings);
     }
 
-    // ─── 1. Border tracing ────────────────────────────────────────────────────────────────────
-
-    /**
-     * Directed edges per claimed chunk with an unclaimed 4-neighbour, chained into closed
-     * loops. Edge directions keep the interior on the right (north side → EAST, east → SOUTH,
-     * south → WEST, west → NORTH). At ambiguous lattice vertices (two claims touching
-     * diagonally) the walk prefers the sharpest clockwise turn, which keeps each claim blob's
-     * loop tight instead of fusing figure-eights.
-     */
     private static List<List<Edge>> traceLoops(java.util.Set<Long> claimed) {
         Map<Long, List<Edge>> outgoing = new HashMap<>();
         int edgeCount = 0;
@@ -281,14 +242,6 @@ public final class WallLayoutEngine {
         return ((long) vx << 32) ^ (vz & 0xFFFFFFFFL);
     }
 
-    /**
-     * Picks the walk's continuation at {@code current}'s end vertex: sharpest clockwise turn
-     * first, then straight, then counterclockwise (tight right turns keep each blob's loop
-     * separate at diagonal-pinch vertices). The already-consumed {@code start} edge competes
-     * as a virtual candidate at its preference rank — if it wins, the loop has closed; without
-     * this, a walk returning to a pinched start vertex would wrongly continue into the other
-     * loop's edges.
-     */
     private static Edge nextEdge(Map<Long, List<Edge>> outgoing, Edge current, Edge start) {
         List<Edge> candidates = outgoing.get(vertexKey(current.endVx(), current.endVz()));
         boolean atStartVertex = current.endVx() == start.vx() && current.endVz() == start.vz();
@@ -320,8 +273,6 @@ public final class WallLayoutEngine {
 
     private static List<Run> runsOf(List<Corner> corners) {
         if (corners.isEmpty()) return List.of();
-        // Corner list is in loop order (cornersOf walks the loop), so the run between
-        // consecutive corners is a straight edge chain; length = manhattan vertex distance.
         List<Run> runs = new ArrayList<>();
         for (int i = 0; i < corners.size(); i++) {
             Corner from = corners.get(i);
@@ -333,45 +284,34 @@ public final class WallLayoutEngine {
         return runs;
     }
 
-    // ─── 2. Corner placement ──────────────────────────────────────────────────────────────────
-
-    /**
-     * The corner footprint is the N×N block square INSIDE the territory touching the vertex —
-     * the quadrant given by (interior side of the incoming edge) ∩ (interior side of the
-     * outgoing edge). Its representative outward direction (for block rotation) points at the
-     * diagonally opposite quadrant, which is exactly where the open/unclaimed side is for both
-     * convex and concave corners.
-     */
     private static WallPiece placeCorner(Sampler sampler, Corner corner, WallDesign design) {
         int n = design.length();
         int vx = corner.vx() * 16;
         int vz = corner.vz() * 16;
 
-        boolean xEast = interiorSignX(corner) > 0;  // footprint east of the vertex?
-        boolean zSouth = interiorSignZ(corner) > 0; // footprint south of the vertex?
+        boolean xEast = interiorSignX(corner) > 0;
+        boolean zSouth = interiorSignZ(corner) > 0;
         int minX = xEast ? vx : vx - n;
         int minZ = zSouth ? vz : vz - n;
         int maxX = minX + n - 1;
         int maxZ = minZ + n - 1;
 
-        // Outward = diagonal opposite of the footprint quadrant; representative direction picks
-        // the design rotation (authored as the land's NW corner → outward NORTH).
         Direction outward;
         int startX;
         int startZ;
-        if (xEast && zSouth) {           // footprint SE of vertex → land NW corner
+        if (xEast && zSouth) {
             outward = Direction.NORTH;
             startX = minX;
             startZ = minZ;
-        } else if (!xEast && zSouth) {   // footprint SW → land NE corner
+        } else if (!xEast && zSouth) {
             outward = Direction.EAST;
             startX = maxX;
             startZ = minZ;
-        } else if (!xEast && !zSouth) {  // footprint NW → land SE corner
+        } else if (!xEast && !zSouth) {
             outward = Direction.SOUTH;
             startX = maxX;
             startZ = maxZ;
-        } else {                         // footprint NE → land SW corner
+        } else {
             outward = Direction.WEST;
             startX = minX;
             startZ = maxZ;
@@ -381,7 +321,6 @@ public final class WallLayoutEngine {
             startX, startZ, n, n);
     }
 
-    /** Sign of the interior X half-plane at the corner (+1 = interior east, -1 = west, 0 = unconstrained). */
     private static int interiorSignX(Corner corner) {
         int sign = interiorSignX(corner.in());
         return sign != 0 ? sign : interiorSignX(corner.out());
@@ -392,8 +331,6 @@ public final class WallLayoutEngine {
         return sign != 0 ? sign : interiorSignZ(corner.out());
     }
 
-    // Interior is on the RIGHT of travel: EAST → south(+z), SOUTH → west(-x),
-    // WEST → north(-z), NORTH → east(+x).
     private static int interiorSignX(Direction dir) {
         return switch (dir) {
             case SOUTH -> -1;
@@ -410,14 +347,6 @@ public final class WallLayoutEngine {
         };
     }
 
-    // ─── 3. Run fill ──────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Expands a corner-to-corner run into segment pieces. The strip is the outermost block
-     * ring inside the claim along this border edge; the along-axis interval is clipped
-     * wherever the two adjacent corner squares actually overlap it (a corner whose footprint
-     * sits on the far side of the vertex doesn't eat into this run).
-     */
     private static List<WallPiece> placeRun(Sampler sampler, Run run, WallDesignSet designs) {
         Direction dir = run.dir();
         int vx = run.vx() * 16;
@@ -425,13 +354,10 @@ public final class WallLayoutEngine {
         int lengthBlocks = run.lengthChunks() * 16;
         int cornerN = designs.corner().length();
 
-        // Strip geometry: outward = interior's opposite... outward is the unclaimed side.
-        // For a run travelling EAST the interior is south, so outward = NORTH and the wall row
-        // is the first row inside: z = vz. Equivalents for the other three travel directions.
         Direction outward;
         int rowX = 0;
-        int rowZ = 0;     // the fixed cross-axis coordinate of the strip's outer row
-        int alongMin;     // inclusive block interval along the run axis
+        int rowZ = 0;
+        int alongMin;
         int alongMax;
         boolean alongIsX;
         switch (dir) {
@@ -466,11 +392,7 @@ public final class WallLayoutEngine {
             default -> throw new IllegalStateException("Vertical border direction");
         }
 
-        // Clip the interval where the adjacent corner squares overlap this strip. Apply BOTH
-        // bounds from BOTH corners: the canonical along direction can be FLIPPED relative to
-        // travel (west/north sides), putting the travel-start corner at the interval's MAX
-        // end — taking only [0] from the start clip and [1] from the end clip left those
-        // sides unclipped and buried the corner pieces under segments (playtest 2026-06-12).
+        // Apply BOTH bounds from BOTH corner clips: along can be flipped vs travel, so a corner may sit at the interval's MAX end; taking one bound per corner buries corners under segments.
         int[] clipped = clipForCorner(run.startCorner(), cornerN, alongIsX, alongMin, alongMax);
         alongMin = clipped[0];
         alongMax = clipped[1];
@@ -479,27 +401,18 @@ public final class WallLayoutEngine {
         alongMax = clipped[1];
         if (alongMax < alongMin) return List.of();
 
-        // Tile the interval with segment pieces in the canonical along direction (outward
-        // rotated clockwise) so design orientation is consistent regardless of travel direction.
         Direction along = outward.getClockWise();
         boolean canonicalAscending = along.getStepX() + along.getStepZ() > 0;
         WallDesign wall = designs.wall();
         WallDesign gate = designs.gate();
 
-        // Gate anchors anywhere on this run, as walk-order offsets — 1-BLOCK granularity.
-        // Gates used to appear only when an anchor coincided with the segment tiling's slot
-        // starts, which quantized placement to a wall-length grid hung off each side's corner
-        // ("it's like I can't place them in the middle", playtest 2026-06-12). Now the walk
-        // truncates the wall filler INTO the next gate start, so a gate can sit anywhere;
-        // anchors overlapped by an earlier gate are passed by (and toggleGate's recompute
-        // validation rejects them, since no piece start matches).
         it.unimi.dsi.fastutil.ints.IntArrayList gateOffsets = new it.unimi.dsi.fastutil.ints.IntArrayList();
         it.unimi.dsi.fastutil.longs.LongIterator anchorIt = sampler.gateAnchors().iterator();
         while (anchorIt.hasNext()) {
             long anchor = anchorIt.nextLong();
             int ax = BlockPos.getX(anchor);
             int az = BlockPos.getZ(anchor);
-            if (alongIsX ? az != rowZ : ax != rowX) continue; // other run / other row
+            if (alongIsX ? az != rowZ : ax != rowX) continue;
             int a = alongIsX ? ax : az;
             if (a < alongMin || a > alongMax) continue;
             gateOffsets.add(canonicalAscending ? a - alongMin : alongMax - a);
@@ -514,10 +427,7 @@ public final class WallLayoutEngine {
         while (remaining > 0) {
             while (gateIdx < gateOffsets.size() && gateOffsets.getInt(gateIdx) < walked) gateIdx++;
             boolean isGate = gateIdx < gateOffsets.size() && gateOffsets.getInt(gateIdx) == walked
-                // A gate must fit WHOLE: a span truncated by the run end (the corner's
-                // footprint) would lose its opening — "you shouldn't be able to place gates
-                // at corners" (playtest 2026-06-12). Unexpressed anchors fail toggleGate's
-                // recompute validation, so the client gets a clean rejection.
+                // A gate must fit WHOLE: a span truncated by the run end would lose its opening.
                 && remaining >= gate.length();
             WallDesign design = isGate ? gate : wall;
             int take = Math.min(design.length(), remaining);
@@ -537,11 +447,6 @@ public final class WallLayoutEngine {
         return assignRunTops(pieces, designs);
     }
 
-    /**
-     * Returns the run interval with the given corner's footprint excluded, when that footprint
-     * actually overlaps this strip's along-axis range (a corner whose square sits on the far
-     * side of its vertex doesn't eat into this run — concave junctions stay flush).
-     */
     private static int[] clipForCorner(Corner corner, int cornerN, boolean alongIsX,
                                        int alongMin, int alongMax) {
         int v = (alongIsX ? corner.vx() : corner.vz()) * 16;
@@ -561,11 +466,6 @@ public final class WallLayoutEngine {
         return new int[]{newMin, newMax};
     }
 
-    // ─── 4 + 5. Terrain sampling, mode pick, water gaps ───────────────────────────────────────
-
-    /** Bundles what terrain sampling needs: the level, the committed plan's blueprint
-     *  positions (passed through as air so walls never stack on themselves), and the
-     *  per-compute column cache. */
     private record Sampler(ServerLevel level, it.unimi.dsi.fastutil.longs.LongSet existingWall,
                            it.unimi.dsi.fastutil.longs.LongSet gateAnchors,
                            Map<BlockPos, Ground> groundCache) {
@@ -596,10 +496,6 @@ public final class WallLayoutEngine {
 
         boolean waterGap = deepWaterOuterColumns > length / 2;
 
-        // TOP-ALIGNED placement (user decision 2026-06-12): every piece is level; the
-        // placeholder anchors the full design on the piece's own crest (top = maxGround +
-        // height). Run pieces get re-chained by assignRunTops so a whole run shares one
-        // walkable top wherever the terrain fits within the design height.
         int baseY = (minGround == Integer.MAX_VALUE ? 0 : maxOf(groundY)) + 1;
         return new WallPiece(designId, kind, outward, startX, startZ, length, depth,
             WallPiece.Mode.STEPPED, baseY, groundY, waterGap);
@@ -611,23 +507,12 @@ public final class WallLayoutEngine {
         return max;
     }
 
-    /** Maximum foundation courses under the lowest column before the chain re-anchors. */
     private static final int MAX_FOUNDATION_COURSES = 4;
 
-    /** How many base courses may be buried before the chain re-anchors UP: a third of the
-     *  design height (min 1). The old rule (keep 2 visible) let most of a wall sink into
-     *  rising ground before lifting — playtest 2026-06-12: bury a LITTLE, lift EARLY. */
     private static int maxBuriedCourses(int height) {
         return Math.max(1, height / 3);
     }
 
-    /**
-     * Top-alignment chain (user decision 2026-06-12): a run keeps ONE level wall top for as
-     * long as the terrain fits — high ground BURIES base courses (omitted from the blueprint,
-     * so cheaper), dips get foundation fill (≤ {@value #MAX_FOUNDATION_COURSES} courses) —
-     * and only re-anchors when the design height can't absorb the change. This keeps
-     * wall-top walkways level across slopes instead of stepping every piece independently.
-     */
     private static List<WallPiece> assignRunTops(List<WallPiece> pieces, WallDesignSet designs) {
         List<WallPiece> out = new ArrayList<>(pieces.size());
         int currentTop = Integer.MIN_VALUE;
@@ -639,34 +524,27 @@ public final class WallLayoutEngine {
                 continue;
             }
             int height = design.height();
-            // A gate's PASSAGE rows must never be buried by the level chain — force a
-            // re-anchor so the full gate design sits on its own crest, then chain onward.
+            // A gate's passage rows must never be buried: force a re-anchor so the full gate sits on its own crest, then chain onward.
             if (piece.kind() == WallDesign.Kind.GATE) {
                 currentTop = Integer.MIN_VALUE;
             }
             int minTop = piece.maxGround() + height - maxBuriedCourses(height);
             int maxTop = piece.minGround() + height + MAX_FOUNDATION_COURSES;
             if (currentTop < minTop || currentTop > maxTop) {
-                currentTop = piece.maxGround() + height; // re-anchor: full design on the crest
+                currentTop = piece.maxGround() + height;
             }
             out.add(piece.withBaseY(currentTop - height + 1));
         }
         return out;
     }
 
-    /**
-     * Walks down from the motion-blocking heightmap through air, water and clearable
-     * vegetation to the first real ground block. Server-side only — clients must never run
-     * this (their heightmaps beyond WORLD_SURFACE/MOTION_BLOCKING are garbage; established
-     * rule). Forces the chunk if needed, which is fine: the border is the player's own claim,
-     * always generated, and this is command/apply-time work, not a tick path.
-     */
     private static Ground sampleGround(Sampler sampler, int x, int z) {
         BlockPos key = new BlockPos(x, 0, z);
         Ground cached = sampler.groundCache().get(key);
         if (cached != null) return cached;
 
         ServerLevel level = sampler.level();
+        // Server-side ONLY: client heightmaps past WORLD_SURFACE/MOTION_BLOCKING are garbage.
         int y = level.getHeight(Heightmap.Types.MOTION_BLOCKING, x, z) - 1;
         int water = 0;
         int clears = 0;
@@ -678,10 +556,7 @@ public final class WallLayoutEngine {
         while (y > level.getMinBuildHeight() + 1 && scanned++ < GROUND_SCAN_CAP) {
             cursor.set(x, y, z);
             BlockState state = level.getBlockState(cursor);
-            // Committed-plan blocks pass through BEFORE the terrain check: a wall DESIGNED
-            // out of terrain blocks (dirt, sand, stone) must read as wall, not as a hill —
-            // checking WALL_GROUND first would resurrect the stack-on-wall bug for exactly
-            // those designs.
+            // Pass committed-plan blocks through BEFORE the WALL_GROUND check: a wall designed from terrain blocks must read as wall, not a hill (checking ground first re-stacks walls on walls).
             if (sampler.existingWall().contains(cursor.asLong())) {
                 y--;
                 continue;
@@ -699,8 +574,6 @@ public final class WallLayoutEngine {
                 clears++;
                 y--;
             } else {
-                // Non-terrain structure: an old wall, a house edge, any player build. Track
-                // the topmost one as the fallback surface, keep descending toward real ground.
                 if (firstSolid == Integer.MIN_VALUE) {
                     firstSolid = y;
                 }
@@ -709,8 +582,6 @@ public final class WallLayoutEngine {
             }
         }
         if (!groundFound && firstSolid != Integer.MIN_VALUE) {
-            // No tagged terrain within the scan (huge artificial platform, modded surface...) —
-            // fall back to the topmost solid so the wall still lands somewhere sane.
             y = firstSolid;
             obstacles = 0;
         }
@@ -719,12 +590,6 @@ public final class WallLayoutEngine {
         return ground;
     }
 
-    /**
-     * Vegetation and minor decor the builder clears from the footprint (logs go to the
-     * stockpile, Phase 4): vegetation tags, replaceables, the {@link #WALL_CLEARABLE} data
-     * tag, and anything with no collision shape — surface decor like the Antiquity rocks is
-     * an obstacle to remove, never ground to build on.
-     */
     public static boolean isClearableBlock(ServerLevel level, BlockPos pos, BlockState state) {
         return isClearable(level, pos, state);
     }
@@ -739,7 +604,6 @@ public final class WallLayoutEngine {
             || state.getCollisionShape(level, pos).isEmpty();
     }
 
-    /** [foundationBlocks, clearBlocks, obstacleBlocks] for one sampled piece. */
     private static int[] countFoundationAndClears(WallPiece piece, WallDesign design,
                                                   Map<BlockPos, Ground> groundCache) {
         int foundation = 0;
@@ -763,9 +627,6 @@ public final class WallLayoutEngine {
         return new int[]{foundation, clears, obstacles};
     }
 
-    // ─── Debug helpers (used by /bannerbound walls layout) ──────────────────────────────────
-
-    /** Per-kind piece counts for the dump line. */
     public static Map<WallDesign.Kind, Integer> countByKind(WallPlan plan) {
         Map<WallDesign.Kind, Integer> counts = new EnumMap<>(WallDesign.Kind.class);
         for (WallPiece piece : plan.pieces()) {
@@ -774,7 +635,6 @@ public final class WallLayoutEngine {
         return counts;
     }
 
-    /** Stable, display-ordered copy of a required-items map (largest counts first). */
     public static Map<net.minecraft.world.item.Item, Integer> sortedRequired(Map<net.minecraft.world.item.Item, Integer> required) {
         List<Map.Entry<net.minecraft.world.item.Item, Integer>> entries = new ArrayList<>(required.entrySet());
         entries.sort(Map.Entry.<net.minecraft.world.item.Item, Integer>comparingByValue().reversed());

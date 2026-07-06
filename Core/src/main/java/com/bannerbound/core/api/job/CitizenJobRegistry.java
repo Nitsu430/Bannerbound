@@ -13,22 +13,33 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
 
 /**
- * Public extension point for adding a citizen <b>job</b> from any mod — Core or an expansion —
+ * Public extension point for adding a citizen <b>job</b> from any mod - Core or an expansion -
  * without editing Core's hardcoded job sites. A single {@link #register(JobDef)} call wires the
  * whole job: its work-goal AI, anarchy participation/order, research-unlock unit, and Job-tab icon.
- *
- * <p>The five places Core used to hardcode each job ({@code CitizenEntity.registerGoals},
- * {@link com.bannerbound.core.entity.AnarchyJobs}, {@link com.bannerbound.core.api.settlement.WorkstationUnlocks},
+ * The five places Core used to hardcode each job ({@code CitizenEntity.registerGoals},
+ * {@link com.bannerbound.core.entity.AnarchyJobs},
+ * {@link com.bannerbound.core.api.settlement.WorkstationUnlocks},
  * {@link com.bannerbound.core.social.JobIcons}, and {@code ServerPayloadHandler}'s job list) now
  * consult this registry as {@code built-ins + registry}, so a new job needs no Core change.
  *
- * <p>Crucially, {@link JobDef#goalFactory()} is a {@code (citizen, speed) -> Goal} lambda, so Core
- * never references the consumer's goal class — an expansion's goal can live entirely in the
+ * <p>Crucially {@link JobDef#goalFactory()} is a {@code (citizen, speed) -> Goal} lambda, so Core
+ * never references the consumer's goal class - an expansion's goal can live entirely in the
  * expansion while still being attached to Core's {@link CitizenEntity}. The Antiquity spear fisher
- * is the first consumer; see {@code SpearFisherWorkGoal}.
+ * is the first consumer (see {@code SpearFisherWorkGoal}). Register during common setup (e.g.
+ * {@code FMLCommonSetupEvent.enqueueWork}); registration is synchronized, thread-safe, and
+ * idempotent (a duplicate {@code jobTypeId} is ignored, so a double commonSetup is safe), and
+ * {@link #all()} returns an immutable snapshot.
  *
- * <p>Register during common setup (e.g. {@code FMLCommonSetupEvent.enqueueWork}); registration is
- * idempotent (a duplicate job id is ignored) and thread-safe.
+ * <p>The nested {@link JobDef} record carries everything Core needs to wire one job; build it via
+ * {@link JobDef#builder(String)}. Non-obvious fields: {@code gatherer} + {@code anarchyOrder}
+ * control anarchy self-employment and gatherer ordering (lower = earlier; ignored when not a
+ * gatherer); {@code unitName} maps to research flag {@code bannerbound.unlock.<unitName>} (null =
+ * ungated); {@code iconBaseline} is only a {@code minecraft:} fallback, the real item comes from
+ * tool_ages; {@code toolRequired} false = forager-style tool-free readiness; and
+ * {@code obsoletedByUnit} retires this job when the settlement researches
+ * {@code bannerbound.unlock.<obsoletedByUnit>} - it is hidden from the Job tab and its holders
+ * migrate to that unit's job (e.g. spear fisher -&gt; fisher when the rod unlocks; null = never
+ * obsoleted).
  */
 public final class CitizenJobRegistry {
     private static final List<JobDef> DEFS = new ArrayList<>();
@@ -36,19 +47,16 @@ public final class CitizenJobRegistry {
     private CitizenJobRegistry() {
     }
 
-    /** Adds a job. No-op if a job with the same {@link JobDef#jobTypeId()} is already registered. */
     public static synchronized void register(JobDef def) {
         if (def == null || def.jobTypeId() == null) return;
-        if (byId(def.jobTypeId()) != null) return;   // idempotent — survive a double commonSetup
+        if (byId(def.jobTypeId()) != null) return;   // idempotent -- survive a double commonSetup
         DEFS.add(def);
     }
 
-    /** An immutable snapshot of every registered job. */
     public static synchronized List<JobDef> all() {
         return List.copyOf(DEFS);
     }
 
-    /** The job registered under {@code jobTypeId}, or {@code null}. */
     @Nullable
     public static synchronized JobDef byId(@Nullable String jobTypeId) {
         if (jobTypeId == null) return null;
@@ -58,34 +66,29 @@ public final class CitizenJobRegistry {
         return null;
     }
 
-    /** The research-unlock unit name for a registered job ({@code "spear_fisher"}), or {@code null}. */
     @Nullable
     public static String unitFor(String jobTypeId) {
         JobDef d = byId(jobTypeId);
         return d == null ? null : d.unitName();
     }
 
-    /** The icon tool-role for a registered job ({@code "spear"}), or {@code null}. */
     @Nullable
     public static String iconRoleFor(String jobTypeId) {
         JobDef d = byId(jobTypeId);
         return d == null ? null : d.iconRole();
     }
 
-    /** True when a registered job binds to a Workshop instead of a normal drop-off/work area. */
     public static boolean isWorkshopBound(String jobTypeId) {
         JobDef d = byId(jobTypeId);
         return d != null && d.workshopBound();
     }
 
-    /** The station/workshop type a workshop-bound job is restricted to, or {@code null} for any. */
     @Nullable
     public static String workshopTypeFor(String jobTypeId) {
         JobDef d = byId(jobTypeId);
         return d != null && d.workshopBound() ? d.workshopTypeId() : null;
     }
 
-    /** First registered workshop-bound job that specifically works {@code workshopTypeId}. */
     @Nullable
     public static String workshopJobForType(String workshopTypeId) {
         if (workshopTypeId == null) return null;
@@ -97,8 +100,6 @@ public final class CitizenJobRegistry {
         return null;
     }
 
-    /** The Core baseline icon item declared by some registered job for {@code role}, or {@code null}
-     *  when no registered job uses that role. Backs {@code JobIcons.defaultFor} for registry roles. */
     @Nullable
     public static Item baselineForRole(String role) {
         if (role == null) return null;
@@ -108,21 +109,6 @@ public final class CitizenJobRegistry {
         return null;
     }
 
-    /**
-     * Everything Core needs to wire one job. Build with {@link #builder(String)}.
-     *
-     * @param jobTypeId      stable job id (e.g. {@code "spear_fishers_post"}); also the citizen's job tag
-     * @param gatherer       participates in anarchy self-employment / auto-assignment
-     * @param anarchyOrder   ordering among gatherers (lower = earlier); ignored when {@code !gatherer}
-     * @param unitName       research-unlock unit → flag {@code bannerbound.unlock.<unitName>}; nullable = ungated
-     * @param iconRole       JobIcons tool-role for the bubble/glyph (e.g. {@code "spear"}); nullable
-     * @param iconBaseline   {@code minecraft:} fallback item for the role (the real item comes from tool_ages)
-     * @param toolRequired   whether non-anarchy readiness needs a job tool (false = forager-style tool-free)
-     * @param obsoletedByUnit when the settlement researches {@code bannerbound.unlock.<obsoletedByUnit>}, this
-     *                        job is retired: hidden from the Job tab and its holders migrate to that unit's
-     *                        job. Nullable = never obsoleted. (Spear fisher → fisher when the rod unlocks.)
-     * @param goalFactory    builds the work goal: {@code (citizen, speedModifier) -> Goal}
-     */
     public record JobDef(
         String jobTypeId,
         boolean gatherer,

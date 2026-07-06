@@ -8,7 +8,7 @@ import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-/** Client-only entry point for the server's {@link OpenCarpentrySawPayload} — opens the saw minigame. */
+/** Client-only entry point for the server's {@link OpenCarpentrySawPayload} - opens the saw minigame. */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class CarpentryClientHandler {

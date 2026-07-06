@@ -25,9 +25,16 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity for the Basket — a 9-slot storage block. Implements {@link Container} directly so
- * it can back the menu without a separate inventory object. The first non-empty slot is the one
- * the {@code BasketRenderer} displays sitting on top of the basket (see {@link #getDisplayStack}).
+ * Block entity for the Basket, a 9-slot storage block. Implements Container directly so it backs
+ * the BasketMenu without a separate inventory object. getDisplayStack returns the first non-empty
+ * slot, which BasketRenderer draws sitting on top of the basket; because that displayed slot can
+ * change on any edit, setChanged always re-syncs to clients (sendBlockUpdated).
+ *
+ * pickupRequested is a transient flag set in BasketBlock.playerWillDestroy when a player
+ * sneak-breaks the basket: the break then drops one basket item carrying the contents (baked from
+ * getItems) instead of dropping them loose. It lives only for the destroy tick and is never saved
+ * to NBT. loadFromContents restores contents from a placed basket item's component
+ * (BasketBlock.setPlacedBy).
  */
 @ApiStatus.Internal
 public class BasketBlockEntity extends BlockEntity implements Container, MenuProvider {
@@ -35,27 +42,21 @@ public class BasketBlockEntity extends BlockEntity implements Container, MenuPro
 
     private final NonNullList<ItemStack> items = NonNullList.withSize(SIZE, ItemStack.EMPTY);
 
-    /** Transient: set in {@code BasketBlock.playerWillDestroy} when a player sneak-breaks the basket,
-     *  so the break drops a single basket item carrying these contents instead of dropping them loose.
-     *  Lives only for the destroy tick — never saved to NBT. */
     private boolean pickupRequested;
 
     public BasketBlockEntity(BlockPos pos, BlockState state) {
         super(BannerboundAntiquity.BASKET_BE.get(), pos, state);
     }
 
-    /** Snapshot of the slots, used to bake the contents onto a sneak-broken basket item. */
     public NonNullList<ItemStack> getItems() {
         return items;
     }
 
-    /** Restore contents from a placed basket item's stored component (see {@code BasketBlock.setPlacedBy}). */
     public void loadFromContents(net.minecraft.world.item.component.ItemContainerContents contents) {
         contents.copyInto(items);
         setChanged();
     }
 
-    /** Flag this basket as sneak-broken so the break preserves its contents in the dropped item. */
     public void markPickup() {
         pickupRequested = true;
     }
@@ -64,17 +65,12 @@ public class BasketBlockEntity extends BlockEntity implements Container, MenuPro
         return pickupRequested;
     }
 
-    /** The stack {@code BasketRenderer} draws on top of the basket: the first <em>used</em> slot
-     *  (lowest index that isn't empty), so the basket shows its contents no matter which slot the
-     *  player dropped them into. Empty when every slot is empty. */
     public ItemStack getDisplayStack() {
         for (ItemStack stack : items) {
             if (!stack.isEmpty()) return stack;
         }
         return ItemStack.EMPTY;
     }
-
-    // ─── Container ─────────────────────────────────────────────────────────────────────────────
 
     @Override
     public int getContainerSize() {
@@ -128,8 +124,6 @@ public class BasketBlockEntity extends BlockEntity implements Container, MenuPro
         setChanged();
     }
 
-    /** Marks dirty and re-syncs to clients — the renderer mirrors the displayed slot, so every
-     *  edit (which could change the first non-empty slot) syncs. */
     @Override
     public void setChanged() {
         super.setChanged();
@@ -137,8 +131,6 @@ public class BasketBlockEntity extends BlockEntity implements Container, MenuPro
             level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
         }
     }
-
-    // ─── NBT + client sync ─────────────────────────────────────────────────────────────────────
 
     @Override
     protected void saveAdditional(CompoundTag tag, HolderLookup.Provider provider) {
@@ -165,12 +157,9 @@ public class BasketBlockEntity extends BlockEntity implements Container, MenuPro
         return ClientboundBlockEntityDataPacket.create(this);
     }
 
-    /** Read-only view used to drop the contents when the block breaks. */
     public Container getDroppableInventory() {
         return this;
     }
-
-    // ─── MenuProvider ──────────────────────────────────────────────────────────────────────────
 
     @Override
     public Component getDisplayName() {

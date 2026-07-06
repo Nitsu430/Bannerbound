@@ -26,25 +26,34 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
 /**
- * The barter brain: builds a camp's opening offer + the two draw-from pools, and judges/executes a
+ * The barter brain: builds a camp's opening offer plus the two draw-from pools, and judges/executes a
  * player's submitted offer. Acceptance is purely value-based (so a counter-offer can pay the same worth
- * with different goods): {@code value(youGive) ≥ floor(value(youGet) × margin/100) + tributeFloor}.
+ * with different goods): value(youGive) >= floor(value(youGet) x margin/100) + tributeFloor. Both margin
+ * ({@link #marginPercent}) and the tribute floor ({@link #tributeValue}) are derived deterministically
+ * from the settlement's wealth and its standing with the camp, so the bar the player saw at open still
+ * holds at submit even though the suggested items are only a suggestion.
  *
- * <p>"Your storage" is the settlement STOCKPILE (not the player's pockets) — gives are withdrawn from it
- * and gets are handed to the player. Margin + tribute floor are derived deterministically from the
- * settlement's wealth and its standing with the camp, so the bar the player saw at open still holds at
- * submit even though the suggested items are only a suggestion.
+ * <p>"Your storage" is the settlement STOCKPILE (the open stockpiles + loose baskets/chests aggregate,
+ * not the player's pockets): gives are withdrawn from it and gets are handed to the player. Only goods
+ * the civ comprehends ({@link ItemKnowledge#isKnown}) ever reach the table, on either side -- no "?"
+ * unknown items -- and demands are seeded from what the settlement actually holds so they stay payable.
+ * Non-nomad camps demand tribute; nomads only trade.
+ *
+ * <p>Save/economy invariant in {@link #propose}: on a clearing offer it withdraws ALL gives first and,
+ * if the pool comes up short (a worker raced the feasibility count, or storage changed under the open
+ * screen), rolls back everything taken and fails CANT_PAY rather than granting the reward for a partial
+ * payment. The caller persists the returned relation delta so this class stays free of manager coupling.
  */
 @ApiStatus.Internal
 public final class BarbarianBarter {
     private static final int ACCEPT_BASE = 8;
-    private static final int GEN_CAP = 17;       // max bonus relation for a very generous deal
-    private static final int GEN_DIV = 3;        // value-over-the-bar per +1 relation
-    private static final int REJECT_DELTA = -12; // a lowball the camp refuses
+    private static final int GEN_CAP = 17;
+    private static final int GEN_DIV = 3;
+    private static final int REJECT_DELTA = -12;
     private static final int DECLINE_TRADE_DELTA = -5;
-    private static final int REFUSE_DEMAND_DELTA = -30; // walking away from tribute
+    private static final int REFUSE_DEMAND_DELTA = -30;
     private static final int MAX_STORAGE_ROWS = 40;
-    private static final double DEMAND_CAP_FRACTION = 0.5; // never demand/seed more than half a holding
+    private static final double DEMAND_CAP_FRACTION = 0.5;
 
     private BarbarianBarter() {}
 
@@ -52,7 +61,6 @@ public final class BarbarianBarter {
         return camp.type != CampType.NOMAD;
     }
 
-    /** How much give-value the camp wants per unit of get-value — friendlier camps cut you a deal. */
     public static int marginPercent(CampRelationState st) {
         return switch (st) {
             case FRIENDLY -> 90;
@@ -61,7 +69,6 @@ public final class BarbarianBarter {
         };
     }
 
-    /** The abstract worth of tribute the camp expects (0 for nomads, who trade instead of demand). */
     public static int tributeValue(BarbarianCamp camp, Settlement s) {
         if (!isDemand(camp)) return 0;
         double base = switch (camp.type) {
@@ -85,13 +92,10 @@ public final class BarbarianBarter {
             && camp.relationToward(s.id()) != CampRelationState.HOSTILE;
     }
 
-    /** What the camp wants on the table for a deal to clear, given the get-side value. */
     public static int neededGiveValue(BarbarianCamp camp, Settlement s, int getValue) {
         return Math.floorDiv(getValue * marginPercent(camp.relationToward(s.id())), 100)
             + tributeValue(camp, s);
     }
-
-    // ─── Opening offer ──────────────────────────────────────────────────────────────────────────────
 
     public static OpenBarterPayload open(ServerLevel level, BarbarianCamp camp, Settlement s,
                                          int messengerEntityId, String greetingKey, String flavorItemId) {
@@ -120,7 +124,6 @@ public final class BarbarianBarter {
             tribute, margin, youGive, youGet, yourStorage, theirGoods);
     }
 
-    /** A fresh storage snapshot (+ the camp's goods) for the live-update poll while a screen is open. */
     public static List<BarterEntry> liveStorage(ServerLevel level, Settlement s) {
         return storageEntries(poolSummary(level, s));
     }
@@ -128,8 +131,6 @@ public final class BarbarianBarter {
     public static List<BarterEntry> liveGoods(BarbarianCamp camp, Settlement s) {
         return goodsEntries(CampGoods.available(camp, s.id()), s);
     }
-
-    // ─── Evaluation ───────────────────────────────────────────────────────────────────────────────
 
     public enum Outcome { ACCEPTED, REJECTED, CANT_PAY, INVALID }
 
@@ -142,14 +143,8 @@ public final class BarbarianBarter {
         }
     }
 
-    /**
-     * Validate + (if it clears) execute a submitted offer against the live world. Withdraws gives from
-     * the stockpile and hands gets to the player only on {@link Outcome#ACCEPTED}. Returns the outcome +
-     * the relationship delta to apply (caller persists it so this stays free of manager coupling).
-     */
     public static Result propose(ServerLevel level, ServerPlayer player, BarbarianCamp camp, Settlement s,
                                  List<BarterEntry> youGive, List<BarterEntry> youGet) {
-        // Gets must be things the camp has on offer AND the civ comprehends (mirrors the display filter).
         Map<String, Integer> offered = new java.util.HashMap<>();
         for (CampGoods.Stock st : CampGoods.available(camp, s.id())) {
             if (!ItemKnowledge.isKnown(s, item(st.itemId()))) continue;
@@ -161,7 +156,6 @@ public final class BarbarianBarter {
             if (e.count() > offered.getOrDefault(e.itemId(), 0)) return new Result(Outcome.INVALID, 0);
             getValue += ItemValue.value(e.itemId(), e.count());
         }
-        // Gives must physically exist in the stockpile.
         int giveValue = 0;
         for (BarterEntry e : youGive) {
             if (e.count() <= 0) continue;
@@ -171,16 +165,14 @@ public final class BarbarianBarter {
             giveValue += ItemValue.value(e.itemId(), e.count());
         }
 
-        if (giveValue == 0 && getValue == 0) return new Result(Outcome.INVALID, 0); // empty "deal"
+        if (giveValue == 0 && getValue == 0) return new Result(Outcome.INVALID, 0);
 
         int needed = neededGiveValue(camp, s, getValue);
         if (giveValue < needed) {
             return new Result(Outcome.REJECTED, REJECT_DELTA);
         }
 
-        // Clears — move the goods. Withdraw ALL gives first; if the pool comes up short (the
-        // feasibility count raced a worker, or storage changed under the screen), put back what
-        // was taken and fail as CANT_PAY rather than granting the reward for a partial payment.
+        // withdraw ALL gives first; if the pool comes up short, roll back everything and CANT_PAY
         List<ItemStack> withdrawn = new ArrayList<>();
         for (BarterEntry e : youGive) {
             if (e.count() <= 0) continue;
@@ -206,12 +198,9 @@ public final class BarbarianBarter {
         return new Result(Outcome.ACCEPTED, delta);
     }
 
-    /** Relation hit for walking away — refusing tribute is serious; leaving a trade is minor. */
     public static int declineDelta(BarbarianCamp camp) {
         return isDemand(camp) ? REFUSE_DEMAND_DELTA : DECLINE_TRADE_DELTA;
     }
-
-    // ─── Builders ───────────────────────────────────────────────────────────────────────────────────
 
     private static List<BarterEntry> storageEntries(LinkedHashMap<Item, Integer> storage) {
         List<BarterEntry> rows = new ArrayList<>();
@@ -228,7 +217,6 @@ public final class BarbarianBarter {
         List<BarterEntry> rows = new ArrayList<>();
         for (CampGoods.Stock st : goods) {
             Item item = item(st.itemId());
-            // Only deal in goods the civ actually comprehends — no "?" unknown items on the table.
             if (item == Items.AIR || st.count() <= 0 || !ItemKnowledge.isKnown(s, item)) continue;
             int unit = ItemValue.unitValue(item);
             if (unit <= 0) continue;
@@ -237,7 +225,6 @@ public final class BarbarianBarter {
         return rows;
     }
 
-    /** The camp's headline trade good: its single most valuable stock, a few units of it. */
     private static List<BarterEntry> featuredTrade(List<BarterEntry> theirGoods) {
         BarterEntry best = null;
         for (BarterEntry e : theirGoods) {
@@ -247,8 +234,6 @@ public final class BarbarianBarter {
         return List.of(new BarterEntry(best.itemId(), Math.min(best.count(), 4), best.unitValue()));
     }
 
-    /** Seed a tribute demand from what the settlement actually holds (fair), topping up with a flavour
-     *  "fetch" item if it can't be met from storage and the camp will grant grace. */
     private static List<BarterEntry> seedDemand(LinkedHashMap<Item, Integer> storage, int targetValue,
                                                 BarbarianCamp camp, Settlement s, String flavorItemId) {
         List<BarterEntry> out = new ArrayList<>();
@@ -256,7 +241,6 @@ public final class BarbarianBarter {
         if (got < targetValue && canDefer(camp, s)) {
             Item flavor = item(flavorItemId);
             if (flavor == Items.AIR || !ItemKnowledge.isKnown(s, flavor)) flavor = Items.WHEAT;
-            // Only ask them to fetch something the civ understands; otherwise just take what's in storage.
             if (ItemKnowledge.isKnown(s, flavor)) {
                 int unit = Math.max(1, ItemValue.unitValue(flavor));
                 int need = (int) Math.ceil((targetValue - got) / (double) unit);
@@ -266,8 +250,6 @@ public final class BarbarianBarter {
         return out.isEmpty() ? List.of() : out;
     }
 
-    /** Greedily pick items worth up to {@code targetValue}, biggest holdings first (bulk staples), each
-     *  capped to a fraction of the stack so the town isn't stripped bare. Returns a fresh list. */
     private static List<BarterEntry> fillValue(LinkedHashMap<Item, Integer> storage, int targetValue) {
         List<BarterEntry> out = new ArrayList<>();
         fillInto(out, storage, targetValue);
@@ -298,8 +280,6 @@ public final class BarbarianBarter {
         return v;
     }
 
-    // ─── Settlement storage POOL (open stockpiles + loose baskets/chests, not just enclosures) ────────
-
     private static Container pool(ServerLevel level, Settlement s) {
         BlockPos near = s.hasTownHall() ? s.townHallPos() : s.bannerPos();
         return SettlementStorage.supplyAggregate(level, s, near == null ? BlockPos.ZERO : near);
@@ -327,8 +307,6 @@ public final class BarbarianBarter {
         return n;
     }
 
-    /** Withdraws up to {@code count} of {@code item} from the pool, returning the amount actually
-     *  removed so the caller can detect (and roll back) a short payment. */
     private static int poolWithdraw(ServerLevel level, Settlement s, Item item, int count) {
         Container c = pool(level, s);
         if (c == null) return 0;

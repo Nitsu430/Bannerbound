@@ -10,7 +10,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: this Council member's Agree ({@code true}) / Disagree ({@code false}) vote on
+ * C->S: this Council member's Agree ({@code true}) / Disagree ({@code false}) vote on
  * the settlement's pending palette change. Twin of {@link CastPolicyVotePayload}.
  */
 @ApiStatus.Internal

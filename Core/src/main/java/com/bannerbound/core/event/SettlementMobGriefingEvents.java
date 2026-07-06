@@ -15,19 +15,17 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.EntityMobGriefingEvent;
 
 /**
- * Per-chunk override of vanilla's world-wide {@code mobGriefing} game rule. Whenever a mob is
- * about to do something the rule guards (creeper / ghast / wither explosion block damage,
- * enderman pickup, sheep grass-eating, zombie door breaking, villager farming etc.), this
- * listener consults {@link SettlementData} for the entity's current chunk and {@link
- * EntityMobGriefingEvent#setCanGrief(boolean) denies} the action if the chunk is owned by any
- * settlement. Unclaimed chunks behave per the normal game rule — players exploring outside
- * their territory still see vanilla creeper craters.
+ * Per-chunk override of vanilla's world-wide mobGriefing game rule. Whenever a mob is about to do
+ * something the rule guards (creeper/ghast/wither explosion block damage, enderman pickup, sheep
+ * grass-eating, zombie door breaking, villager farming, etc.), this listener consults
+ * SettlementData for the entity's CURRENT chunk and denies the action (setCanGrief(false)) if that
+ * chunk is owned by any settlement. Unclaimed chunks behave per the normal game rule -- players
+ * exploring outside their territory still see vanilla creeper craters.
  *
- * <p>The lookup is keyed by the entity's <em>current</em> chunk at the time the rule is
- * checked, which for the creeper case is the moment the fuse runs out (creeper is standing on
- * the block it would crater). That's the right anchor: a creeper that wanders into a settlement
- * and explodes there gets neutered; one that explodes a block outside the territory damages it
- * normally.
+ * Keying on the entity's current chunk at rule-check time is the right anchor: for a creeper that's
+ * the moment the fuse runs out (it is standing on the block it would crater), so one that wanders
+ * into a settlement and explodes there is neutered while one that explodes a block outside is not.
+ * SettlementData is overworld-keyed.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -41,8 +39,6 @@ public final class SettlementMobGriefingEvents {
         Level level = entity.level();
         if (level.isClientSide()) return;
         if (!(level instanceof ServerLevel sl)) return;
-        // SettlementData is overworld-keyed; griefing checks in The Nether / The End fall through
-        // to the vanilla game rule (no settlements there anyway, but the lookup would NPE).
         MinecraftServer server = sl.getServer();
         if (server == null) return;
         SettlementData data = SettlementData.get(server.overworld());

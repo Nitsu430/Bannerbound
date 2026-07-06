@@ -12,18 +12,18 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: the player right-clicked one of a workstation's floating ghost-preview targets (browse
- * arrows or the ghost result). The targets are pure client-side billboards — no entity, no block —
- * so the client ray-tests them itself ({@code GhostClickEvents}) and forwards the intent; the
- * server validates range/locks and acts ({@code GhostWorkstationActions.serverHandle}).
+ * C -> S: the player right-clicked one of a workstation's floating ghost-preview targets (browse
+ * arrows or the ghost result). The targets are pure client-side billboards - no entity, no block -
+ * so the client ray-tests them itself ({@code GhostRecipeClientEvents}) and forwards the intent; the
+ * server validates range/locks and acts ({@code GhostWorkstationActions.serverHandle}). Actions:
+ * CYCLE_LEFT / CYCLE_RIGHT are the browse arrows (cycle the ghost preview to the previous/next
+ * candidate recipe); FILL is a click on the ghost result and pulls the missing ingredients from the
+ * player's inventory.
  */
 @ApiStatus.Internal
 public record GhostActionPayload(BlockPos pos, int action) implements CustomPacketPayload {
-    /** Left browse arrow — cycle the ghost preview to the previous candidate recipe. */
     public static final int CYCLE_LEFT = 0;
-    /** Right browse arrow — cycle the ghost preview to the next candidate recipe. */
     public static final int CYCLE_RIGHT = 1;
-    /** The ghost result — pull the missing ingredients from the player's inventory. */
     public static final int FILL = 2;
 
     public static final CustomPacketPayload.Type<GhostActionPayload> TYPE =

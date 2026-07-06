@@ -7,10 +7,9 @@ import java.util.UUID;
 import net.minecraft.nbt.CompoundTag;
 
 /**
- * A single citizen on a settlement's roster. The {@link #entityId} identifies the in-world
- * {@link com.bannerbound.core.entity.CitizenEntity} that represents this citizen — kept here
- * so the settlement can persist its population independent of whether the entity's chunk is
- * currently loaded.
+ * A single citizen on a settlement's roster. entityId identifies the in-world CitizenEntity that
+ * represents this citizen - kept here so the settlement can persist its population independent of
+ * whether the entity's chunk is currently loaded.
  */
 public record Citizen(UUID entityId, String name) {
 

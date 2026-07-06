@@ -11,6 +11,13 @@ import net.minecraft.core.BlockPos;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
+/**
+ * Client mirror of the settlement's diplomacy state: rally status, victory-cooldown countdown, and
+ * the per-settlement / per-barbarian relation rows, replaced wholesale by
+ * {@link DiplomacyStatePayload}. Also holds the current {@link DiplomacyObjectivePayload} (the
+ * tracked objective's label plus its world-marker position and color). Read by the Diplomacy tab
+ * and its HUD.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientDiplomacyState {

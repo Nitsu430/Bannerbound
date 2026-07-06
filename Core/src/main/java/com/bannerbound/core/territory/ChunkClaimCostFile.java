@@ -12,18 +12,12 @@ import java.util.Map;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * One parsed cost file — keyed in {@link ChunkClaimCostLoader} by era id ("antiquity", "medieval",
- * etc.) — containing the per-era expansion cap and the default + per-biome cost tier ladders.
- * <p>
- * Biome lookup falls back to {@link #defaultTiers} when a settlement's majority biome isn't
- * present in {@link #biomeTiers}. Each entry's tier list is indexed by the within-era expansion
- * number (0 = this era's first expansion); {@code TerritoryService} resolves a settlement's
- * global expansion count onto the right era's ladder.
- *
- * @param era            era id this file applies to
- * @param maxExpansions  hard cap on number of expansions a settlement can perform during this era
- * @param defaultTiers   fallback cost ladder used when no biome-specific override exists
- * @param biomeTiers     biome resource location → ladder; takes priority over {@link #defaultTiers}
+ * One parsed cost file (keyed in ChunkClaimCostLoader by era id: "antiquity", "medieval", ...):
+ * the per-era expansion cap (maxExpansions) plus the default and per-biome cost-tier ladders. Each
+ * ladder is indexed by the within-era expansion number (0 = this era's first expansion), and
+ * TerritoryService resolves a settlement's global expansion count onto the right era's ladder.
+ * tiersFor returns the biome override when present (biomeTiers takes priority), else defaultTiers --
+ * never null, since the loader guarantees defaults exist.
  */
 @ApiStatus.Internal
 public record ChunkClaimCostFile(
@@ -32,11 +26,6 @@ public record ChunkClaimCostFile(
         List<ChunkClaimCost> defaultTiers,
         Map<ResourceLocation, List<ChunkClaimCost>> biomeTiers) {
 
-    /**
-     * Resolves the tier list to use for a settlement whose majority biome is {@code biome}.
-     * Returns the biome override if present, else the default tiers. Never null (loader
-     * guarantees defaults exist).
-     */
     public List<ChunkClaimCost> tiersFor(ResourceLocation biome) {
         if (biome != null) {
             List<ChunkClaimCost> override = biomeTiers.get(biome);

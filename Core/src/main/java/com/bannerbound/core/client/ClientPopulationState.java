@@ -9,15 +9,21 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Client mirror of the server's immigration state for the player's settlement. The Town Hall
- * screen and any HUDs read from here; the server keeps it fresh via {@code PopulationStatePayload}.
+ * screen and any HUDs read from here; the server keeps it fresh via {@code PopulationStatePayload}
+ * (each second) and {@code OpenTownHallScreenPayload} (which sets Chief state). {@code populationMax}
+ * is the birth/immigration cap = 7 + true spare beds. {@code governmentOrdinal} is
+ * {@link Settlement.Government}'s ordinal, defaulting to 0 (NONE = anarchy) so a fresh join reads as
+ * Hearth until the first payload. Title/stage helpers mirror {@link Settlement#titleKey()} /
+ * {@link Settlement#isTribe()} exactly (Tribe once a government is enacted OR pop >= 8) so the
+ * client shows the right title between broadcasts and greys out tribe-gated research. {@code members}
+ * is this settlement's player UUIDs, letting the client tell who shares the viewer's settlement
+ * (e.g. who laced a food).
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientPopulationState {
     private static volatile String settlementId = "";
     private static volatile int population = 0;
-    /** Cap on births / lovemaking — 7 (immigration cap) + true spare beds. Synced from the
-     *  server each second; the town hall renders {@code population / populationMax}. */
     private static volatile int populationMax = Settlement.IMMIGRATION_CAP;
     private static volatile double foodPerSecond = 0.0;
     private static volatile double culturePerSecond = 0.0;
@@ -34,16 +40,9 @@ public final class ClientPopulationState {
     private static volatile double nextCultureCost = 0.0;
     private static volatile double foodCap = 0.0;
     private static volatile double cultureCap = 0.0;
-    /** Ordinal of {@link Settlement.Government}. Defaults to 0 (NONE = anarchy) so a
-     *  fresh-join client treats the title as Hearth until the first payload arrives. */
     private static volatile int governmentOrdinal = 0;
-    /** True iff this player is the seated Chief in a CHIEFDOM. Set from each
-     *  {@code OpenTownHallScreenPayload} so screens opened from the town hall (Research,
-     *  Citizens, etc.) can route their actions through the suggestion flow when applicable. */
     private static volatile boolean playerIsChief = false;
 
-    /** Player-member UUIDs of this player's settlement (synced each second). Lets the client tell
-     *  whether some other player currently shares the viewer's settlement — e.g. who laced a food. */
     private static volatile java.util.Set<java.util.UUID> members = java.util.Set.of();
 
     private ClientPopulationState() {
@@ -76,7 +75,6 @@ public final class ClientPopulationState {
         foodSourceRates = sourceRates == null ? java.util.Map.of() : java.util.Map.copyOf(sourceRates);
     }
 
-    /** Whether {@code playerId} currently belongs to the viewer's settlement. */
     public static boolean isMember(java.util.UUID playerId) {
         return playerId != null && members.contains(playerId);
     }
@@ -101,17 +99,11 @@ public final class ClientPopulationState {
     public static int getGovernmentOrdinal() { return governmentOrdinal; }
     public static boolean isPlayerChief() { return playerIsChief; }
 
-    /** Called by {@code handleOpenTownHallScreen} each time the town-hall opens so the
-     *  ResearchScreen + CultureScreen know whether this player can act as Chief. */
     public static void setChiefState(int govOrdinal, boolean isChief) {
         governmentOrdinal = govOrdinal;
         playerIsChief = isChief;
     }
 
-    /** Title key derived from the synced population AND government. Tribe once a government
-     *  is enacted (governmentOrdinal != 0 = not NONE) OR population reaches 8. Server-side
-     *  {@link Settlement#titleKey()} returns the same value — kept in sync deliberately so
-     *  the title displays correctly between payload broadcasts. */
     public static String getTitleKey() {
         if (population >= com.bannerbound.core.api.settlement.SettlementStage.VILLAGE_THRESHOLD) {
             return "bannerbound.settlement.title.village";
@@ -121,9 +113,6 @@ public final class ClientPopulationState {
             : "bannerbound.settlement.title.hearth";
     }
 
-    /** Client mirror of {@link com.bannerbound.core.api.settlement.Settlement#isTribe()} — the
-     *  viewer's settlement has reached the Tribe stage (government enacted OR pop ≥ 8). Drives
-     *  the client-side grey-out of tribe-gated research nodes. */
     public static boolean isTribe() {
         return governmentOrdinal != 0 || population >= 8;
     }

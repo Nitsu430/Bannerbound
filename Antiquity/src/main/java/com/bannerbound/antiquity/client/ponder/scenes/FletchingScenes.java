@@ -14,8 +14,11 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Ponder storyboards for the Fletching Station — refines arrows through a quality-rolled stretch
- * minigame. Scenes registered under {@code bannerboundantiquity:fletching_station}.
+ * Ponder storyboards for the Fletching Station - piles arrow parts (flint, stick, feather) and
+ * refines them into arrows through a quality-rolled stretch minigame. Scenes registered under
+ * {@code bannerboundantiquity:fletching_station}. Built at runtime on the shared blank platform
+ * (see PonderUtil.basePlate); the parts pile and the in-progress arrow sprite are faked by
+ * rewriting the block entity's Contents / InProgress NBT.
  */
 @OnlyIn(Dist.CLIENT)
 public final class FletchingScenes {
@@ -52,7 +55,6 @@ public final class FletchingScenes {
             .setValue(BlockStateProperties.HORIZONTAL_FACING, FACING), false);
         scene.idle(10);
 
-        // Build the pile.
         scene.overlay().showControls(util.vector().topOf(pos), Pointing.DOWN, 50)
             .rightClick().withItem(PonderUtil.stack("minecraft:flint", 1));
         scene.idle(5);
@@ -72,7 +74,6 @@ public final class FletchingScenes {
             .placeNearTarget();
         scene.idle(80);
 
-        // Start the minigame — pile is consumed, an in-progress sprite appears.
         scene.overlay().showControls(util.vector().centerOf(pos), Pointing.DOWN, 50).rightClick();
         scene.idle(5);
         modify(scene, util, tag -> {

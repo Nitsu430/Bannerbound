@@ -17,8 +17,11 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Client mirror of the server's per-face plaster/trim decorations, keyed by chunk. Fed by {@link
- * DecoClientHandler} from the sync payloads; read by {@link DecoSectionRenderer} during chunk meshing.
- * Any change re-bakes the affected section(s) so overlays appear/update without a relog.
+ * DecoClientHandler} from the sync payloads (putChunk = full chunk sync, applyUpdate = single-face
+ * edit; empty data clears); read by {@link DecoSectionRenderer} during chunk meshing, which is why
+ * CHUNKS is a ConcurrentHashMap -- section baking reads it from worker threads while payloads write
+ * on the render thread. Every change marks the affected section(s) dirty so overlays appear/update
+ * without a relog. hasPlaster is the client-side mining-speed hook.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -27,12 +30,10 @@ public final class ClientDecorations {
 
     private ClientDecorations() {}
 
-    /** The decorations of the chunk a section origin belongs to, or {@code null} if none. */
     public static ChunkDecorations chunkAt(int chunkX, int chunkZ) {
         return CHUNKS.get(ChunkPos.asLong(chunkX, chunkZ));
     }
 
-    /** Replace a chunk's decorations (full sync). Empty list clears it. Re-bakes that chunk's column. */
     public static void putChunk(int chunkX, int chunkZ, List<FaceDecoEntry> entries) {
         long key = ChunkPos.asLong(chunkX, chunkZ);
         if (entries.isEmpty()) {
@@ -43,7 +44,6 @@ public final class ClientDecorations {
         invalidateChunkColumn(chunkX, chunkZ);
     }
 
-    /** Apply a single-face edit and re-bake its section. */
     public static void applyUpdate(FaceDecoEntry e) {
         int cx = e.pos().getX() >> 4;
         int cz = e.pos().getZ() >> 4;
@@ -59,7 +59,6 @@ public final class ClientDecorations {
         invalidateSection(e.pos());
     }
 
-    /** True if the local client believes any face of {@code pos} is plastered (mining-speed hook). */
     public static boolean hasPlaster(BlockPos pos) {
         ChunkDecorations cd = chunkAt(pos.getX() >> 4, pos.getZ() >> 4);
         return cd != null && cd.anyPlaster(pos);

@@ -11,7 +11,7 @@ import net.neoforged.neoforge.event.entity.player.PlayerInteractEvent;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Client→server bridge for the <b>empty-hand</b> reel-in. Vanilla fires {@code RightClickEmpty} only
+ * Client->server bridge for the <b>empty-hand</b> reel-in. Vanilla fires {@code RightClickEmpty} only
  * on the client when you right-click air with an empty hand, so the server never hears it; when the
  * player is sneaking and actually has a tethered spear/catch out, we forward a {@link ReelTetherPayload}
  * so the server can reel it in (the held-rope path is handled directly by {@code FiberRopeItem.use}).

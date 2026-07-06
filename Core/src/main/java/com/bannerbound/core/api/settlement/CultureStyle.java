@@ -8,46 +8,32 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 
 /**
- * A culture style (Forest, Desert, Dark Oak, …) loaded from a JSON datapack file. A style is a
- * named bundle of two override tables:
- * <ul>
- *   <li><b>Per-block appeal overrides</b> — where a style lists a block, that value <b>replaces</b>
- *       the block's base appeal entirely (see {@link AppealResolver}). A Desert town rewards
- *       sandstone; a Forest town rewards wood.</li>
- *   <li><b>Per-item food overrides</b> — same semantics for the food-deposit value of an item
- *       (see {@code FoodValueLoader.effective}). A Desert town values cactus higher than a
- *       generic settlement; a Forest town values berries higher.</li>
- * </ul>
- *
- * <p>Picking a style at settlement founding is how a player declares a biome / culture aesthetic.
- *
- * @param id             style id, matching its JSON file stem (e.g. {@code "forest"})
- * @param nameKey        translation key for the player-facing style name
- * @param imageKey       ResourceLocation string of the preview image shown in the founding picker
- *                       (e.g. {@code "bannerbound:textures/gui/culture/forest.png"})
- * @param overrides      per-block appeal values that override the base appeal for those blocks
- * @param foodOverrides  per-item food values that override the base food value for those items
+ * A culture style (Forest, Desert, Dark Oak, ...) loaded from a JSON datapack file, matching its
+ * file stem as the id. A style is a named bundle of two override tables that REPLACE base values
+ * entirely where present: per-block appeal overrides (consumed by AppealResolver - a Desert town
+ * rewards sandstone, a Forest town rewards wood) and per-item food-deposit overrides (consumed by
+ * FoodValueLoader.effective - a Desert town values cactus, a Forest town berries). The override
+ * getters return 0f when absent, so callers must gate on the hasOverride/hasFoodOverride check.
+ * imageKey is the ResourceLocation string of the preview image shown in the founding picker
+ * (e.g. "bannerbound:textures/gui/culture/forest.png"). Picking a style at settlement founding is
+ * how a player declares a biome / culture aesthetic.
  */
 @ApiStatus.Internal
 public record CultureStyle(String id, String nameKey, String imageKey,
                             Map<Block, Float> overrides,
                             Map<Item, Float> foodOverrides) {
-    /** Whether this style sets an appeal value for {@code block}. */
     public boolean hasOverride(Block block) {
         return overrides.containsKey(block);
     }
 
-    /** This style's appeal value for {@code block}; only meaningful when {@link #hasOverride}. */
     public float override(Block block) {
         return overrides.getOrDefault(block, 0f);
     }
 
-    /** Whether this style sets a food value for {@code item}. */
     public boolean hasFoodOverride(Item item) {
         return foodOverrides.containsKey(item);
     }
 
-    /** This style's food value for {@code item}; only meaningful when {@link #hasFoodOverride}. */
     public float foodOverride(Item item) {
         return foodOverrides.getOrDefault(item, 0f);
     }

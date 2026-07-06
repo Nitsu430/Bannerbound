@@ -17,35 +17,54 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
- * Server-side driver for chunk beauty. Owns the tracked-chunk set, the debounced rescan loop,
- * and the culture contribution + beauty-tag queries the rest of the mod reads.
+ * Server-side driver for chunk beauty: owns the tracked-chunk set, the debounced rescan loop,
+ * and the culture-contribution / beauty-tag queries the rest of the mod reads. Tracked chunks =
+ * every settlement's claimed chunks plus their 8-neighbour ring (the ring is scored only for the
+ * expand-territory preview); the set is rebuilt every 10 seconds straight from SettlementData
+ * (recomputeTrackedSet), so no claim/disband hooks are needed. tickAll runs every server tick
+ * but acts once per second: scanning is lazy and budgeted (a tracked chunk is scanned the first
+ * second it is loaded; dirty chunks rescan at most MAX_SCANS_PER_SECOND per second so an edit
+ * burst can't spike a tick, and scanChunk returns false to retry later when the chunk isn't
+ * loaded), and one tracked chunk per second is re-marked dirty round-robin as a safety net so
+ * block changes that fire no player events (fluids, explosions, leaf decay) self-heal within
+ * minutes.
  *
- * <ul>
- *   <li><b>Tracked chunks</b> = every settlement's claimed chunks plus their 8-neighbour ring
- *       (the ring is scored only for the expand-territory preview). Rebuilt periodically by
- *       {@link #recomputeTrackedSet} straight from {@link SettlementData}, so no claim/disband
- *       hooks are needed.</li>
- *   <li><b>Scanning</b> is lazy + budgeted: a tracked chunk is scanned the first second it is
- *       loaded; dirty chunks are rescanned (at most {@value #MAX_SCANS_PER_SECOND}/second).</li>
- *   <li><b>Safety net</b>: one chunk per second is re-marked dirty round-robin, so block changes
- *       that don't fire player events (fluids, explosions, leaf decay) self-heal within minutes.</li>
- * </ul>
+ * <p>After scanning, every scanned chunk's base score is refreshed under its owner's current
+ * styles/palettes (cheap - no block reads, and recomputeScore self-skips when nothing changed)
+ * so the culture and adjacency reads see fresh base tags. Homes are then rescored when their
+ * settlement's styles/palettes hash changed - fixing the audited stale-cache bug where chunks
+ * refreshed on style changes but home scores didn't until the next block edit - plus a slow
+ * staleness sweep, budgeted at 4/second so a big settlement's style change spreads its rescans
+ * over a few seconds instead of spiking one.
+ *
+ * <p>onBlockPlaced/onBlockRemoved feed player edits into the per-chunk placement queues. If the
+ * chunk isn't tracked yet OR hasn't completed its initial scan, they still track it and mark it
+ * dirty so the next budget batch (within ~125ms at the 8/s budget) picks it up - otherwise
+ * placements made in fresh territory or inside the 10-second tracked-set-refresh window were
+ * silently lost, producing a stale debug overlay and stale culture rates on freshly-claimed
+ * chunks.
+ *
+ * <p>Adjacency: a chunk's effective beauty (effectiveBeautyOf, and the per-chunk term inside
+ * cultureBonus) is its base score plus adjacencyBonus, re-mapped through the beauty thresholds.
+ * The bonus is the summed BASE tier index (-4..+4) of the four orthogonally adjacent neighbours,
+ * halved rounding down so adjacency stays a gentle nudge; diagonals don't count and untracked or
+ * unscanned neighbours count as bland (0). It is a single non-recursive hop - neighbours
+ * contribute their own base tier, never their adjacency-adjusted tier - so it cannot cascade
+ * into a feedback loop. cultureBonus sums the effective-tier culture-per-second over a
+ * settlement's claimed chunks only.
  */
 @ApiStatus.Internal
 public final class ChunkBeautyManager {
     private ChunkBeautyManager() {
     }
 
-    /** Hard cap on full block-rescans per second, so a burst of edits can't spike a tick. */
     private static final int MAX_SCANS_PER_SECOND = 8;
-    /** How often the tracked-chunk set is rebuilt from current claims. */
     private static final int TRACKED_SET_REFRESH_SECONDS = 10;
 
     private static int tickCounter = 0;
     private static int secondCounter = 0;
     private static int safetyCursor = 0;
 
-    /** Per-tick entry point (called every server tick); acts once per second. */
     public static void tickAll(MinecraftServer server) {
         if (server == null) return;
         if (++tickCounter < 20) return;
@@ -61,7 +80,6 @@ public final class ChunkBeautyManager {
         if (data.chunks().isEmpty()) return;
         SettlementData sd = SettlementData.get(overworld);
 
-        // Safety net: re-dirty one tracked chunk per second, round-robin.
         List<Long> keys = new ArrayList<>(data.chunks().keySet());
         long safety = keys.get(Math.floorMod(safetyCursor++, keys.size()));
         ChunkAppealData safetyEntry = data.chunks().get(safety);
@@ -69,7 +87,6 @@ public final class ChunkBeautyManager {
             safetyEntry.markDirty();
         }
 
-        // Budgeted rescan of unscanned + dirty chunks.
         int budget = MAX_SCANS_PER_SECOND;
         for (Map.Entry<Long, ChunkAppealData> e : data.chunks().entrySet()) {
             if (budget <= 0) break;
@@ -81,9 +98,6 @@ public final class ChunkBeautyManager {
             }
         }
 
-        // Refresh every scanned chunk's base score under its owning settlement's styles, so the
-        // culture + adjacency reads below see fresh base tags. Cheap — no block reads, and
-        // recomputeScore self-skips when neither queues nor styles changed.
         for (Map.Entry<Long, ChunkAppealData> e : data.chunks().entrySet()) {
             ChunkAppealData cad = e.getValue();
             if (!cad.isScanned()) continue;
@@ -92,10 +106,6 @@ public final class ChunkBeautyManager {
                 owner != null ? owner.activePalettes() : List.of());
         }
 
-        // Homes: rescore when the owning settlement's styles/palettes CHANGED (the audited
-        // stale-cache bug — chunks refreshed on style changes, home scores didn't until the next
-        // block edit) plus a slow safety sweep. Budgeted so a big settlement's style change
-        // spreads its rescans over a few seconds instead of spiking one.
         int homeBudget = 4;
         long now = overworld.getGameTime();
         for (Settlement s : sd.all()) {
@@ -104,7 +114,7 @@ public final class ChunkBeautyManager {
             for (Home h : s.homes().values()) {
                 if (homeBudget <= 0) break;
                 boolean styleChanged = h.lastScoredStyleHash() != styleHash;
-                boolean stale = now - h.lastScoredTick() > 6_000; // 5 min safety sweep
+                boolean stale = now - h.lastScoredTick() > 6_000; // 6000 ticks = 5 min safety sweep
                 if (!styleChanged && !stale) continue;
                 HouseAppealData.scoreOf(overworld, s, h);
                 h.setLastScoredStyleHash(styleHash);
@@ -113,8 +123,6 @@ public final class ChunkBeautyManager {
         }
     }
 
-    /** Rebuilds the tracked-chunk set from current claims: claimed chunks + their 8-neighbours.
-     *  New chunks start unscanned; chunks no longer near any claim are dropped. */
     public static void recomputeTrackedSet(ServerLevel level) {
         ChunkBeautyData data = ChunkBeautyData.get(level);
         SettlementData sd = SettlementData.get(level);
@@ -143,15 +151,8 @@ public final class ChunkBeautyManager {
         if (removed) data.setDirty();
     }
 
-    /** Records a player-placed block: it joins its chunk's diminishing-returns queue in
-     *  placement order. If the chunk isn't tracked yet OR hasn't completed its initial scan,
-     *  we still TRACK it and mark it dirty so the next tick batch (within ~125ms at the 8/s
-     *  scan budget) picks it up — otherwise placements made in fresh territory or in the
-     *  10-second tracked-set-refresh window were silently lost, producing a stale debug
-     *  overlay and stale culture rates on freshly-claimed chunks. */
     public static void onBlockPlaced(ServerLevel level, BlockPos pos, Block block) {
-        // Two-tall plants/doors are tracked at their lower half only — ignore an upper-half place so
-        // the queue (and thus appeal) doesn't double-count. The lower half's own event records it.
+        // Ignore the UPPER half of two-tall blocks or appeal double-counts; the lower half's event records it.
         if (AppealResolver.isAppealDuplicateHalf(level.getBlockState(pos))) return;
         ChunkBeautyData data = ChunkBeautyData.get(level);
         long key = new ChunkPos(pos).toLong();
@@ -170,9 +171,6 @@ public final class ChunkBeautyManager {
         data.setDirty();
     }
 
-    /** Records a player-broken block: it leaves its chunk's queue and the rest clamp up.
-     *  Mirrors {@link #onBlockPlaced} — if the chunk wasn't yet scanned, force-track + dirty
-     *  so the rescan picks the change up rather than losing it. */
     public static void onBlockRemoved(ServerLevel level, BlockPos pos) {
         ChunkBeautyData data = ChunkBeautyData.get(level);
         long key = new ChunkPos(pos).toLong();
@@ -191,10 +189,6 @@ public final class ChunkBeautyManager {
         data.setDirty();
     }
 
-    /** Total culture-per-second the settlement's <i>claimed</i> chunks contribute. A chunk's
-     *  <i>effective</i> beauty is its base score plus the {@link #adjacencyBonus} from its
-     *  neighbours, re-mapped through the beauty thresholds; culture is read off that. Base
-     *  scores are kept fresh by {@link #tickAll}. */
     public static double cultureBonus(ServerLevel level, Settlement s) {
         if (s == null) return 0.0;
         ChunkBeautyData data = ChunkBeautyData.get(level);
@@ -209,17 +203,8 @@ public final class ChunkBeautyManager {
         return sum;
     }
 
-    /** The four orthogonally-adjacent chunk offsets (N/S/E/W) — adjacency counts faces only. */
     private static final int[][] ADJACENT_DIRS = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
 
-    /**
-     * Adjacency bonus for a chunk: the summed <i>base</i> tier index (−4..+4) of its four
-     * orthogonally-adjacent (N/S/E/W) neighbours, then halved (rounded down) so adjacency stays
-     * a gentle nudge rather than a dominant term. Diagonals do not count. This is a single
-     * non-recursive hop — neighbours contribute their own base tier, never their
-     * adjacency-adjusted tier — so it can't cascade into a feedback loop. Untracked / unscanned
-     * neighbours count as bland (0).
-     */
     public static int adjacencyBonus(ServerLevel level, long packedChunk) {
         ChunkBeautyData data = ChunkBeautyData.get(level);
         ChunkPos cp = new ChunkPos(packedChunk);
@@ -233,23 +218,17 @@ public final class ChunkBeautyManager {
         return Math.floorDiv(sum, 2);
     }
 
-    /** Base beauty tag of a tracked chunk, or {@code null} if it isn't tracked / scanned yet.
-     *  Kept fresh by {@link #tickAll}. Used by the expand-territory preview. */
     public static ChunkBeauty beautyOf(ServerLevel level, long packedChunk) {
         ChunkAppealData cad = ChunkBeautyData.get(level).get(packedChunk);
         return (cad != null && cad.isScanned()) ? cad.tag() : null;
     }
 
-    /** A tracked chunk's <i>effective</i> beauty — base score + adjacency bonus, re-mapped
-     *  through the beauty thresholds. {@code null} if the chunk isn't tracked / scanned. */
     public static ChunkBeauty effectiveBeautyOf(ServerLevel level, long packedChunk) {
         ChunkAppealData cad = ChunkBeautyData.get(level).get(packedChunk);
         if (cad == null || !cad.isScanned()) return null;
         return ChunkBeauty.fromScore(cad.score() + adjacencyBonus(level, packedChunk));
     }
 
-    /** Captures references (first time) + recounts a chunk's blocks. Returns false if the chunk
-     *  isn't loaded yet — the scan is simply retried a later second. */
     private static boolean scanChunk(ServerLevel level, SettlementData sd, long packed,
                                      ChunkAppealData cad) {
         ChunkPos cp = new ChunkPos(packed);

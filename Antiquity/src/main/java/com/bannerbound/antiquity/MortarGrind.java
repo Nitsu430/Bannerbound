@@ -34,24 +34,30 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * Server-authoritative driver for the Mortar and Pestle press-and-grind minigame. Mirrors
- * {@code Pottery}: the client plays the (non-scored) press-and-grind beats and reports
- * completion; the server owns the loaded batch, the research gate, and the output.
+ * {@code Pottery}: the client plays the (non-scored) press-and-grind beats and reports completion;
+ * the server owns the loaded batch, the research gate, and the output. A batch takes a fixed
+ * REQUIRED_REPS beats regardless of size, so a big batch is a reward, not a chore.
+ *
+ * <p>The whole tool is gated on the single Herbalism flag (set by the Herbalism node), not per-output,
+ * so every mortar recipe comes online together rather than the station working for some recipes and
+ * silently failing for others. {@code canGrindAt} checks the civ owning the block's chunk: it is
+ * permissive on the client and whenever there is no server context (the server stays authoritative),
+ * and unclaimed land has no owner so {@code hasFlag(null, ...)} is false. The gate is checked once
+ * when the session starts, so completion is free to produce whatever the matched recipe yields.
+ *
+ * <p>On completion the liquid becomes the recipe's result liquid ("" empties the bowl); an item recipe
+ * batches -- a whole loaded stack yields (result count x batch) items popped above the block, split
+ * across stacks. The bench pos is work-locked for the session and released on completion, cancel,
+ * disconnect, or bench break.
  */
 @ApiStatus.Internal
 public final class MortarGrind {
     private MortarGrind() {}
 
-    /** Press + grind beats it takes to finish a batch — fixed, so a big batch is a reward, not a chore. */
     public static final int REQUIRED_REPS = 4;
 
-    /** Research flag (set by the Herbalism node) that unlocks grinding. The whole tool is gated on
-     *  this one flag — every mortar recipe comes online together — rather than per-output, so the
-     *  station never works for some recipes and silently fails for others. */
     public static final String FLAG_HERBALISM = "bannerbound.unlock.herbalism";
 
-    /** True if the civ owning {@code pos}'s chunk has researched Herbalism. Mirrors
-     *  {@code CraftGating}: permissive on the client / with no server context (server is
-     *  authoritative); unclaimed land has no owner and {@code hasFlag(null, …)} is false. */
     public static boolean canGrindAt(@Nullable Level level, BlockPos pos) {
         if (level == null || level.isClientSide()) {
             return true;
@@ -124,9 +130,6 @@ public final class MortarGrind {
             return;
         }
 
-        // Herbalism (checked when the session was started) gates the whole tool, so every recipe is
-        // free to produce here. The liquid becomes the recipe's result ("" empties the bowl); item
-        // recipes batch — a whole loaded stack produces (result count × batch) items popped above.
         be.setLiquid(recipe.resultLiquid());
         if (recipe.resultItem().isEmpty()) {
             be.setIngredient(ItemStack.EMPTY);

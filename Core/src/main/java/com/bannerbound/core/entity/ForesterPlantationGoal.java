@@ -26,26 +26,33 @@ import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Forester <b>plantation</b> goal — the ordered counterpart to the free-roaming
- * {@link ForesterWorkGoal} gatherer. Once the Silviculture research is done, a player marks a
- * rectangle with the Foreman's Rod (type {@link ForesterWorkGoal#SELECTION_TYPE}); the bound
- * forester then plants a {@link #SPACING}-spaced sapling grid across it, tends it, and harvests
- * mature trees <i>inside the plot only</i> — replanting on the grid forever, like the farmer's
- * permanent field.
+ * Forester plantation goal -- the ordered counterpart to the free-roaming {@link ForesterWorkGoal}
+ * gatherer. Once Silviculture research is done a player marks a rectangle with the Foreman's Rod
+ * (type {@link ForesterWorkGoal#SELECTION_TYPE}); the bound forester plants a {@link #SPACING}-spaced
+ * sapling grid across it, tends it, and harvests mature trees inside the plot only -- replanting on
+ * the grid forever, like the farmer's permanent field.
  *
  * <p>Mode is implicit: a forester is "in plantation mode" iff such a selection targets it (see
- * {@link #hasPlantationOrder}); the gatherer yields whenever that's true so a managed grove is
- * never clear-cut. While saplings grow the goal reports {@code WAITING} rather than roaming.
+ * {@link #hasPlantationOrder}); the gatherer yields whenever that is true so a managed grove is
+ * never clear-cut, and a plantation forester works even under anarchy -- it supersedes the
+ * anarchy-auto gatherer, so binding a plot must not make the forester less active than clear-cutting
+ * would. While saplings grow the goal reports WAITING rather than roaming.
  *
- * <p>Movement reuses the gatherer's simple reach model (walk to a stand tile, act on the cell
- * within reach); felling reuses the gatherer's extracted helpers
- * ({@link ForesterWorkGoal#fellTreeAndRouteToDepot}); sourcing reuses {@link ForesterSupplies}.
+ * <p>SPACING is 3 so trunks/canopies never merge into 2x2/mega trees; a tree reads as harvest-ready
+ * at MIN_MATURE_LOGS contiguous trunk logs plus a canopy leaf (a fresh single log must not count).
+ * Bone-mealing is gated on the Fertilization flag -- the same settlement upgrade that lets farmers
+ * fertilize crops and that unlocks the bone-meal item; natural growth only until then. A scan commits
+ * the nearest actionable cell with harvest > plant > bonemeal priority, capped at MAX_CELLS_PER_SCAN
+ * cells so a maxed plot can't stall one tick. Felled trees are constrained to the plot (inflated 1
+ * block horizontally for overhang) so a plantation never chains into a wild tree over the border.
+ *
+ * <p>Movement reuses the gatherer's reach model (walk to a stand tile, act on the cell within reach);
+ * felling reuses {@link ForesterWorkGoal#fellTreeAndRouteToDepot}; sourcing reuses
+ * {@link ForesterSupplies}.
  */
 @ApiStatus.Internal
 public class ForesterPlantationGoal extends OrderedWorkGoal {
-    /** Grid step in blocks: trees at x, x+3, x+6 … so trunks/canopies never merge (no 2×2/mega). */
     private static final int SPACING = 3;
-    /** A tree counts as harvest-ready at this many contiguous trunk logs (plus a canopy leaf). */
     private static final int MIN_MATURE_LOGS = 4;
     private static final double HORIZONTAL_REACH_SQ = 4.5 * 4.5;
     private static final double VERTICAL_REACH = 12.0;
@@ -53,18 +60,13 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
     private static final int TARGET_TIMEOUT_TICKS = 200;
     private static final int PLANT_TICKS = 20;
     private static final int DEFAULT_CHOP_TICKS = 80;
-    /** Research flag (Fertilization) that lets the forester accelerate sapling growth with bone meal
-     *  — the same flag that lets farmers fertilize crops and that unlocks the bone-meal item, so the
-     *  whole settlement's "we compost now" upgrade gates both. Natural growth only until then. */
     private static final String FLAG_FERTILIZING = "bannerbound.allow_fertilizing";
-    /** Cap on grid cells visited per rescan so a maxed-out plot can't stall the AI on one tick. */
     private static final int MAX_CELLS_PER_SCAN = 4096;
 
     private enum Action { PLANT, HARVEST, BONEMEAL }
     private enum Cell { BLOCKED, EMPTY, SAPLING, GROWING_TREE, MATURE_TREE }
 
     private Action action;
-    /** The ground (dirt) block of the targeted cell; the sapling/tree sits at {@code groundCell.above()}. */
     private BlockPos groundCell;
     private BlockPos standPos;
     private Item plantSpecies = Items.AIR;
@@ -81,17 +83,11 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
         return ForesterWorkGoal.JOB_TYPE_ID;
     }
 
-    /** A plantation forester supersedes the free-roaming gatherer (which IS anarchy-auto-eligible),
-     *  so it works willingly under anarchy too — otherwise binding a plot to an anarchy forester
-     *  would make it <i>less</i> active than leaving it to clear-cut. The rod itself isn't
-     *  government-gated, so plantations are available in anarchy whenever Silviculture is done. */
     @Override
     protected boolean isAnarchyAutoEligible() {
         return true;
     }
 
-    /** True iff a non-completed {@code forester_farm} selection targets this citizen — i.e. the
-     *  forester is in plantation mode. The gatherer checks this to yield. */
     static boolean hasPlantationOrder(CitizenEntity c) {
         if (!(c.level() instanceof ServerLevel sl)) return false;
         Settlement s = c.getSettlement();
@@ -114,11 +110,9 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
         Settlement settlement = citizen.getSettlement();
         if (settlement == null) return false;
         citizen.validateJobStorage();
-        // Plantation needs the job, an axe (to harvest) and a depot (logs go somewhere).
         if (!citizen.isForesterReady()) return false;
         Container depot = resolveDepot();
         if (depot == null) return false;
-        // Keep the committed cell if it's still actionable.
         if (groundCell != null && targetStillValid(level)) return true;
         if (rescanCooldown-- > 0) return false;
         return findTarget(level, settlement, depot);
@@ -132,7 +126,6 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
         return groundCell != null && targetStillValid(level);
     }
 
-    /** The committed cell is still valid only while it matches the action we picked it for. */
     private boolean targetStillValid(ServerLevel level) {
         if (groundCell == null || action == null) return false;
         Cell c = classify(level, groundCell);
@@ -143,13 +136,6 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
         };
     }
 
-    /**
-     * Scans every plot bound to this forester, classifies its grid cells, and commits the nearest
-     * actionable one: harvest a mature tree first, else plant an empty cell, else (tool-age gated)
-     * bone-meal a growing sapling. Publishes the matching {@link CitizenWorkStatus} either way so
-     * the Job-tab headline reflects "planting / harvesting / waiting / needs saplings / grove full"
-     * even while the forester is momentarily idle between actions.
-     */
     private boolean findTarget(ServerLevel level, Settlement settlement, Container depot) {
         boolean anyPlot = false;
         boolean anyEmptyNoSapling = false;
@@ -183,15 +169,13 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
                         case SAPLING -> bonemealEligible ? Action.BONEMEAL : null;
                         default -> null;
                     };
-                    // Track why nothing's actionable for the status headline.
                     if (c == Cell.EMPTY && species == Items.AIR) anyEmptyNoSapling = true;
                     if (c == Cell.SAPLING || c == Cell.GROWING_TREE) anyGrowing = true;
                     if (c == Cell.MATURE_TREE && !harvestFits(level, ground, depot)) {
                         anyMatureNoRoom = true;
-                        a = null;   // can't store it → leave standing
+                        a = null;
                     }
                     if (a == null) continue;
-                    // Harvest beats plant beats bonemeal; within a tier pick the nearest cell.
                     double d = origin.distSqr(ground);
                     if (bestAction == null || priority(a) < priority(bestAction)
                             || (a == bestAction && d < bestDistSq)) {
@@ -217,7 +201,6 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
             return true;
         }
 
-        // Nothing to do right now — report why, and yield (the forester patrols meanwhile).
         rescanCooldown = RESCAN_COOLDOWN_TICKS;
         clearTarget();
         if (!anyPlot) {
@@ -234,7 +217,6 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
         return false;
     }
 
-    /** Explicit action priority: harvest first, then plant, then bone-meal. */
     private static int priority(Action a) {
         return switch (a) {
             case HARVEST -> 0;
@@ -243,8 +225,6 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
         };
     }
 
-    /** Topmost dirt block in the column within the plot's vertical span, or null if none. The
-     *  sapling/tree for the cell sits one block above this. */
     private static BlockPos resolveGround(ServerLevel level, BlockSelection sel, int gx, int gz) {
         for (int y = sel.maxY(); y >= sel.minY(); y--) {
             BlockPos p = new BlockPos(gx, y, gz);
@@ -266,8 +246,6 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
         return Cell.BLOCKED;
     }
 
-    /** Mature = at least {@link #MIN_MATURE_LOGS} contiguous trunk logs above the ground, plus a
-     *  canopy leaf near the top (so a freshly-planted single log doesn't read as harvest-ready). */
     private static boolean isMature(ServerLevel level, BlockPos firstLog) {
         int logs = 0;
         BlockPos.MutableBlockPos c = new BlockPos.MutableBlockPos();
@@ -279,7 +257,6 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
             y++;
         }
         if (logs < MIN_MATURE_LOGS) return false;
-        // Any leaf in the 3×3 around the block just above the top log.
         int topY = firstLog.getY() + logs;
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
@@ -290,7 +267,6 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
         return false;
     }
 
-    /** A mature tree at {@code ground} fits the depot only if all its in-plot logs can be stored. */
     private boolean harvestFits(ServerLevel level, BlockPos ground, Container depot) {
         if (depot == null) return false;
         BlockPos firstLog = ground.above();
@@ -358,7 +334,6 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
             case BONEMEAL -> doBonemeal(level, settlement, depot);
             case HARVEST -> doHarvest(level, settlement, depot);
         }
-        // Re-scan next poll for the next cell.
         clearTarget();
     }
 
@@ -386,7 +361,7 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
         if (bm.isValidBonemealTarget(level, at, state) && bm.isBonemealSuccess(level, level.random, at, state)) {
             bm.performBonemeal(level, level.random, at, state);
         }
-        level.levelEvent(1505, at, 0);   // bonemeal particles
+        level.levelEvent(1505, at, 0);   // vanilla bonemeal-particle event id
         citizen.consumeStamina(1);
     }
 
@@ -394,20 +369,17 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
         BlockPos firstLog = groundCell.above();
         if (!ForesterWorkGoal.isLog(level, firstLog)) return;
         Set<BlockPos> tree = ForesterWorkGoal.collectConnectedTree(level, firstLog);
-        // Constrain to the plot (horizontally inflated by 1 for overhanging branches) so a
-        // plantation never chains into a wild tree leaning over the border.
         tree = constrainToPlot(level, tree, firstLog);
         if (tree.isEmpty()) return;
-        if (ForesterWorkGoal.isTreeProtected(level, tree)) return;   // cobblestone-marked → leave it
+        if (ForesterWorkGoal.isTreeProtected(level, tree)) return;
         net.minecraft.world.level.block.Block logBlock = level.getBlockState(firstLog).getBlock();
         if (depot != null) {
             Item logItem = logBlock.asItem();
             if (logItem != Items.AIR && DropOffContainers.roomFor(depot, new ItemStack(logItem)) < tree.size()) {
-                return;   // depot filled since the scan → leave standing
+                return;
             }
         }
         ForesterWorkGoal.fellTreeAndRouteToDepot(citizen, level, tree, depot);
-        // Grid-anchored replant: drop the next sapling right back on this cell.
         Item sapling = ForesterSupplies.saplingForLog(logBlock);
         if (sapling == Items.AIR) sapling = ForesterSupplies.pickSpecies(citizen, level, settlement, depot);
         if (sapling != Items.AIR
@@ -419,8 +391,6 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
         citizen.consumeStamina(Math.max(1, tree.size()));
     }
 
-    /** Filters a flood-filled tree to logs within the smallest plot containing this cell, inflated
-     *  by one block horizontally so a small tree's branches still count. */
     private Set<BlockPos> constrainToPlot(ServerLevel level, Set<BlockPos> tree, BlockPos anchor) {
         BlockSelection plot = plotContaining(level, anchor);
         if (plot == null) return tree;
@@ -441,7 +411,7 @@ public class ForesterPlantationGoal extends OrderedWorkGoal {
             if (sel.completed()) continue;
             if (!ForesterWorkGoal.SELECTION_TYPE.equals(sel.workstationType())) continue;
             if (!sel.targetsCitizen(citizen.getUUID())) continue;
-            // anchor's column is in the plot horizontally (anchor.Y may sit just above the box top).
+            // X/Z only: anchor.Y may sit just above the box top, so a Y bounds check would drop valid cells.
             if (anchor.getX() >= sel.minX() && anchor.getX() <= sel.maxX()
                     && anchor.getZ() >= sel.minZ() && anchor.getZ() <= sel.maxZ()) {
                 return sel;

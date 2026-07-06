@@ -10,9 +10,13 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Client mirror of the world's sky: holds the synced sky seed and the {@link SkyField}
- * generated from it. Set by {@link com.bannerbound.core.network.SkySeedPayload} on login,
- * cleared on logout so a different server's sky never bleeds across connections.
+ * Client mirror of the world's sky: holds the synced sky seed and the {@link SkyField} generated
+ * from it, plus the synced celestialSpeed gamerule (orbital/seasonal time multiplier), the
+ * meteorAmount gamerule (~ambient meteors per minute), and the server's {@link WorldCalendar}
+ * (month lengths from its config; DEFAULT until synced). set() is called by
+ * {@link com.bannerbound.core.network.SkySeedPayload} on login/re-send and only regenerates the
+ * SkyField when the seed or year length actually changes, so a bare calendar update doesn't rebuild
+ * it. clear() runs on logout so a different server's sky never bleeds across connections.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -40,7 +44,6 @@ public final class ClientSkyState {
         field = SkyField.generate(newSeed, newCalendar.yearDays());
     }
 
-    /** The server's calendar (month lengths from its config); DEFAULT until synced. */
     public static WorldCalendar calendar() {
         return calendar;
     }
@@ -50,12 +53,10 @@ public final class ClientSkyState {
         return field;
     }
 
-    /** The celestialSpeed gamerule's synced value — orbital/seasonal time multiplier. */
     public static int celestialSpeed() {
         return celestialSpeed;
     }
 
-    /** The meteorAmount gamerule's synced value — ~ambient meteors per minute. */
     public static int meteorAmount() {
         return meteorAmount;
     }

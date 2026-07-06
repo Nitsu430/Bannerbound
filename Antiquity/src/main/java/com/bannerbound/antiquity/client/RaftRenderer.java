@@ -26,10 +26,23 @@ import org.joml.Quaternionf;
 import org.joml.Vector3f;
 
 /**
- * Renders the {@link RaftEntity}. The pose transform matches vanilla {@code BoatRenderer} (so the
- * raft sits and tilts on the water the same way), but it draws our {@link RaftModel} and plays a
- * {@link RaftAnimations} paddle loop chosen from the raft's rowing state. No water-patch / variant
- * map — there's a single raft model and texture.
+ * Renders the {@link RaftEntity}. The pose transform matches vanilla {@code BoatRenderer} (hurt
+ * wobble, bubble tilt, -1/-1/1 scale) so the raft sits and tilts on the water the same way, but it
+ * draws our {@link RaftModel} and plays a {@link RaftAnimations} paddle loop picked from the synced
+ * paddle state (both paddles = forward, one side = that turn, none = rest pose; vanilla sets these
+ * in {@code Boat#controlBoat}). No water-patch / variant map - single raft model and texture.
+ * <p>
+ * Vertical lift comes from {@code RaftEntity#renderFloatHeight}, shared with the collision deck
+ * parts so the walkable surface always matches the model. The Blockbench export sits at the ground
+ * baseline (parts around y ~= 24px) so it needs a large lift; afloat, the entity rides ~0.45 below
+ * the surface and the deck height doubles as a damage gauge (full integrity = 1.8, wrecked = 1.2,
+ * see {@code RaftEntity#getIntegrityFraction}); on dry land that float depth is dropped or the raft
+ * visibly hovers. It keys off "water below" rather than {@code isInWater()}, which toggled as the
+ * raft bobbed and made the model jump.
+ * <p>
+ * The tow rope is drawn ourselves from the notch via {@link RopeRenderer}, tinted plant-fibre green
+ * or lead-leather brown by rope kind, and the name tag is replicated - see the no-super note in
+ * {@code render}.
  */
 @OnlyIn(Dist.CLIENT)
 public class RaftRenderer extends EntityRenderer<RaftEntity> {
@@ -49,14 +62,6 @@ public class RaftRenderer extends EntityRenderer<RaftEntity> {
     public void render(RaftEntity entity, float entityYaw, float partialTicks, PoseStack poseStack,
                        MultiBufferSource buffer, int packedLight) {
         poseStack.pushPose();
-        // The model was exported at the Blockbench ground baseline (parts around y≈24px), so it needs
-        // a large lift to align the deck with the entity. In water the entity floats ~0.45 below the
-        // surface, so the deck rides right at 1.2–1.8 (the damage gauge: full integrity = 1.8, wrecked
-        // = 1.2, see RaftEntity#getIntegrityFraction). On dry land the entity sits ON the ground, so
-        // we drop that float-depth back off — otherwise the raft visibly hovers.
-        // Shared with the collision deck-part height (RaftEntity#renderFloatHeight) so the walkable
-        // surface always matches the model — and it keys off "water below" rather than isInWater(),
-        // which toggled as the raft bobbed and made the model jump.
         poseStack.translate(0.0F, entity.renderFloatHeight(), 0.0F);
         poseStack.mulPose(Axis.YP.rotationDegrees(180.0F - entityYaw));
 
@@ -73,9 +78,7 @@ public class RaftRenderer extends EntityRenderer<RaftEntity> {
         }
 
         poseStack.scale(-1.0F, -1.0F, 1.0F);
-        // Vanilla adds +90° here to point its X-long boat model down the Z (travel) axis. This raft
-        // model is already built long-axis along Z, so no extra spin — it would otherwise sit
-        // broadside. If the pointed bow ends up facing aft, change this to 180°.
+        // Vanilla adds +90 deg for its X-long boat model; this model is Z-long already, so 180 (not 90) or it sits broadside.
         poseStack.mulPose(Axis.YP.rotationDegrees(180.0F));
 
         this.model.root().getAllParts().forEach(ModelPart::resetPose);
@@ -90,9 +93,7 @@ public class RaftRenderer extends EntityRenderer<RaftEntity> {
 
         poseStack.popPose();
 
-        // NB: we deliberately do NOT call super.render — NeoForge's EntityRenderer#render auto-draws a
-        // vanilla leash for any Leashable, which would be a SECOND rope from the wrong anchor. We draw
-        // the one rope ourselves (from the notch, coloured by rope type) and replicate the name tag.
+        // Deliberately no super.render: NeoForge auto-draws a vanilla leash for any Leashable -> a second rope from the wrong anchor.
         Entity holder = entity.getLeashHolder();
         if (holder != null) {
             renderTowRope(entity, partialTicks, poseStack, buffer, packedLight, holder);
@@ -102,7 +103,6 @@ public class RaftRenderer extends EntityRenderer<RaftEntity> {
         }
     }
 
-    /** Plant-fibre green / leather-brown base colours (0–255) for the two rope kinds. */
     private static final int FIBER_R = 96, FIBER_G = 150, FIBER_B = 58;
     private static final int LEAD_R = 128, LEAD_G = 102, LEAD_B = 76;
 
@@ -127,11 +127,6 @@ public class RaftRenderer extends EntityRenderer<RaftEntity> {
         poseStack.popPose();
     }
 
-    /**
-     * Pick a paddle loop from the synced paddle state. Vanilla sets both paddles while rowing
-     * forward and a single side while turning (see {@code Boat#controlBoat}). Returns null when
-     * idle, so the model stays in its rest pose.
-     */
     @Nullable
     private static AnimationDefinition rowingAnimation(RaftEntity entity) {
         boolean left = entity.getPaddleState(0);

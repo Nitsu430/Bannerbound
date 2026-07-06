@@ -11,7 +11,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: the player pressed Exile on the citizen detail screen. Server resolves the
+ * Client -> server: the player pressed Exile on the citizen detail screen. Server resolves the
  * entity by its network id, confirms the actor is a member of that citizen's settlement, removes
  * the citizen from the roster, and despawns the entity.
  */

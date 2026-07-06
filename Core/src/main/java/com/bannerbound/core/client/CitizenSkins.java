@@ -15,10 +15,11 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Shared citizen-skin resolution: {@code textures/entity/citizen/<man|woman>_<era>_NN.png}, chosen
- * from gender, era, and a stable variant seed — the same scheme {@link CitizenRenderer} uses for
+ * from gender, era, and a stable variant seed - the same scheme {@link CitizenRenderer} uses for
  * real citizens. Extracted so the decorative crowd ({@link CrowdRenderer}) draws from the exact
- * same art, making its movers visually indistinguishable from real citizens. Falls back to
- * {@code citizen.png} when an era/gender set has no art yet.
+ * same art, making its movers visually indistinguishable from real citizens. Variant count per
+ * gender/era set is probed once (up to 16 sequential files) and cached; falls back to
+ * {@code citizen.png} when a set has no art yet.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -31,7 +32,6 @@ public final class CitizenSkins {
     private CitizenSkins() {
     }
 
-    /** Texture for the given gender/era, picking a stable variant from {@code variantSeed}. */
     public static ResourceLocation texture(CitizenGender gender, Era era, int variantSeed) {
         String setKey = gender.texturePrefix() + "_" + era.key();
         int variantCount = variantCountCache.computeIfAbsent(setKey, CitizenSkins::probeVariantCount);

@@ -12,9 +12,14 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.InputEvent;
 
 /**
- * Pantheon-mode input (FAITH_PLAN Part 3 — crosshair-aim, not a freed cursor): normal FPS
- * look stays active; we intercept clicks/keys only while the mode is on and no screen is
- * open. Mouse events are consumed so drawing the heavens never punches a block.
+ * Pantheon-mode input (FAITH_PLAN Part 3 -- crosshair-aim, not a freed cursor): normal FPS look
+ * stays active; we intercept clicks/keys only while the mode is on and no screen is open, and
+ * consume mouse events so drawing the heavens never punches a block. LMB connects the hovered star,
+ * RMB or R undoes, ENTER (at 3+ stars) opens the naming prompt.
+ *
+ * ESC is special: in-game it opens the pause menu BEFORE InputEvent.Key fires, so we cannot catch it
+ * there -- onScreenOpening intercepts the PauseScreen instead, cancelling it and leaving the mode
+ * while active. Pressing ESC again (mode off) pauses as normal.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID, value = Dist.CLIENT)
 @ApiStatus.Internal
@@ -52,9 +57,6 @@ public final class PantheonInputEvents {
         }
     }
 
-    /** ESC in-game opens the pause menu BEFORE InputEvent.Key fires — so an ESC exit has
-     *  to intercept the screen itself: while the mode is active, cancel the pause screen
-     *  and leave the mode instead. Pressing ESC again (mode off) pauses as normal. */
     @SubscribeEvent
     public static void onScreenOpening(net.neoforged.neoforge.client.event.ScreenEvent.Opening event) {
         if (!PantheonMode.isActive()) return;

@@ -20,22 +20,24 @@ import net.minecraft.world.level.storage.loot.parameters.LootContextParams;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Decides what stack the fisher pulls out of the water each retract.
- * <ul>
- *   <li><b>Default</b>: weighted-random vanilla fish — cod 60%, salmon 25%, tropical_fish 12%,
- *       pufferfish 3%. No treasure, no junk.</li>
- *   <li><b>With {@code bannerbound.unlock_treasure_fishing} researched AND the bobber sits
- *       in open water</b>: runs vanilla's {@link BuiltInLootTables#FISHING} loot table — full
- *       fish/treasure/junk pool, same as a player fishing.</li>
- * </ul>
+ * Decides what stack the fisher pulls out of the water on each retract. Default path: a
+ * weighted-random vanilla fish (cod 60%, salmon 25%, tropical_fish 12%, pufferfish 3%) - no
+ * treasure, no junk. With {@code bannerbound.unlock_treasure_fishing} researched AND the bobber in
+ * open water, it first runs vanilla's {@link BuiltInLootTables#FISHING} loot table - the full
+ * fish/treasure/junk pool, same as a player fishing - with the citizen as the firing entity, the
+ * bobber position as origin, and the citizen's mainhand tool (or a bare fishing rod) as TOOL;
+ * the first non-empty drop wins, an all-empty roll is a miss that falls back to the weighted fish.
  * "Open water" is determined upstream by {@code FisherWorkGoal} and passed in; non-open-water
- * stays on the fish-only branch even with the research unlocked, matching vanilla's behavior
- * (no treasure unless the bobber is in proper open water).
+ * stays fish-only even with the research, matching vanilla's no-treasure rule. Both branches gate
+ * through {@code SettlementDropFilter.shouldDrop} with a null source block (pure known-set check):
+ * treasure the civ doesn't recognize yet falls through to the plain fish branch rather than
+ * handing over an item the settlement can't use, and an unrecognized fish becomes
+ * {@link ItemStack#EMPTY} (a miss).
  */
 public final class FisherCatchTable {
     public static final String FLAG_TREASURE_FISHING = "bannerbound.unlock_treasure_fishing";
 
-    /** Cumulative weights, scaled to 100. Each catch rolls a number 0..99 and walks the table. */
+    // Cumulative weights out of 100: cod 60, salmon 25, tropical 12, puffer 3.
     private static final int[] FISH_WEIGHTS_CUMULATIVE = { 60, 85, 97, 100 };
 
     private FisherCatchTable() {
@@ -46,16 +48,12 @@ public final class FisherCatchTable {
         if (settlement != null && openWater
                 && ResearchManager.hasFlag(settlement, FLAG_TREASURE_FISHING)) {
             ItemStack treasure = rollVanillaTable(level, citizen, bobberPos);
-            // Treasure the civ doesn't recognize yet is treated as a miss → fall through to the
-            // plain fish branch (which is itself gated below) rather than handing over an item the
-            // settlement can't use.
             if (!treasure.isEmpty()
                     && com.bannerbound.core.api.research.SettlementDropFilter.shouldDrop(settlement, null, treasure)) {
                 return treasure;
             }
         }
         ItemStack fish = rollWeightedFish(level);
-        // No fishing source block to scope on — pass null source, pure known-set check.
         return com.bannerbound.core.api.research.SettlementDropFilter.shouldDrop(settlement, null, fish)
             ? fish : ItemStack.EMPTY;
     }
@@ -68,9 +66,6 @@ public final class FisherCatchTable {
         return new ItemStack(Items.PUFFERFISH);
     }
 
-    /** Invokes vanilla's gameplay/fishing loot table with the citizen as the firing entity and
-     *  the bobber's position as the origin. Returns the first non-empty drop, or EMPTY if the
-     *  table produced no drops (treated as a miss → caller falls back to the weighted fish). */
     private static ItemStack rollVanillaTable(ServerLevel level, CitizenEntity citizen, BlockPos bobberPos) {
         ResourceKey<LootTable> key = BuiltInLootTables.FISHING;
         LootTable table = level.getServer().reloadableRegistries().getLootTable(key);

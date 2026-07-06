@@ -12,6 +12,10 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/**
+ * Sync of the per-civ procedural "Tongue" state: whether the language layer is enabled, its generator
+ * seed, and any manual concept-word overrides (defaulted to empty and copied defensively).
+ */
 @ApiStatus.Internal
 public record LanguageStatePayload(boolean enabled, long seed, List<String> conceptOverrides)
         implements CustomPacketPayload {

@@ -32,7 +32,29 @@ import net.minecraft.world.entity.EntityType;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
 
-/** Central index and runtime for all data-driven insights. */
+/**
+ * Central index and runtime for all data-driven insights across the three research trees
+ * (science, culture, faith). rebuildIndex() maps each loaded {@link InsightDefinition} by its
+ * trigger type so hot event hooks can early-out via isTracked(); game code funnels occurrences in
+ * through recordEvent() with a target-matching predicate. Per-second (20-tick) polling drives the
+ * LEVEL-kind triggers reach_population and obtain_item.
+ *
+ * <p>Kinds: LEVEL triggers store the live "have >=N now" amount and firing is one-way/sticky (a
+ * hasFiredInsight flag), so an insight cannot be un-fired. obtain_item is deliberately TAGLESS -
+ * nothing is stamped on items, so items stack normally and throwing then re-collecting can never
+ * pad the counter (it reads the true settlement+members holdings each poll). COUNT-kind triggers
+ * accumulate instead.
+ *
+ * <p>Firing charges the node's insight boost into research progress (flat boost_points if set,
+ * else boostFraction x cost). Sync is batched: record() only marks the settlement/faith dirty and
+ * queues it in pendingSettlementSync/pendingFaithSync; the queues flush on the 20-tick boundary in
+ * tickLevels to avoid a broadcast storm. Faith insights live on the shared Faith object, not the
+ * settlement, and announce to every member settlement whose age has reached the node.
+ *
+ * <p>Gotcha: record() must reject nodes whose minAge is above the settlement's current age -
+ * future-era nodes are intentionally unknown, and ordinary actions must never reveal or
+ * pre-complete them through an insight before their era is reached.
+ */
 public final class InsightManager {
     public enum TreeType {
         SCIENCE("science"), CULTURE("culture"), FAITH("faith");
@@ -104,22 +126,10 @@ public final class InsightManager {
         }
     }
 
-    /** True if any loaded insight watches this trigger type — lets hot event hooks early-out cheaply. */
     public static boolean isTracked(String triggerType) {
         return byType.containsKey(triggerType);
     }
 
-    /**
-     * Polls settlement holdings for every {@code obtain_item} insight and sets its counter to the amount
-     * currently held — settlement storage (via {@link com.bannerbound.core.api.workshop.SettlementItemCensus})
-     * plus the inventories of online members. LEVEL / "have ≥N now" semantics, exactly like
-     * {@code reach_population}: the counter tracks the live held amount and firing is one-way (sticky).
-     * <p>
-     * This is tagless — nothing is stamped on items — so items stack normally, and it catches a stack
-     * the moment it lands in a member's inventory however it got there (pulled out of a drying rack or
-     * other custom workstation, taken from a chest, picked up off the ground). Throwing and re-collecting
-     * an item can never raise the true held total, so the counter cannot be padded.
-     */
     private static void pollObtain(MinecraftServer server, Settlement settlement) {
         List<Entry> entries = byType.get("obtain_item");
         if (entries == null || entries.isEmpty()) return;
@@ -131,8 +141,6 @@ public final class InsightManager {
         }
     }
 
-    /** Total of {@code target} (a flat item id or a {@code #tag}) the settlement currently holds across
-     *  its storage and online members' inventories. */
     private static int obtainHoldings(ServerLevel level, MinecraftServer server, Settlement settlement,
                                       String target) {
         if (target == null || target.isEmpty()) return 0;
@@ -153,7 +161,6 @@ public final class InsightManager {
             ? 0 : itemHoldings(level, server, settlement, item);
     }
 
-    /** Count of one {@code item} across settlement storage + the inventories of online members. */
     private static int itemHoldings(ServerLevel level, MinecraftServer server, Settlement settlement, Item item) {
         int total = com.bannerbound.core.api.workshop.SettlementItemCensus.count(level, settlement, item);
         for (UUID memberId : settlement.members()) {
@@ -163,10 +170,6 @@ public final class InsightManager {
         return total;
     }
 
-    /**
-     * Public expansion hook. The predicate receives each insight's authored target and answers
-     * whether this occurrence matches it.
-     */
     public static void recordEvent(MinecraftServer server, Settlement settlement, String triggerType,
                                    Predicate<String> targetMatches, int amount) {
         if (server == null || settlement == null || amount <= 0) return;
@@ -201,8 +204,7 @@ public final class InsightManager {
 
     private static void record(MinecraftServer server, Settlement settlement, Entry entry, int amount,
                                InsightTriggerRegistry.Kind kind) {
-        // Future-era nodes are deliberately unknown to this settlement. Do not let ordinary
-        // actions reveal or pre-complete them through an insight before their era is reached.
+        // Future-era nodes are intentionally unknown - never reveal/pre-complete before their era.
         if (entry.definition().minAge().ordinal() > settlement.age().ordinal()) return;
 
         String key = entry.tree().storageKey(entry.definition().id());

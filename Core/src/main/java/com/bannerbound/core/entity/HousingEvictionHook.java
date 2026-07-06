@@ -11,20 +11,17 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.Entity;
 
 /**
- * Small helper that runs whenever housing logic needs to evict residents — bed loss, House
- * Block break, validation flip to invalid. Centralised here so callers (the BE, the
- * lifecycle event) don't each have to know about every per-citizen side effect of eviction.
+ * Helper run whenever housing logic evicts residents -- bed loss, House Block break, or a
+ * validation flip to invalid. Centralised here so callers (the BE, the lifecycle event) don't each
+ * reimplement every per-citizen side effect of eviction.
  *
- * <p>Effects per evicted citizen:
- * <ul>
- *   <li>Clear all {@code *_HOME} thoughts (NICE / LOVE / LIKE / UNCOMFORTABLE / HATE) so the
- *       screen doesn't show stale rows. {@code NO_HOME} is re-applied by the citizen's own
- *       20-tick poll on the next cycle — no need to add it here.</li>
- *   <li>Recompute happiness so the synched-data slot reflects the cleared thoughts immediately.</li>
- * </ul>
- *
- * <p>No-op for citizens that aren't currently loaded — they'll re-evaluate from chunk thoughts
- * the next time they're ticked anyway.
+ * <p>Per evicted (and currently loaded) citizen: clear all *_HOME thoughts
+ * (NICE / LOVE / LIKE / UNCOMFORTABLE / HATE) so the screen doesn't show stale rows -- NO_HOME is
+ * re-applied by the citizen's own 20-tick poll on the next cycle, so it is not added here -- then
+ * recompute happiness so the synched-data slot reflects the cleared thoughts immediately, and wake
+ * anyone asleep in the now-invalid home, clearing the OCCUPIED flag on the bed HEAD so the freed
+ * bed can be reused. No-op for citizens that aren't loaded: they re-evaluate from chunk thoughts
+ * the next time they tick.
  */
 @ApiStatus.Internal
 public final class HousingEvictionHook {
@@ -47,15 +44,10 @@ public final class HousingEvictionHook {
                 if (c.getThoughts().remove(k, null)) changed = true;
             }
             if (changed) c.recomputeHappiness();
-            // An evicted citizen shouldn't keep sleeping in a bed that's no longer part of their
-            // valid home — when a house block goes invalid (or loses the bed), wake everyone
-            // sleeping in it so they get up and leave, and free the bed's OCCUPIED state.
             wakeIfSleeping(sl, c);
         }
     }
 
-    /** Wake {@code c} if it's asleep and clear the OCCUPIED flag on the bed HEAD it was using.
-     *  No-op when the citizen isn't sleeping. */
     private static void wakeIfSleeping(ServerLevel sl, CitizenEntity c) {
         if (!c.isSleeping()) return;
         net.minecraft.core.BlockPos bedPos = c.getSleepingPos().orElse(null);

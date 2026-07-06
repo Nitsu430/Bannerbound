@@ -1,9 +1,8 @@
-// Save this class in your mod and generate all required imports
-
 /**
- * Made with Blockbench 5.1.4
- * Exported for Minecraft version 1.19 or later with Mojang mappings
- * @author Author
+ * Raw Blockbench 5.1.4 animation export (Mojang mappings, MC 1.19+) of the raft paddling
+ * animations (paddle_right/left/forward/backwards), kept under resources as a reference - NOT on
+ * the compile path. Every channel targets the "right_paddle" bone; the left-side strokes are
+ * expressed through the x = -14 position keyframes rather than a separate bone.
  */
 public class raftAnimation {
 	public static final AnimationDefinition paddle_right = AnimationDefinition.Builder.withLength(1.25F).looping()

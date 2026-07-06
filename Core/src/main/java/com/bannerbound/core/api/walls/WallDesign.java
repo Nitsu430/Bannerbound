@@ -14,19 +14,22 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * One authored wall piece — a SEGMENT (straight run tile), CORNER (square turn tile) or GATE
- * (segment-sized piece containing a pathable opening). Immutable once built.
+ * One authored wall piece design: a SEGMENT (straight run tile), CORNER (square turn tile) or
+ * GATE (segment-sized piece with a pathable opening). Immutable once built. WallLayoutEngine
+ * stamps these onto a settlement border and each placed WallPiece renders a rotated copy.
  *
- * <p>Authoring convention (see WALLS_PLAN.md §A): designs face <b>outward = north</b>. Local
- * axes: {@code l} runs along the wall (+X / east), {@code d} runs inward (+Z / south, depth),
- * {@code h} is up. The layout engine rotates placed pieces per border edge; block states are
- * rotated with {@link BlockState#rotate} so directional blocks (stairs, gates) stay correct.
+ * <p>Authoring convention (WALLS_PLAN.md sec A): designs face outward = north. Local axes: l runs
+ * along the wall (+X / east), d runs inward (+Z / south, depth), h is up. The engine rotates
+ * placed pieces per border edge and rotates block states via BlockState.rotate so directional
+ * blocks (stairs, gates) stay correct.
  *
- * <p>Voxels store palette indices ({@code 0} = air, {@code n} = {@code palette.get(n-1)}), so a
- * design's NBT is tiny and the palette is the single place block states live. Sizes are
- * validated to the plan's powers-of-two rule: length ∈ {2,4,8,16} (corners: footprint is
- * length×length and {@code depth == length}), depth ≤ {@link #MAX_DEPTH}, height ≤
- * {@link #MAX_HEIGHT}.
+ * <p>Voxels store palette indices (0 = air, n = palette.get(n-1)); this 1-based packing is a
+ * save-format invariant shared by stateAt / voxelsCopy / the Builder, and keeps NBT tiny with the
+ * palette as the single place block states live. Sizes follow the plan's powers-of-two rule:
+ * length in {2,4,8,16}, depth <= MAX_DEPTH, height <= MAX_HEIGHT, palette <= 127 (fits a signed
+ * byte index). Corners are exempt from the length rule: they place one-per-vertex (never run-
+ * tiled, so the run clipper absorbs odd remainders), so any 1..16 footprint works but must be
+ * square (depth == length).
  */
 public final class WallDesign {
 
@@ -48,8 +51,6 @@ public final class WallDesign {
 
     public WallDesign(String id, String name, Kind kind, int length, int depth, int height,
                       List<BlockState> palette, byte[] voxels, BlockState foundation) {
-        // Corners are NOT run-tiled (one per vertex), so any 1..16 footprint works — the run
-        // clipper + truncation absorb odd remainders. Segments/gates stay powers of two.
         if (kind == Kind.CORNER) {
             if (length < 1 || length > 16) {
                 throw new IllegalArgumentException("Corner footprint must be 1-16, got " + length);
@@ -102,24 +103,20 @@ public final class WallDesign {
         return (h * depth + d) * length + l;
     }
 
-    /** Block state at local design coords, or {@code null} for air. */
     @Nullable
     public BlockState stateAt(int l, int d, int h) {
         byte v = voxels[index(l, d, h)];
         return v == 0 ? null : palette.get((v & 0xFF) - 1);
     }
 
-    /** Immutable palette view — index {@code n} backs voxel value {@code n + 1}. */
     public List<BlockState> palette() {
         return palette;
     }
 
-    /** Defensive copy of the packed voxel indices (0 = air, n = palette n-1). */
     public byte[] voxelsCopy() {
         return voxels.clone();
     }
 
-    /** Count of non-air voxels (one design instance's block cost, before foundation fill). */
     public int blockCount() {
         int n = 0;
         for (byte v : voxels) {
@@ -127,8 +124,6 @@ public final class WallDesign {
         }
         return n;
     }
-
-    // ─── NBT ────────────────────────────────────────────────────────────────────────────────
 
     public CompoundTag save() {
         CompoundTag tag = new CompoundTag();
@@ -166,8 +161,6 @@ public final class WallDesign {
             NbtUtils.readBlockState(blocks, tag.getCompound("Foundation")));
     }
 
-    // ─── Builder (code-built defaults + future editor saves) ────────────────────────────────
-
     public static Builder builder(String id, String name, Kind kind, int length, int depth, int height) {
         return new Builder(id, name, kind, length, depth, height);
     }
@@ -203,7 +196,6 @@ public final class WallDesign {
             return this;
         }
 
-        /** Fill the full length×depth slab at layer {@code h}. */
         public Builder fillLayer(int h, BlockState state) {
             for (int l = 0; l < length; l++) {
                 for (int d = 0; d < depth; d++) {

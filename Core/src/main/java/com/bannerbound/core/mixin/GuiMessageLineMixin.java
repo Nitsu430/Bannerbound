@@ -9,9 +9,9 @@ import com.bannerbound.core.client.ChatLineAlpha;
 import net.minecraft.client.GuiMessage;
 
 /**
- * Carries a proximity-chat text alpha on each displayed {@link GuiMessage.Line}. Copied from the
- * owning {@link GuiMessage} when the line is split out (see {@code ChatComponentMixin}), and read
- * by the render mixin to fade distant chatter. Default {@code 0} == "unset → opaque".
+ * Carries a proximity-chat text alpha on each displayed GuiMessage.Line. Copied from the owning
+ * GuiMessage when the line is split out (see ChatComponentMixin), and read by the render mixin to
+ * fade distant chatter. Default 0 means "unset -> opaque".
  */
 @Mixin(GuiMessage.Line.class)
 @ApiStatus.Internal

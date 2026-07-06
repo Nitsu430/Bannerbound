@@ -31,48 +31,42 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity for the Mason's Bench — the batch-stoneworking workstation, the stone analogue of the
- * Carpenter's Table. The deposited base stones (cobblestone, stone, sandstone, …) are a real,
- * removable <b>pile</b> (placed one at a time, taken back one at a time, rendered in a grid) which
- * doubles as the masonry "budget"; on top of it sits an ordered <b>build list</b> of queued outputs.
- * The picker reuses the ghost-preview infrastructure ({@link GhostRecipeWorkstation}): the floating
- * ghost is the selected affordable output and the browse arrows cycle offers; clicking the result
- * (a {@code GhostActionPayload.FILL}) appends one unit to the list. Nothing is consumed until the
- * chisel minigame completes — it then turns the list into items and removes only the stone it cost,
- * leaving any leftover pile on the bench.
- *
- * <p>Each output costs {@code baseCost} of exactly one {@link StoneFamily}'s base stone, so the cost
- * model is far simpler than carpentry's three-category budget: one family key + a per-unit count.
- * There is no quality (building materials).
+ * Block entity for the Mason's Bench -- batch stoneworking, the stone analogue of the Carpenter's
+ * Table (no quality tiers: these are building materials). The deposited base stones are a real,
+ * removable pile (one grid cell per distinct item, slide-in animated) that doubles as the masonry
+ * budget; on top sits an ordered build list of queued outputs. Each output costs baseCost of
+ * exactly one StoneFamily's base stone -- far simpler than carpentry's three-category budget --
+ * and ListEntry captures familyKey + baseCost at queue time so the chisel step is self-contained.
+ * The picker reuses the ghost-preview infrastructure ({@link GhostRecipeWorkstation}): the
+ * floating ghost is the selected affordable output (there is never a separate solid result, so
+ * getResult() is always EMPTY), browse arrows cycle offers, and a GhostActionPayload.FILL appends
+ * one unit to the list. Offers are transient -- recomputed, never persisted -- from the families
+ * present in the pile x researched (CraftGating) output variants, in stable LinkedHashMap
+ * insertion order so browsing is predictable; the selection is sticky across recomputes so newly
+ * landing materials don't yank the player's choice. Nothing is consumed until the chisel minigame
+ * completes: completeAndOutput pops every queued item and removes only the stone the list cost,
+ * leaving leftover pile on the bench, while removeOne refuses to hand back stone already reserved
+ * by the build list (remaining = pile - committed). Ghost fields are computed server-side and
+ * mirrored to the client via update packets; after a load, recompute is deferred to the first
+ * server tick (needsRecompute) because CraftGating needs a live level.
  */
 @ApiStatus.Internal
 public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWorkstation {
-    /** Total base stones the bench can hold/budget at once. */
     public static final int MAX_BUDGET = 64;
-    /** Ticks the just-placed stone's slide-in animation runs (matches the crafting stone). */
     public static final int SLIDE_TICKS = 6;
 
-    /** One queued output: how many recipe-yields of {@code output}, with the consuming stone family +
-     *  per-unit base cost captured at queue time so the chisel step is self-contained. */
     public record ListEntry(Item output, int units, int yieldPerUnit, String familyKey, int baseCost) {}
 
-    /** A resolved, affordable picker offer (transient — recomputed, never persisted). */
     private record Offer(Item output, int yield, String familyKey, int baseCost) {}
 
-    /** The deposited base stones — one stack (= one grid cell) per distinct item; multiples pile up.
-     *  This IS the budget. */
     private final List<ItemStack> stones = new ArrayList<>();
-    /** Queued outputs, in the order the player added them. */
     private final List<ListEntry> buildList = new ArrayList<>();
 
-    // Sticky picker selection — kept across recomputes so landing materials don't yank the choice.
     private Item selectedOutput = null;
 
-    // Synced ghost fields (computed server-side; the client just renders these).
     private ItemStack ghostResult = ItemStack.EMPTY;
     private int offerCount = 0;
 
-    // Slide-in animation for the most-recently-touched pile cell.
     private int insertAnimTicks = 0;
     private Direction insertDir = Direction.NORTH;
     private int lastSlideCell = -1;
@@ -82,14 +76,10 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         super(BannerboundAntiquity.MASONS_BENCH_BE.get(), pos, state);
     }
 
-    // ── Accessors for the renderer ────────────────────────────────────────────────────────────
-
-    /** The deposited stone pile (read-only view for the renderer's grid). */
     public List<ItemStack> getStones() {
         return stones;
     }
 
-    /** The queued outputs (read-only view for the renderer's floating list). */
     public List<ListEntry> getBuildList() {
         return buildList;
     }
@@ -110,14 +100,11 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         return lastSlideCell;
     }
 
-    /** A representative stone item to draw on the bench during the chisel minigame: the first pile
-     *  cell (falling back to cobblestone for an empty bench). */
     public ItemStack representativeBudgetStone() {
         return stones.isEmpty() ? new ItemStack(net.minecraft.world.level.block.Blocks.COBBLESTONE)
             : new ItemStack(stones.get(0).getItem());
     }
 
-    /** Total uncommitted base stone left on the bench (for the tabletop readout). */
     public int remainingTotal() {
         int total = 0;
         for (ItemStack s : stones) total += s.getCount();
@@ -125,11 +112,9 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         return Math.max(0, total);
     }
 
-    // ── GhostRecipeWorkstation (picker rendering + ray-pick reuse) ─────────────────────────────
-
     @Override
     public ItemStack getResult() {
-        return ItemStack.EMPTY; // the picker IS the ghost; there's never a separate solid result
+        return ItemStack.EMPTY;
     }
 
     @Override
@@ -139,7 +124,7 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
 
     @Override
     public List<ItemStack> getGhostIngredients() {
-        return List.of(); // masonry has no missing-ingredient silhouettes
+        return List.of();
     }
 
     @Override
@@ -149,7 +134,7 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
 
     @Override
     public double ghostPreviewY() {
-        return 1.62; // compact in-world picker band just above the bench top
+        return 1.62;
     }
 
     @Override
@@ -163,10 +148,8 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
 
     @Override
     public void lockGhost() {
-        // Masonry's selection is always sticky — nothing to lock.
+        // Intentional no-op: masonry's selection is always sticky, there is nothing to lock.
     }
-
-    // ── Pile mutation (server-side) — mirrors the carpenter's table ────────────────────────────
 
     @Override
     public boolean insertOne(ItemStack held, Direction from) {
@@ -188,13 +171,10 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         return true;
     }
 
-    /** True if {@code stack} can be deposited as budget material: a recognised base stone. */
     public static boolean isBudgetMaterial(ItemStack stack) {
         return StoneFamily.isBudgetStone(stack);
     }
 
-    /** Deposits as much of {@code stack} as fits (whole-stack convenience, sneak-place). Returns how
-     *  many materials were deposited. Server-side only. */
     public int insertStack(ItemStack stack, Direction from) {
         int added = 0;
         while (added < stack.getCount() && insertOne(stack, from)) added++;
@@ -217,10 +197,6 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         return ItemStack.EMPTY;
     }
 
-    // ── Build-list mutation (server-side) ──────────────────────────────────────────────────────
-
-    /** Appends one unit of the current picker selection to the build list. Returns true if it fit
-     *  (the selection exists and is still affordable from the remaining budget). */
     public boolean addSelected() {
         List<Offer> offers = computeOffers();
         int idx = indexOfSelection(offers);
@@ -246,7 +222,6 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         return true;
     }
 
-    /** Removes the whole queued entry at {@code index}. Returns true if anything was removed. */
     public boolean removeEntryAt(int index) {
         if (index < 0 || index >= buildList.size()) return false;
         buildList.remove(index);
@@ -254,7 +229,6 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         return true;
     }
 
-    /** Removes one unit of the most-recently-added build-list entry. Returns true if anything went. */
     public boolean removeLastEntry() {
         if (buildList.isEmpty()) return false;
         int last = buildList.size() - 1;
@@ -269,8 +243,6 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         return true;
     }
 
-    /** Chisel minigame finished: pops every queued output above the bench and removes only the base
-     *  stone the list cost from the pile — any uncommitted stone stays for next time. */
     public void completeAndOutput(ServerLevel level) {
         BlockPos above = getBlockPos().above();
         for (ListEntry e : buildList) {
@@ -288,14 +260,12 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         recompute();
     }
 
-    /** Drops the deposited stones (real items) when the bench is broken. */
     public void dropStones(net.minecraft.world.level.Level level) {
         for (ItemStack s : stones) {
             Block.popResource(level, getBlockPos(), s);
         }
     }
 
-    /** Removes {@code count} pile items of {@code familyKey}'s base stone (consumed by a batch). */
     private void removePileMatching(String familyKey, int count) {
         StoneFamily fam = StoneFamily.fromKey(familyKey);
         if (fam == null) return;
@@ -311,15 +281,12 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         lastSlideCell = Math.min(lastSlideCell, stones.size() - 1);
     }
 
-    // ── Internals ─────────────────────────────────────────────────────────────────────────────
-
     private int totalStones() {
         int n = 0;
         for (ItemStack s : stones) n += s.getCount();
         return n;
     }
 
-    /** Base-stone counts per family present in the pile (insertion-ordered for stable browse order). */
     private Map<String, Integer> familyCounts() {
         Map<String, Integer> m = new LinkedHashMap<>();
         for (ItemStack s : stones) {
@@ -329,7 +296,6 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         return m;
     }
 
-    /** Base stone of {@code familyKey} present in the pile. */
     private int pileMatching(String familyKey) {
         StoneFamily fam = StoneFamily.fromKey(familyKey);
         if (fam == null) return 0;
@@ -341,7 +307,6 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         return n;
     }
 
-    /** Base stone of {@code familyKey} already reserved by the build list. */
     private int committed(String familyKey) {
         int n = 0;
         for (ListEntry e : buildList) {
@@ -350,23 +315,19 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         return n;
     }
 
-    /** Base stone of {@code familyKey} still available to queue against. */
     private int remaining(String familyKey) {
         return pileMatching(familyKey) - committed(familyKey);
     }
 
-    /** True if one of {@code cell} can be taken back: its family pool still has slack. */
     private boolean isRemovable(ItemStack cell) {
         StoneFamily fam = StoneFamily.fromBase(cell.getItem());
         if (fam == null) return true;
         return remaining(fam.key()) > 0;
     }
 
-    /** All affordable, researched offers — every (family present in pile) × (output variant). Stable
-     *  order so the picker browses predictably. */
     private List<Offer> computeOffers() {
         List<Offer> out = new ArrayList<>();
-        if (level == null) return out; // CraftGating needs a level; no offers without one
+        if (level == null) return out;
         for (String key : familyCounts().keySet()) {
             StoneFamily fam = StoneFamily.fromKey(key);
             if (fam == null) continue;
@@ -393,7 +354,6 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         selectedOutput = offer.output();
     }
 
-    /** Rebuilds the synced ghost fields from the current offers + sticky selection. Server-side. */
     private void recompute() {
         if (level == null || level.isClientSide) {
             setChanged();
@@ -417,7 +377,6 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         setChanged();
     }
 
-    /** Ticker — drains the slide-in timer, and (server, once after load) recomputes the picker. */
     public static void tick(net.minecraft.world.level.Level level, BlockPos pos, BlockState state,
                             MasonsBenchBlockEntity be) {
         if (be.insertAnimTicks > 0) be.insertAnimTicks--;
@@ -434,8 +393,6 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
             level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
         }
     }
-
-    // ── Persistence + sync ────────────────────────────────────────────────────────────────────
 
     @Override
     protected void saveAdditional(CompoundTag tag, HolderLookup.Provider provider) {
@@ -480,7 +437,7 @@ public class MasonsBenchBlockEntity extends BlockEntity implements GhostRecipeWo
         ListTag listTag = tag.getList("BuildList", Tag.TAG_COMPOUND);
         for (int i = 0; i < listTag.size(); i++) {
             CompoundTag c = listTag.getCompound(i);
-            if (!c.contains("Family")) continue; // drop malformed entries
+            if (!c.contains("Family")) continue;
             Item item = itemOf(c.getString("Item"));
             if (item == null) continue;
             buildList.add(new ListEntry(item, c.getInt("Units"), c.getInt("Yield"),

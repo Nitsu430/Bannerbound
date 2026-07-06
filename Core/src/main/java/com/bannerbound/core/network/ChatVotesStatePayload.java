@@ -14,24 +14,17 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: the receiving player's snapshot of their settlement's in-flight chat votes (exile / tablet)
- * for the Town Hall "Votes" tab. Per-player (not a shared broadcast instance) because {@code myVote}
- * differs per member. Sent on town-hall open and after every cast/start/resolve/expiry; the client
- * ticks {@code secondsLeft} down locally between syncs.
- *
- * @param entries one row per active vote, oldest first
+ * S->C: the receiving player's snapshot of their settlement's in-flight chat votes (exile / tablet)
+ * for the Town Hall "Votes" tab. Per-player (not a shared broadcast instance) because myVote differs
+ * per member. Sent on town-hall open and after every cast/start/resolve/expiry; the client ticks
+ * secondsLeft down locally between syncs. Entries are one row per active vote, oldest first. Each
+ * Entry: voteId (what [Yes]/[No] casts against); kind (0 = EXILE, 1 = TABLET, matching
+ * ChatVoteManager.Kind ordinal); initiatorName; targetName (EXILE citizen name, TABLET ""); yes/no
+ * counts; secondsLeft until expiry at send time; myVote (1 = receiver voted yes, -1 = no, 0 = not
+ * voted).
  */
 @ApiStatus.Internal
 public record ChatVotesStatePayload(List<Entry> entries) implements CustomPacketPayload {
-    /**
-     * @param voteId        server-side vote id (what [Yes]/[No] casts against)
-     * @param kind          0 = EXILE, 1 = TABLET (matches {@code ChatVoteManager.Kind} ordinal)
-     * @param initiatorName player who started the vote
-     * @param targetName    EXILE: citizen name; TABLET: ""
-     * @param yes/no        current counts
-     * @param secondsLeft   until expiry, at send time
-     * @param myVote        1 = receiver voted yes, -1 = no, 0 = hasn't voted
-     */
     public record Entry(int voteId, int kind, String initiatorName, String targetName,
                         int yes, int no, int secondsLeft, int myVote) {}
 
@@ -50,7 +43,7 @@ public record ChatVotesStatePayload(List<Entry> entries) implements CustomPacket
                 ByteBufCodecs.VAR_INT.encode(buf, e.yes());
                 ByteBufCodecs.VAR_INT.encode(buf, e.no());
                 ByteBufCodecs.VAR_INT.encode(buf, e.secondsLeft());
-                ByteBufCodecs.VAR_INT.encode(buf, e.myVote() + 1);   // shift -1..1 → 0..2 for VAR_INT
+                ByteBufCodecs.VAR_INT.encode(buf, e.myVote() + 1);   // shift -1..1 -> 0..2; VAR_INT is unsigned
             }
         },
         buf -> {

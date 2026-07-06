@@ -14,7 +14,9 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** Server -> client Chronicle catalog and player state snapshot. */
+/** S->C Chronicle catalog plus the viewer's unlocked/seen state. The nested Category, PageElement
+ *  and Entry records mirror the server-side codex model (built via their {@code from(...)} factories)
+ *  and each carries its own StreamCodec; handled client-side by ClientChronicleState.replace. */
 public record CodexSyncPayload(
     List<Category> categories,
     List<Entry> entries,

@@ -13,9 +13,15 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: enter the in-world drop-location edit mode for a citizen. Carries the styled citizen name +
- * job title and the settlement color (packed RGB) so the client can render the action-bar prompt in
- * the settlement's color without a settlement lookup.
+ * S->C: enter the in-world drop-location edit mode for a citizen. Carries the styled citizen name +
+ * job title and the settlement color (packed RGB) so the client renders the action-bar prompt in
+ * the settlement's color without a settlement lookup. STREAM_CODEC is over RegistryFriendlyByteBuf
+ * because ComponentSerialization needs registry access.
+ *
+ * <p>PREFERRED_STORAGE_TARGET is a sentinel entityId meaning the edit targets the settlement-wide
+ * preferred storage rather than a citizen; shared by the server (DropLocationEditServer / guard) and
+ * the client edit state, and set to Integer.MIN_VALUE so it never collides with a real entity id or
+ * the -1 inactive flag.
  */
 @ApiStatus.Internal
 public record OpenDropLocationEditPayload(
@@ -29,12 +35,8 @@ public record OpenDropLocationEditPayload(
         new CustomPacketPayload.Type<>(ResourceLocation.fromNamespaceAndPath(
             BannerboundCore.MODID, "open_drop_location_edit"));
 
-    /** Sentinel {@link #entityId} meaning "this edit targets the settlement-wide preferred storage",
-     *  not a citizen. Shared by the server (DropLocationEditServer / guard) and the client edit state.
-     *  {@link Integer#MIN_VALUE} so it never collides with a real entity id or the -1 inactive flag. */
     public static final int PREFERRED_STORAGE_TARGET = Integer.MIN_VALUE;
 
-    // RegistryFriendlyByteBuf because ComponentSerialization.STREAM_CODEC needs registry access.
     public static final StreamCodec<RegistryFriendlyByteBuf, OpenDropLocationEditPayload> STREAM_CODEC =
         StreamCodec.of(
             (buf, p) -> {

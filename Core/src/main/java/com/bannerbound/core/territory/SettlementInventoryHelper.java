@@ -18,23 +18,20 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Resource sourcing for Council expand-territory: first the settlement's shared stockpile +
- * workstation inventories, then a fallback to the voter player inventories. Mirrors
- * {@link InventoryItemHelper}'s atomic {@code hasAll} + {@code consume} contract.
- *
- * <p><b>Why this layered fallback:</b> per design, the settlement's shared storage is the
- * "common pool" — a council's chest. If the council hasn't stockpiled enough materials, the
- * voters themselves cover the shortfall from their personal inventories. Loot-or-pay decisions
- * stay at the player level; bookkeeping stays at the settlement level.
+ * Resource sourcing for the Council expand-territory (and Chiefdom) flows: an atomic hasAll + consume
+ * pair mirroring InventoryItemHelper's contract, drawing across three tiers in order -- the
+ * settlement's shared stockpile (the common pool, a council's chest), then valid workstation
+ * inventories, then the voter player inventories (in cast-order, first voter pays first). Callers MUST
+ * confirm feasibility with hasAll before consume; consume assumes the items are present and returns
+ * false (a panic) if it runs short mid-drain. singletonVoters bundles a lone chief into the same
+ * machinery. Design: loot-or-pay decisions stay at the player level, bookkeeping at the settlement
+ * level.
  */
 @ApiStatus.Internal
 public final class SettlementInventoryHelper {
     private SettlementInventoryHelper() {
     }
 
-    /** Result of an atomic feasibility check. {@code true} iff every line item in
-     *  {@code costs} can be sourced across (settlement stockpile + workstation inventories +
-     *  the supplied voter inventories) in total. Doesn't mutate anything. */
     public static boolean hasAll(ServerLevel level, Settlement settlement,
                                   List<ServerPlayer> voters,
                                   List<ChunkClaimCost.ItemCost> costs) {
@@ -44,21 +41,15 @@ public final class SettlementInventoryHelper {
         return true;
     }
 
-    /** Atomic consume across (stockpile → workstations → voter inventories). Caller MUST
-     *  have confirmed feasibility with {@link #hasAll} first; this method assumes the items
-     *  are present and panics ({@code return false}) if mid-consume runs short. */
     public static boolean consume(ServerLevel level, Settlement settlement,
                                    List<ServerPlayer> voters,
                                    List<ChunkClaimCost.ItemCost> costs) {
         for (ChunkClaimCost.ItemCost cost : costs) {
             int remaining = cost.count();
-            // 1. Stockpile (cheapest to drain; bulk storage).
             remaining -= StockpileService.withdraw(level, settlement, cost.item(), remaining);
             if (remaining <= 0) continue;
-            // 2. Workstation inventories (Forester's Log, Granary, Creel, …).
             remaining = drainWorkstations(level, settlement, cost.item(), remaining);
             if (remaining <= 0) continue;
-            // 3. Voter player inventories (in cast-order — first voter pays first).
             for (ServerPlayer voter : voters) {
                 if (remaining <= 0) break;
                 int taken = drainPlayerInventory(voter, cost.item(), remaining);
@@ -69,11 +60,9 @@ public final class SettlementInventoryHelper {
         return true;
     }
 
-    /** Sum of {@code item} across stockpile + workstations + voter inventories. */
     private static int countAll(ServerLevel level, Settlement settlement,
                                  List<ServerPlayer> voters, Item item) {
         int total = StockpileService.count(level, settlement, item);
-        // Workstation inventories.
         for (Workstation ws : settlement.workstations().values()) {
             if (!ws.buildingValid()) continue;
             if (level.getBlockEntity(ws.pos()) instanceof WorkstationInventory wsi) {
@@ -82,7 +71,6 @@ public final class SettlementInventoryHelper {
                 }
             }
         }
-        // Voter inventories.
         for (ServerPlayer voter : voters) {
             total += InventoryItemHelper.countItem(voter, item);
         }
@@ -129,8 +117,6 @@ public final class SettlementInventoryHelper {
         return wanted;
     }
 
-    /** Convenience for the Chiefdom path: bundle the chief (whoever's clicking) into a
-     *  singleton "voters" list and dispatch through the same machinery. */
     public static List<ServerPlayer> singletonVoters(ServerPlayer player) {
         List<ServerPlayer> out = new ArrayList<>(1);
         out.add(player);

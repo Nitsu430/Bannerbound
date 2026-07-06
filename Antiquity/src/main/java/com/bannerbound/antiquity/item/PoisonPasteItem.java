@@ -18,15 +18,18 @@ import net.minecraft.world.item.UseAnim;
 import net.minecraft.world.level.Level;
 
 /**
- * A ground poison paste (the dart coating) that also COATS food or arrows: hold the paste and a food
- * item OR any arrow ({@code #minecraft:arrows}, so vanilla + flint arrows alike) in opposite hands, then
- * hold right-click — the player rubs the paste on (a brushing animation) and, on finish, coats exactly
- * ONE item (never the whole stack — no duping). Food gets a hidden, dose-stacking {@link PoisonedFoodData}
- * (applied a short while after eating); an arrow gets the {@code ARROW_POISON} id (delivered on hit by
- * {@code PoisonArrowEvents}). Carries its {@link PoisonType} so any paste reuses this one item class.
+ * A ground poison paste (the dart coating) that also COATS food or arrows: hold the paste and a
+ * food item OR any arrow ({@code #minecraft:arrows}, so vanilla + flint arrows alike) in opposite
+ * hands, then hold right-click - the player rubs the paste on (a brushing animation, aborted if the
+ * target leaves the other hand mid-rub) and, on finish, coats exactly ONE item: in place when the
+ * held stack is alone, else one is split off and handed back, so a stack never all gets coated and
+ * never duplicates. Food gets a hidden, dose-stacking {@link PoisonedFoodData} (tagged with the
+ * poisoner for the settlement-gated tooltip; applied a short while after eating); an arrow gets the
+ * openly-shown {@code ARROW_POISON} id (delivered on hit by {@code PoisonEvents}). Carries its
+ * {@link PoisonType} so any paste reuses this one item class.
  */
 public class PoisonPasteItem extends Item {
-    private static final int RUB_TICKS = 30; // ~1.5s of brushing
+    private static final int RUB_TICKS = 30;
 
     private final PoisonType poison;
 
@@ -35,7 +38,6 @@ public class PoisonPasteItem extends Item {
         this.poison = poison;
     }
 
-    /** The food/arrow in the hand NOT holding the paste (or EMPTY if it's neither). */
     private static ItemStack coatableInOtherHand(LivingEntity entity, InteractionHand pasteHand) {
         InteractionHand other = pasteHand == InteractionHand.MAIN_HAND
             ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
@@ -47,7 +49,7 @@ public class PoisonPasteItem extends Item {
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack paste = player.getItemInHand(hand);
         if (coatableInOtherHand(player, hand).isEmpty()) {
-            return InteractionResultHolder.pass(paste); // nothing to coat — behave like a plain item
+            return InteractionResultHolder.pass(paste);
         }
         player.startUsingItem(hand);
         return InteractionResultHolder.consume(paste);
@@ -55,7 +57,7 @@ public class PoisonPasteItem extends Item {
 
     @Override
     public UseAnim getUseAnimation(ItemStack stack) {
-        return UseAnim.BRUSH; // a rubbing/polishing motion
+        return UseAnim.BRUSH;
     }
 
     @Override
@@ -66,7 +68,7 @@ public class PoisonPasteItem extends Item {
     @Override
     public void onUseTick(Level level, LivingEntity entity, ItemStack stack, int remainingTicks) {
         if (coatableInOtherHand(entity, entity.getUsedItemHand()).isEmpty()) {
-            entity.stopUsingItem(); // the item left the hand mid-rub — abort
+            entity.stopUsingItem();
             return;
         }
         if ((RUB_TICKS - remainingTicks) % 6 == 0) {
@@ -74,7 +76,6 @@ public class PoisonPasteItem extends Item {
                 level.addParticle(ParticleTypes.CRIT,
                     entity.getX(), entity.getEyeY() - 0.2, entity.getZ(), 0.0, 0.0, 0.0);
             } else {
-                // A soft "rub a coating on" sound — fits smearing paste on far better than a harsh scrape.
                 level.playSound(null, entity.getX(), entity.getY(), entity.getZ(),
                     SoundEvents.HONEYCOMB_WAX_ON, SoundSource.PLAYERS, 0.7F, 0.9F);
             }
@@ -87,8 +88,6 @@ public class PoisonPasteItem extends Item {
         if (target.isEmpty() || level.isClientSide || !(entity instanceof Player player)) {
             return paste;
         }
-        // Coat exactly ONE item: in place if the held stack is alone, else split one off and hand the
-        // single coated piece back (so a stack never all gets coated — and never duplicates).
         if (target.getCount() == 1) {
             applyCoat(target, player);
         } else {
@@ -105,8 +104,6 @@ public class PoisonPasteItem extends Item {
         return paste;
     }
 
-    /** Stamp the poison onto a single item — food gets a dose-stacking {@link PoisonedFoodData} (with the
-     *  poisoner for the settlement-gated tooltip); an arrow gets the openly-shown {@code ARROW_POISON} id. */
     private void applyCoat(ItemStack one, Player player) {
         if (one.has(DataComponents.FOOD)) {
             PoisonedFoodData cur = one.get(BannerboundAntiquity.POISONED_FOOD.get());

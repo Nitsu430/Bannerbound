@@ -25,7 +25,14 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
-/** Client mirror of the server-owned Chronicle catalog and current player's read state. */
+/**
+ * Client mirror of the server-owned Chronicle (codex) catalog and the current player's read
+ * state: categories, entries, and the unlocked/seen sets, all replaced wholesale by
+ * {@link CodexSyncPayload} (sorted here for stable display order). Also drives the pop-up toast
+ * queue for newly unlocked entries and the auto-pin-tutorial preference; toggling that preference
+ * updates locally for instant UI feedback and echoes to the server. {@code OPEN_KEY} (default J)
+ * opens the Chronicle screen.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientChronicleState {
@@ -69,7 +76,6 @@ public final class ClientChronicleState {
         return autoPinTutorial;
     }
 
-    /** Flip the auto-pin preference: update locally for instant UI feedback and tell the server. */
     public static void toggleAutoPinTutorial() {
         autoPinTutorial = !autoPinTutorial;
         PacketDistributor.sendToServer(

@@ -36,36 +36,32 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 
 /**
- * Housing Orders rod — the home twin of the Workshop Orders rod ({@link WorkshopRodItem}). Homes
- * have NO anchor block: the rod binds to a home <em>id</em> and the FIRST committed box that
- * contains a <b>bed</b> <b>creates</b> the home (the bed is what tells us the building is meant to
- * be a residence — the home analog of the workshop's "must contain a work block" rule).
+ * Housing Orders rod - home twin of the Workshop Orders rod (WorkshopRodItem). Homes have NO
+ * anchor block: the rod binds to a home id, and the FIRST committed box (which must contain a bed)
+ * creates the home - the bed is what marks the building as a residence, the home analog of the
+ * workshop's "must contain a work block" rule. Each later box ADDS to the bound home's union and
+ * must stay connected.
  *
- * <p>Interaction map (identical to the Workshop Orders rod, bed-keyed):
- * <ul>
- *   <li><b>Right-click a block (unbound)</b> — A→B cycle; committing the first box (which must
- *       contain a bed) creates a new home and binds the rod to it (keep drawing to grow it).</li>
- *   <li><b>Right-click a block (bound)</b> — A→B cycle; each box ADDS to the bound home's union
- *       (must stay connected).</li>
- *   <li><b>Shift-right-click a block inside an existing home</b> — bind the rod to it and open its
- *       status panel (residents / appeal / beds).</li>
- *   <li><b>Shift-right-click in air</b> — unbind.</li>
- *   <li><b>Shift-left-click a block inside a home box</b> — remove that box (the smallest, when
- *       boxes overlap). Removing the last box deletes the home and evicts its residents.</li>
- * </ul>
+ * Interaction map: right-click a block cycles A->B (unbound: first commit creates + binds a home;
+ * bound: grows it). Shift-right-click inside an existing home binds the rod and opens its status
+ * panel; shift-right-click in air unbinds. Shift-left-click a block removes the box under the
+ * cursor (the smallest, when boxes overlap); removing the last box deletes the home and evicts its
+ * residents (same path as a bed loss - *_HOME thoughts cleared, sleepers woken).
+ *
+ * Left-click has no vanilla item hook, so that gesture arrives via PlayerInteractEvent.LeftClickBlock
+ * (Events); it is cancelled so the rod never mines the block, and a short item cooldown makes the
+ * held button remove one box per click instead of chewing through stacked boxes. MAX_UNION_SPAN is
+ * a hard per-axis ceiling on the whole union; the per-era soft cap (BROKEN_TOO_BIG) is enforced in
+ * Homes.validate from HousingLimits.
  */
 public class HousingOrdersItem extends Item {
     public static final int MAX_BOX_DIM = 32;
     public static final int MAX_BOXES_PER_HOME = 128;
-    /** Hard per-axis ceiling on the whole box union — the per-era soft cap (BROKEN_TOO_BIG) is
-     *  enforced in {@link Homes#validate} from {@link HousingLimits}. */
     public static final int MAX_UNION_SPAN = 2 * HousingLimits.MAX_RADIUS + 1;
 
     public HousingOrdersItem(Properties properties) {
         super(properties);
     }
-
-    // ─── Shift-right-click in air → unbind ──────────────────────────────────────────────────────
 
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
@@ -89,8 +85,6 @@ public class HousingOrdersItem extends Item {
         return InteractionResultHolder.pass(stack);
     }
 
-    // ─── Right-click on a block ─────────────────────────────────────────────────────────────────
-
     @Override
     public InteractionResult useOn(UseOnContext context) {
         Level level = context.getLevel();
@@ -102,7 +96,6 @@ public class HousingOrdersItem extends Item {
         BlockPos clicked = context.getClickedPos();
 
         if (player.isShiftKeyDown()) {
-            // Shift-right-click inside an existing home → bind + open its status panel.
             Homes.Hit hit = Homes.findAt(sl, clicked);
             if (hit != null) {
                 stack.set(BannerboundCore.BOUND_HOME_ID.get(), hit.home().id().toString());
@@ -116,7 +109,6 @@ public class HousingOrdersItem extends Item {
             return InteractionResult.CONSUME;
         }
 
-        // Non-shift: A→B cycle (bound = grow that home; unbound = first commit creates one).
         BlockPos a = stack.get(BannerboundCore.MARKER_POINT_A.get());
         if (a == null) {
             stack.set(BannerboundCore.MARKER_POINT_A.get(), clicked.immutable());
@@ -131,8 +123,6 @@ public class HousingOrdersItem extends Item {
         return InteractionResult.CONSUME;
     }
 
-    /** Caps + overlap + connectivity + bed checks; creates the home on the first box; registers the
-     *  box, broadcasts, and re-validates so the player sees the new status immediately. */
     private static void tryCommitBox(ServerLevel sl, ServerPlayer sp, ItemStack stack,
                                      BlockPos a, BlockPos b) {
         int worstAxis = Math.max(Math.abs(b.getX() - a.getX()) + 1,
@@ -170,7 +160,6 @@ public class HousingOrdersItem extends Item {
             return;
         }
 
-        // Prospective union: solids present, connected, within the union span cap.
         List<BlockSelection> prospective = new ArrayList<>(registry.findByHome(homeId));
         prospective.add(candidate);
         Set<BlockPos> marked = Homes.collectMarkedSolids(sl, prospective);
@@ -186,7 +175,6 @@ public class HousingOrdersItem extends Item {
             reject(sp, "bannerbound.housing_orders.too_big", MAX_UNION_SPAN);
             return;
         }
-        // The first box must contain a bed — that's what makes the building a home.
         if (creating && !Homes.containsBedHead(sl, marked)) {
             reject(sp, "bannerbound.housing_orders.no_bed");
             return;
@@ -210,10 +198,6 @@ public class HousingOrdersItem extends Item {
             true);
     }
 
-    // ─── Shift-left-click on a block → remove the box under the cursor ──────────────────────────
-
-    /** Removes the home box containing {@code pos} (the smallest, when boxes overlap). Removing the
-     *  last box deletes the home record and evicts its residents. */
     private static void removeBoxAt(ServerLevel sl, ServerPlayer sp, BlockPos pos) {
         BlockSelectionRegistry registry = BlockSelectionRegistry.get(sl);
         BlockSelection target = null;
@@ -237,8 +221,6 @@ public class HousingOrdersItem extends Item {
         registry.unregister(target.rodId());
 
         if (owner != null && home != null && registry.findByHome(home.id()).isEmpty()) {
-            // Last box gone → the home is deleted; its residents are evicted (same path as a
-            // bed loss — *_HOME thoughts cleared, sleepers woken).
             List<UUID> residents = new ArrayList<>(home.residents());
             owner.removeHome(home.id());
             if (!residents.isEmpty()) HousingEvictionHook.onEvict(sl, residents);
@@ -256,8 +238,6 @@ public class HousingOrdersItem extends Item {
         SelectionBroadcaster.broadcast(sl.getServer());
     }
 
-    /** Left-click routing for the rod: vanilla has no item hook for attack, so the gesture comes
-     *  in through the event. Cancelled on both sides so the rod never mines the clicked block. */
     @net.neoforged.fml.common.EventBusSubscriber(modid = BannerboundCore.MODID)
     public static final class Events {
         private Events() {
@@ -277,26 +257,17 @@ public class HousingOrdersItem extends Item {
         }
     }
 
-    /** Builds the home status snapshot and opens the panel on the requesting player. Mirrors the
-     *  old {@code HouseBlock.useWithoutItem} body, now keyed off the home record (no block). */
     private static void openStatusPanel(ServerPlayer sp, ServerLevel sl, Homes.Hit hit) {
         Home home = hit.home();
-        // Dev diagnostic in the chat log (not the action bar) so a "why broken?" case is readable.
         sp.displayClientMessage(Component.literal("[home] " + Homes.diagnose(sl, home))
             .withStyle(ChatFormatting.DARK_GRAY), false);
         net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(sp, buildStatusPayload(sl, home));
     }
 
-    /** Re-sends the House status panel to a player who is already looking at it — used after an
-     *  in-panel resident unassign so the residents list, occupancy bar, and happiness refresh in
-     *  place. Skips the dev diagnostic chat line that {@link #openStatusPanel} prints on open. */
     public static void refreshStatusPanel(ServerPlayer sp, ServerLevel sl, Home home) {
         net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(sp, buildStatusPayload(sl, home));
     }
 
-    /** Snapshots a home into the panel payload: status, occupancy, appeal/beauty, crowdedness,
-     *  happiness, the demand checklist, and each resident's styled name + id (parallel lists, in
-     *  residency order). */
     private static OpenHouseStatusPayload buildStatusPayload(ServerLevel sl, Home home) {
         Component statusText = Component.translatable(
             "bannerbound.house.status." + home.status().name().toLowerCase());
@@ -338,7 +309,6 @@ public class HousingOrdersItem extends Item {
             Component.translatable(key, args).withStyle(ChatFormatting.RED), true);
     }
 
-    /** The rod's bound home id, or null when unbound / malformed. */
     @Nullable
     public static UUID boundHomeId(ItemStack stack) {
         String raw = stack.get(BannerboundCore.BOUND_HOME_ID.get());

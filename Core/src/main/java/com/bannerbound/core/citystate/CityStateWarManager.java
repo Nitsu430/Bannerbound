@@ -46,38 +46,45 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.phys.AABB;
 
 /**
- * War with AI city-states (CITY_STATES plan §2). Players declare; city-states only DEFEND (no raids).
- * A city-state at war fields {@link MercenaryEntity} defenders — much slower to respawn than barbarians,
- * so sustained pressure drains them and lets you break the banner. Breaking the banner captures the
- * city-state; the victor then chooses its fate (raze / vassal / annex — annex locked until a free
- * settlement slot exists, far-future Feudalism).
+ * War with AI city-states (CITY_STATES plan section 2). Players declare; city-states only DEFEND --
+ * they never raid. A city-state at war fields {@link MercenaryEntity} defenders that respawn far
+ * slower than barbarians (attrition: one recruit back every MERC_RESPAWN_TICKS), so sustained
+ * pressure drains the garrison and lets you break the banner. Breaking the banner does NOT capture:
+ * it turns the standard into a carryable item that must be carried to YOUR town hall ({@link #tryScore})
+ * to win. The victor then chooses the city-state's fate -- raze / vassal / annex (annex is locked
+ * until a free settlement slot exists, far-future Feudalism); an ignored capture auto-razes after
+ * CAPTURE_TIMEOUT.
  *
- * <p>Mirrors the static-manager shape of {@code BarbarianCampManager}; driven from
- * {@code ResearchEvents.onServerTick}.
+ * <p>Entry is government-gated via {@link #routeAction}, paralleling DiplomacyManager.routeAction:
+ * NONE and an authorised chief act directly, COUNCIL sends declare/peace to a ChatVoteManager vote
+ * while capture resolution acts directly (the war is already won). Mirrors the static-manager shape
+ * of BarbarianCampManager and is driven from {@code ResearchEvents.onServerTick} via {@link #tickAll}.
+ *
+ * <p>Garrisons are transient (GARRISONS map, never saved) and respawn on player approach. Standard
+ * bookkeeping reuses the settlement stolen-standard item plumbing -- DiplomacyManager delegates its
+ * pickup / drop / score / logout hooks here. Merc-cap scales with prosperity so sacking a rich trade
+ * partner costs more defenders than a starving hamlet.
  */
 @ApiStatus.Internal
 public final class CityStateWarManager {
-    private static final int WAR_TICK_INTERVAL = 20;          // pending/garrison/timeout cadence
-    private static final int WAR_WARNING_TICKS = 20 * 60;     // 60s declaration countdown
-    private static final long REDECLARE_COOLDOWN = 20L * 60 * 30;  // 30 min before re-declaring
-    private static final long CAPTURE_TIMEOUT = 20L * 60 * 30;     // captured → auto-resolved (raze) if ignored
-    private static final long MERC_RESPAWN_TICKS = 20L * 120;      // one defender recruited every 2 min
-    private static final double GARRISON_DIST_SQ = 64.0 * 64.0;    // spawn defenders when a player is this near
-    private static final long DROPPED_RETURN_TICKS = 20L * 60 * 5; // a dropped standard returns after 5 min
+    private static final int WAR_TICK_INTERVAL = 20;
+    private static final int WAR_WARNING_TICKS = 20 * 60;
+    private static final long REDECLARE_COOLDOWN = 20L * 60 * 30;
+    private static final long CAPTURE_TIMEOUT = 20L * 60 * 30;
+    private static final long MERC_RESPAWN_TICKS = 20L * 120;
+    private static final double GARRISON_DIST_SQ = 64.0 * 64.0;
+    private static final long DROPPED_RETURN_TICKS = 20L * 60 * 5;
 
-    /** Transient live-mercenary tracking per city-state (never saved; respawns on approach). */
     private static final Map<UUID, Garrison> GARRISONS = new HashMap<>();
 
     private static final class Garrison {
         final Set<UUID> ids = new HashSet<>();
-        int killed;            // attrition — defenders lost; recruited back one per MERC_RESPAWN_TICKS
+        int killed;
         long lastRecruitTick;
     }
 
     private CityStateWarManager() {
     }
-
-    // ─── Government-gated entry (parallels DiplomacyManager.routeAction for city-state targets) ─────
 
     public static void routeAction(ServerPlayer actor, int action, CityState cs) {
         if (!CityStateManager.enabled()) return;
@@ -98,7 +105,6 @@ public final class CityStateWarManager {
                 }
             }
             case COUNCIL -> {
-                // Declare/peace go to a council vote; capture resolution acts directly (war's already won).
                 com.bannerbound.core.api.settlement.ChatVoteManager.Kind kind = voteKind(action);
                 if (kind != null) {
                     com.bannerbound.core.api.settlement.ChatVoteManager.start(
@@ -116,11 +122,10 @@ public final class CityStateWarManager {
                 com.bannerbound.core.api.settlement.ChatVoteManager.Kind.DECLARE_WAR;
             case DiplomacyActionPayload.OFFER_PEACE ->
                 com.bannerbound.core.api.settlement.ChatVoteManager.Kind.OFFER_PEACE;
-            default -> null; // RAZE/VASSAL/ANNEX resolve directly
+            default -> null;
         };
     }
 
-    /** Council vote resolution: {@code vote.targetCitizen} is the city-state id. */
     public static void performCouncilAction(MinecraftServer server, Settlement s,
             com.bannerbound.core.api.settlement.ChatVoteManager.ChatVote vote) {
         CityState cs = CityStateData.get(server.overworld()).getById(vote.targetCitizen);
@@ -145,8 +150,6 @@ public final class CityStateWarManager {
         }
     }
 
-    // ─── Declare / peace ───────────────────────────────────────────────────────────────────────
-
     public static boolean declareWar(MinecraftServer server, Settlement s, CityState cs) {
         ServerLevel level = server.overworld();
         long now = level.getGameTime();
@@ -168,7 +171,6 @@ public final class CityStateWarManager {
     public static boolean offerPeace(MinecraftServer server, Settlement s, CityState cs) {
         CityStateWar w = cs.warWith(s.id());
         if (w == null || (!w.active && w.pendingTicks <= 0) || w.capturedAt > 0) return false;
-        // City-states are defenders — they accept peace immediately.
         endWar(server, s, cs, w);
         announce(server, s, Component.translatable("bannerbound.citystate.war.peace",
             cityName(cs)).withStyle(ChatFormatting.GREEN));
@@ -182,14 +184,12 @@ public final class CityStateWarManager {
         w.peaceOffered = false;
         w.capturedAt = 0;
         w.redeclareAfter = now + REDECLARE_COOLDOWN;
-        if (cs.standardInPlay && !cs.isFrozen()) returnStandard(server, cs); // peace recovers a carried standard
+        if (cs.standardInPlay && !cs.isFrozen()) returnStandard(server, cs);
         disbandGarrisonIfNoWars(cs);
         CityStateData.get(server.overworld()).setDirty();
         DiplomacyManager.broadcastDiplomacyState(server, s);
     }
 
-    /** True if this settlement is in a live war (pending declaration, active, or holding a
-     *  capture) with ANY city-state. Used to block disband while a settlement is at war. */
     public static boolean isSettlementAtWar(ServerLevel level, UUID settlementId) {
         for (CityState cs : CityStateData.get(level).all()) {
             CityStateWar w = cs.warWith(settlementId);
@@ -198,10 +198,6 @@ public final class CityStateWarManager {
         return false;
     }
 
-    /** Called when a player settlement is removed (disband / collapse / conquest). Drops the
-     *  settlement's war + relationship + discovery records from every city-state so they don't
-     *  linger as orphans referencing a deleted settlement, and stands down any garrison that was
-     *  only fighting this settlement. */
     public static void onSettlementRemoved(ServerLevel level, UUID settlementId) {
         boolean changed = false;
         for (CityState cs : CityStateData.get(level).all()) {
@@ -213,8 +209,6 @@ public final class CityStateWarManager {
         if (changed) CityStateData.get(level).setDirty();
     }
 
-    // ─── Capture resolution (raze / vassal / annex) ───────────────────────────────────────────────
-
     public static boolean resolveCapture(MinecraftServer server, Settlement s, CityState cs, int action) {
         CityStateWar w = cs.warWith(s.id());
         if (w == null || w.capturedAt <= 0) return false;
@@ -224,15 +218,15 @@ public final class CityStateWarManager {
             case DiplomacyActionPayload.RAZE -> {
                 discardGarrison(level, cs);
                 removeStandardItems(level, cs.id);
-                java.util.Set<Long> area = data.razeVillage(cs); // permanent ruin memory + remove record
-                com.bannerbound.core.ruin.RuinManager.queue(level, area); // buildings crumble + villagers go
+                java.util.Set<Long> area = data.razeVillage(cs);
+                com.bannerbound.core.ruin.RuinManager.queue(level, area);
                 announce(server, s, Component.translatable("bannerbound.citystate.razed",
                     cityName(cs)).withStyle(ChatFormatting.RED));
             }
             case DiplomacyActionPayload.VASSAL -> {
                 cs.vassalOf = s.id();
-                cs.wars.clear();              // peace with everyone; it's now your protectorate
-                cs.bannerStamped = false;     // its banner is re-raised next time you're near
+                cs.wars.clear();
+                cs.bannerStamped = false;
                 cs.relScore.put(s.id(), 100);
                 disbandGarrisonIfNoWars(cs);
                 data.setDirty();
@@ -240,7 +234,6 @@ public final class CityStateWarManager {
                     cityName(cs), s.factionName()).withStyle(ChatFormatting.GOLD));
             }
             case DiplomacyActionPayload.ANNEX -> {
-                // Annex needs a free settlement slot (Feudalism, far-future). Locked for now.
                 return false;
             }
             default -> { return false; }
@@ -249,10 +242,6 @@ public final class CityStateWarManager {
         return true;
     }
 
-    // ─── Banner capture (break the standard during an active war) ──────────────────────────────────
-
-    /** A block at a city-state's banner position was broken during an active war: the standard becomes
-     *  a carryable item — carry it to YOUR town hall to capture (it is NOT captured by the break). */
     public static boolean onBannerBroken(ServerLevel level, ServerPlayer breaker, BlockPos pos) {
         CityStateData data = CityStateData.get(level);
         CityState cs = data.bannerAt(pos);
@@ -281,8 +270,6 @@ public final class CityStateWarManager {
         return true;
     }
 
-    // ─── Carryable standard (reuses the settlement stolen-standard item plumbing) ──────────────────
-
     private static ItemStack standardStack(CityState cs) {
         DyeColor dye = DyeColor.byId((int) Math.floorMod(cs.languageSeed, 16));
         ItemStack stack = new ItemStack(BannerBlock.byColor(dye).asItem());
@@ -299,7 +286,6 @@ public final class CityStateWarManager {
         level.addFreshEntity(item);
     }
 
-    /** Delegated from {@code DiplomacyManager.canPickupStolenStandard} for a city-state standard. */
     public static boolean canPickup(MinecraftServer server, ServerPlayer player, ItemEntity item, java.util.UUID csId) {
         ServerLevel level = server.overworld();
         CityState cs = CityStateData.get(level).getById(csId);
@@ -311,7 +297,6 @@ public final class CityStateWarManager {
         return false;
     }
 
-    /** Delegated from {@code DiplomacyManager.onStolenStandardPickedUp}. */
     public static void onPickedUp(MinecraftServer server, ServerPlayer player, java.util.UUID csId) {
         ServerLevel level = server.overworld();
         CityStateData data = CityStateData.get(level);
@@ -329,7 +314,6 @@ public final class CityStateWarManager {
         data.setDirty();
     }
 
-    /** Delegated from {@code DiplomacyManager.onStolenStandardDropped}. */
     public static void onDropped(MinecraftServer server, ServerPlayer player, ItemEntity item, java.util.UUID csId) {
         ServerLevel level = server.overworld();
         CityState cs = CityStateData.get(level).getById(csId);
@@ -342,7 +326,6 @@ public final class CityStateWarManager {
         CityStateData.get(level).setDirty();
     }
 
-    /** Right-clicked own town hall holding a city-state standard → capture. Returns true if handled. */
     public static boolean tryScore(MinecraftServer server, ServerPlayer player, BlockPos clickedPos) {
         ServerLevel level = server.overworld();
         Settlement scorer = SettlementData.get(level).getByPlayer(player.getUUID());
@@ -354,7 +337,7 @@ public final class CityStateWarManager {
         java.util.UUID csId = DiplomacyManager.stolenStandardTarget(held);
         CityStateData data = CityStateData.get(level);
         CityState cs = csId == null ? null : data.getById(csId);
-        if (cs == null) return false; // not a city-state standard — let settlement handler try
+        if (cs == null) return false;
         CityStateWar w = cs.warWith(scorer.id());
         if (w == null || !w.active) {
             player.sendSystemMessage(Component.translatable("bannerbound.diplomacy.standard.not_enemy")
@@ -376,7 +359,6 @@ public final class CityStateWarManager {
         return true;
     }
 
-    /** Delegated from {@code DiplomacyManager.dropCarriedStandards} (logout/death/dimension). */
     public static void dropCarriedStandards(MinecraftServer server, ServerPlayer player) {
         ServerLevel level = server.overworld();
         CityStateData data = CityStateData.get(level);
@@ -397,7 +379,6 @@ public final class CityStateWarManager {
         }
     }
 
-    /** Per-tick sweep: keep the carrier slowed, auto-return a long-dropped or lost standard. */
     private static void reconcileStandards(ServerLevel level) {
         CityStateData data = CityStateData.get(level);
         MinecraftServer server = level.getServer();
@@ -409,10 +390,7 @@ public final class CityStateWarManager {
                 carrier.addEffect(new MobEffectInstance(MobEffects.MOVEMENT_SLOWDOWN, 45, 0, true, false, true));
                 continue;
             }
-            // Not on its recorded carrier — is it lying in the world? The scan only sees loaded
-            // entities, so a standard resting in an unloaded chunk would read as "lost", the
-            // banner would re-raise, and breaking it again would mint a second standard. Defer
-            // the whole check until the recorded drop chunk is actually loaded.
+            // Defer until the drop chunk is loaded: an unloaded standard reads as "lost" -> banner re-raises -> breaking it again mints a duplicate.
             if (cs.standardDroppedPos != null) {
                 net.minecraft.world.level.ChunkPos dropChunk =
                     new net.minecraft.world.level.ChunkPos(cs.standardDroppedPos);
@@ -431,7 +409,6 @@ public final class CityStateWarManager {
         }
     }
 
-    /** The standard is lost/recovered: clear it, wipe stray items, and let the banner re-raise. */
     public static void returnStandard(MinecraftServer server, CityState cs) {
         if (cs == null) return;
         ServerLevel level = server.overworld();
@@ -440,7 +417,7 @@ public final class CityStateWarManager {
         cs.standardCarrier = null;
         cs.standardDroppedPos = null;
         cs.standardAutoReturnAt = 0;
-        cs.bannerStamped = false; // re-raised on the next realize pass
+        cs.bannerStamped = false;
         cs.bannerRazed = false;
         CityStateData.get(level).setDirty();
         net.minecraft.network.chat.Component msg = Component.translatable(
@@ -490,8 +467,6 @@ public final class CityStateWarManager {
         }
     }
 
-    // ─── Tick: countdown, garrisons, capture timeout ──────────────────────────────────────────────
-
     public static void tickAll(MinecraftServer server) {
         if (!CityStateManager.enabled()) return;
         ServerLevel level = server.overworld();
@@ -520,7 +495,7 @@ public final class CityStateWarManager {
                 }
                 if (w.active) anyActive = true;
                 if (w.capturedAt > 0 && now - w.capturedAt >= CAPTURE_TIMEOUT && s != null) {
-                    resolveCapture(server, s, cs, DiplomacyActionPayload.RAZE); // ignored capture → razed
+                    resolveCapture(server, s, cs, DiplomacyActionPayload.RAZE);
                 }
             }
             if (anyActive) tickGarrison(level, cs, now);
@@ -529,22 +504,18 @@ public final class CityStateWarManager {
         reconcileStandards(level);
     }
 
-    // ─── Mercenary garrison (defend-only; slow attrition-based respawn) ────────────────────────────
-
     private static void tickGarrison(ServerLevel level, CityState cs, long now) {
         if (nearestPlayerHorizSq(level, cs.center) > GARRISON_DIST_SQ) {
-            discardGarrison(level, cs); // off-screen — drop the live entities (not counted as killed)
+            discardGarrison(level, cs); // off-screen discard; not counted as killed (no attrition)
             return;
         }
         Garrison g = GARRISONS.computeIfAbsent(cs.id, k -> new Garrison());
-        // Prune dead — each death is attrition the city-state must recruit back slowly.
         g.ids.removeIf(u -> {
             Entity e = level.getEntity(u);
             if (e == null || !e.isAlive()) { g.killed++; return true; }
             return false;
         });
         int cap = mercCap(cs);
-        // Slow recruitment: one lost defender comes back every MERC_RESPAWN_TICKS.
         if (g.killed > 0 && now - g.lastRecruitTick >= MERC_RESPAWN_TICKS) {
             g.killed--;
             g.lastRecruitTick = now;
@@ -576,8 +547,6 @@ public final class CityStateWarManager {
     }
 
     private static int mercCap(CityState cs) {
-        // Prosperity-scaled: a thriving trade partner fields a bigger garrison than a starving hamlet
-        // of the same size — sacking your best customer should cost you (plan Phase 3).
         int cap = 3 + (int) (cs.believedPop * (0.15 + 0.10 * cs.prosperity) * cs.difficulty.factor());
         return Math.max(3, Math.min(16, cap));
     }
@@ -598,15 +567,12 @@ public final class CityStateWarManager {
         int py = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, px, pz);
         m.moveTo(px + 0.5, py, pz + 0.5, rng.nextFloat() * 360.0F, 0.0F);
         if (!level.addFreshEntity(m)) return null;
-        // Melee-only loadout from the city-state's tech (prefer the close-combat weapon).
         String meleeId = cap.meleeWeaponItem().isEmpty() ? cap.weaponItem() : cap.meleeWeaponItem();
         Item melee = meleeId.isEmpty() ? Items.AIR
             : BuiltInRegistries.ITEM.get(ResourceLocation.parse(meleeId));
         m.markMercenary(cs.center, cs.id, cap.damage(), cap.attackSpeed(), melee);
         return m;
     }
-
-    // ─── Helpers ──────────────────────────────────────────────────────────────────────────────
 
     private static double nearestPlayerHorizSq(ServerLevel level, BlockPos center) {
         double best = Double.MAX_VALUE;
@@ -630,8 +596,6 @@ public final class CityStateWarManager {
         }
     }
 
-    /** Op test: forces an immediate active war (no countdown) between the player's settlement and the
-     *  nearest discovered city-state. */
     public static boolean forceWarNearest(ServerLevel level, ServerPlayer player) {
         Settlement s = SettlementData.get(level).getByPlayer(player.getUUID());
         if (s == null) return false;

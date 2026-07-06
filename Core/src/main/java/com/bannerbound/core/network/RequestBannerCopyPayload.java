@@ -10,10 +10,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: the player clicked the banner editor's "Take a copy" button — asks the server to hand
- * them a cosmetic banner item carrying the faction's full design (color + Heraldry patterns).
- * Placed copies are pure decoration while the main banner stands; the server re-validates
- * membership and Heraldry access.
+ * C->S: the player clicked the banner editor's "Take a copy" button -- asks the server to hand them
+ * a cosmetic banner item carrying the faction's full design (color + Heraldry patterns). Placed
+ * copies are pure decoration while the main banner stands; the server re-validates membership and
+ * Heraldry access.
  */
 @ApiStatus.Internal
 public record RequestBannerCopyPayload() implements CustomPacketPayload {

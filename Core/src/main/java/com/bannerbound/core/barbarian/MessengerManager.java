@@ -36,26 +36,33 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * Drives barbarian diplomats: a camp periodically sends a messenger to a SPECIFIC discovered settlement
  * (not the whole faction). The messenger travels with the trader-style ghost/real pattern (real entity
  * within ~64 blocks of a player, dead-reckoned ghost when far, so you can meet/kill it en route), then
- * waits at the settlement's hall to be right-clicked → {@code BarbarianParleyScreen}.
+ * waits at the settlement's hall to be right-clicked -> {@code BarbarianParleyScreen}. Right-click either
+ * opens a barter screen or resolves a fixed parley choice (accept/refuse/trade); a defer buys a grace
+ * window (GRACE_TICKS) to fetch a deferred demand, tracked per-settlement on the camp.
  *
- * <p>Journeys are TRANSIENT (static, not persisted) — a server restart simply drops in-flight envoys
+ * <p>Journeys are TRANSIENT (static, not persisted) - a server restart simply drops in-flight envoys
  * and the camp schedules another later. Relationship outcomes (accept/refuse/trade/kill) persist on the
- * camp record via {@link BarbarianCampManager#applyRelationDelta}.
+ * camp record via {@link BarbarianCampManager#applyRelationDelta}, which also broadcasts the tier shift.
+ *
+ * <p>Contextual offers (tribute/trade amounts) scale to the target's wealth/strength and current
+ * standing. They are computed deterministically from slow-moving settlement state so the offer shown at
+ * open matches the cost charged on accept - no snapshot is stored. Envoy realization is gated on the
+ * target chunk already being loaded so it never force-loads terrain.
  */
 public final class MessengerManager {
     private static final double REALIZE_SQ = 64.0 * 64.0;
     private static final double GHOST_SQ = 112.0 * 112.0;
-    private static final double ARRIVE = 8.0;            // within this of the hall = "arrived"
-    private static final double GHOST_SPEED = 0.18;      // blocks/tick while dead-reckoned
-    private static final double MOVE_SPEED = 0.7;        // nav speed multiplier while real
-    private static final int TICK_INTERVAL = 10;         // journeys advance every N ticks
-    private static final int DISPATCH_INTERVAL = 200;    // consider sending new messengers this often
-    private static final int MAX_ACTIVE = 4;             // global concurrent messengers
-    private static final long FIRST_DELAY = 2400L;       // first envoy ~2 min after discovery
-    private static final long SCOUT_INTERVAL = 16000L;   // then roughly every ~13 min
-    private static final long JOURNEY_MAX = 12000L;      // give up the trek after this long
-    private static final long WAIT_AFTER_ARRIVE = 4800L; // envoy waits ~4 min at the hall, then leaves
-    private static final long GRACE_TICKS = 48000L;      // "2 days" to fetch a deferred demand (2× 24000)
+    private static final double ARRIVE = 8.0;
+    private static final double GHOST_SPEED = 0.18;
+    private static final double MOVE_SPEED = 0.7;
+    private static final int TICK_INTERVAL = 10;
+    private static final int DISPATCH_INTERVAL = 200;
+    private static final int MAX_ACTIVE = 4;
+    private static final long FIRST_DELAY = 2400L;
+    private static final long SCOUT_INTERVAL = 16000L;
+    private static final long JOURNEY_MAX = 12000L;
+    private static final long WAIT_AFTER_ARRIVE = 4800L;
+    private static final long GRACE_TICKS = 48000L; // 2 game-days (2 x 24000 ticks) to fetch a deferred demand
 
     private static final int ACCEPT_DELTA = 25;
     private static final int REFUSE_DELTA = -30;
@@ -99,7 +106,6 @@ public final class MessengerManager {
         }
     }
 
-    // ─── Dispatch ──────────────────────────────────────────────────────────────────────────────────
     private static void maybeDispatch(ServerLevel level, long now) {
         if (JOURNEYS.size() >= MAX_ACTIVE) return;
         BarbarianData data = BarbarianData.get(level);
@@ -108,8 +114,8 @@ public final class MessengerManager {
             if (JOURNEYS.size() >= MAX_ACTIVE) break;
             if (camp.razed || BarbarianCampManager.hasActiveRaid(camp.id)) continue;
             if (hasJourneyFor(camp.id)) continue;
-            if (tryDispatchGrace(level, sd, data, camp, now)) continue; // overdue tribute → send a collector
-            if (camp.nextScoutTick == 0L) { // lazy init: first envoy a while after the camp is known
+            if (tryDispatchGrace(level, sd, data, camp, now)) continue;
+            if (camp.nextScoutTick == 0L) {
                 camp.nextScoutTick = now + FIRST_DELAY;
                 data.setDirty();
                 continue;
@@ -126,9 +132,6 @@ public final class MessengerManager {
         }
     }
 
-    /** When a settlement's deferred tribute comes due and someone's online, send a collector envoy to
-     *  it (the barter it opens shows the now-owed demand). Keeps the grace flag until it can actually be
-     *  collected, so an offline settlement isn't silently let off. Returns true if a journey was queued. */
     private static boolean tryDispatchGrace(ServerLevel level, SettlementData sd, BarbarianData data,
                                             BarbarianCamp camp, long now) {
         for (Map.Entry<UUID, Long> e : new ArrayList<>(camp.graceUntil.entrySet())) {
@@ -141,7 +144,7 @@ public final class MessengerManager {
                 if (s.members().contains(p.getUUID())) { online = true; break; }
             }
             BlockPos hall = s.hasTownHall() ? s.townHallPos() : s.bannerPos();
-            if (!online || hall == null) continue; // retry next pass once they're back
+            if (!online || hall == null) continue;
             camp.graceUntil.remove(sid);
             data.setDirty();
             JOURNEYS.put(UUID.randomUUID(), new Journey(camp.id, sid, hall, camp.center, now + JOURNEY_MAX));
@@ -150,7 +153,6 @@ public final class MessengerManager {
         return false;
     }
 
-    /** A discovered settlement of this camp that currently has an online member, or null. */
     private static Settlement pickTarget(ServerLevel level, SettlementData sd, BarbarianCamp camp) {
         for (UUID sid : camp.discoveredBy) {
             Settlement s = sd.getById(sid);
@@ -169,9 +171,6 @@ public final class MessengerManager {
         return false;
     }
 
-    /** Cancel any in-flight envoy bound for a settlement that no longer exists, discarding a
-     *  realized messenger so it doesn't loiter toward a deleted town hall. Called from the
-     *  settlement-removed hook in {@link BarbarianCampManager#onSettlementRemoved}. */
     static void onSettlementRemoved(ServerLevel level, UUID settlementId) {
         JOURNEYS.values().removeIf(j -> {
             if (!settlementId.equals(j.settlementId)) return false;
@@ -183,27 +182,19 @@ public final class MessengerManager {
         });
     }
 
-    /**
-     * Op test: immediately dispatch an envoy from {@code camp} to {@code settlement}, bypassing the
-     * discovery + scout-timer gates so the whole travel → realize → arrive → parley flow can be watched
-     * on demand. Marks the settlement discovered (so parley validation passes) and pushes the scout
-     * timer out so the camp doesn't double-send. Returns the ghost-travel distance in blocks, or -1 if
-     * the settlement has no hall or an envoy from this camp is already en route.
-     */
     public static double forceDispatch(ServerLevel level, BarbarianCamp camp, Settlement settlement) {
         if (camp.razed || hasJourneyFor(camp.id)) return -1;
         BlockPos hall = settlement.hasTownHall() ? settlement.townHallPos() : settlement.bannerPos();
         if (hall == null) return -1;
         long now = level.getGameTime();
-        camp.discoveredBy.add(settlement.id()); // parley re-checks the player is a member of this id
-        camp.nextScoutTick = now + SCOUT_INTERVAL; // suppress an immediate organic dispatch on top of this
+        camp.discoveredBy.add(settlement.id());
+        camp.nextScoutTick = now + SCOUT_INTERVAL;
         BarbarianData.get(level).setDirty();
         JOURNEYS.put(UUID.randomUUID(),
             new Journey(camp.id, settlement.id(), hall, camp.center, now + JOURNEY_MAX));
         return Math.sqrt(camp.center.distSqr(hall));
     }
 
-    // ─── Journey tick (realize near players, ghost when far) ────────────────────────────────────────
     private static void tickJourney(ServerLevel level, UUID key, Journey j, long now) {
         BarbarianCamp camp = BarbarianData.get(level).getById(j.campId);
         if (camp == null || camp.razed || now > j.deadlineTick) {
@@ -228,7 +219,6 @@ public final class MessengerManager {
             tickReal(level, j, entity, camp, now);
         }
 
-        // Envoy waited too long unanswered → it leaves (treated as ignored, no penalty).
         if (j.arrived && now > j.arriveWaitUntil) cancel(level, key, j);
     }
 
@@ -241,7 +231,7 @@ public final class MessengerManager {
             j.gz = b.getZ();
             return b;
         }
-        j.entityId = null; // entity vanished — fall back to ghost from last position
+        j.entityId = null;
         j.ghost = true;
         return null;
     }
@@ -249,7 +239,7 @@ public final class MessengerManager {
     private static BarbarianEntity realize(ServerLevel level, Journey j, BarbarianCamp camp) {
         int bx = (int) Math.floor(j.gx);
         int bz = (int) Math.floor(j.gz);
-        if (!level.hasChunk(bx >> 4, bz >> 4)) return null; // not loaded yet — stay ghost
+        if (!level.hasChunk(bx >> 4, bz >> 4)) return null; // chunk not loaded yet -> stay ghost, never force-load
         int by = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, bx, bz);
         BarbarianEntity m = BannerboundCore.BARBARIAN.get().create(level);
         if (m == null) return null;
@@ -262,7 +252,7 @@ public final class MessengerManager {
         m.markSimulated();
         m.moveTo(bx + 0.5, by, bz + 0.5, level.random.nextFloat() * 360.0F, 0.0F);
         if (!level.addFreshEntity(m)) return null;
-        m.markMessenger(camp.center, camp.id, j.settlementId); // strips AI; manager drives nav
+        m.markMessenger(camp.center, camp.id, j.settlementId);
         j.entityId = m.getUUID();
         j.ghost = false;
         return m;
@@ -297,7 +287,7 @@ public final class MessengerManager {
         if (dx * dx + dz * dz <= ARRIVE * ARRIVE) {
             entity.getNavigation().stop();
             if (!j.arrived) markArrived(j, now);
-            if (!j.announced) { // announce once, when it's at the hall and a player is present
+            if (!j.announced) {
                 announceArrival(level, camp, j.settlementId);
                 j.announced = true;
             }
@@ -357,8 +347,6 @@ public final class MessengerManager {
         }
     }
 
-    /** Tell every online member of {@code sid} their standing with the camp shifted — camp name in its
-     *  colour, the line green (improve) or red (worsen). Fired on the player's parley choice / a kill. */
     private static void broadcastRelationShift(ServerLevel level, BarbarianCamp camp, UUID sid,
                                                boolean improved) {
         Settlement s = SettlementData.get(level).getById(sid);
@@ -371,24 +359,17 @@ public final class MessengerManager {
         for (ServerPlayer p : level.players()) {
             if (s.members().contains(p.getUUID())) p.displayClientMessage(msg, false);
         }
-        // Refresh the Diplomacy tab so the camp's new stance/score shows live if it's open.
         if (level.getServer() != null) {
             com.bannerbound.core.api.settlement.DiplomacyManager.broadcastDiplomacyState(level.getServer(), s);
         }
     }
 
-    // ─── Contextual offers: scale tribute + trades to the target's wealth/strength and our standing ──
-    // Computed deterministically from slow-moving settlement state so the offer shown at open matches the
-    // cost charged on accept (no snapshot needed). Used by openParley, doAccept and doTrade alike.
-
-    /** Bigger, more-landed settlements read as richer → camps press for more. Bounded 1.0×–2.0×. */
     private static double prosperityScale(Settlement s) {
         double pop = s.population();
         double land = s.claimedChunks().size();
         return Math.min(2.0, 1.0 + pop / 24.0 + land / 40.0);
     }
 
-    /** Demand multiplier from standing: a camp that dislikes you presses harder; a friendly one eases. */
     private static double demandRelationMult(CampRelationState st) {
         return switch (st) {
             case HOSTILE -> 1.3;
@@ -409,7 +390,6 @@ public final class MessengerManager {
 
     private static List<ParleyLoader.Trade> effectiveTrades(Settlement s, BarbarianCamp camp,
                                                             ParleyLoader.Def def) {
-        // Standing changes the rate: friends want less for the same goods; a sour camp gouges you.
         double giveMult = switch (camp.relationToward(s.id())) {
             case FRIENDLY -> 0.7;
             case HOSTILE -> 1.25;
@@ -423,9 +403,6 @@ public final class MessengerManager {
         return out;
     }
 
-    // ─── Parley open + action (called from BarbarianEntity.mobInteract / server handler) ─────────────
-
-    /** Builds + sends the barter screen for the messenger the player right-clicked, if it's here for them. */
     public static void openBarter(ServerPlayer sp, BarbarianEntity messenger) {
         BarbarianCamp camp = validateFor(sp, messenger);
         if (camp == null) return;
@@ -438,7 +415,6 @@ public final class MessengerManager {
         PacketDistributor.sendToPlayer(sp, payload);
     }
 
-    /** Shared guard: the messenger is a live envoy and this player is a member of its target settlement. */
     private static BarbarianCamp validateFor(ServerPlayer sp, BarbarianEntity messenger) {
         if (messenger == null || !messenger.isMessenger()) return null;
         ServerLevel level = sp.serverLevel();
@@ -454,7 +430,6 @@ public final class MessengerManager {
         return camp;
     }
 
-    /** C→S: the open screen polls for a fresh storage/goods snapshot so the offer greys out live. */
     public static void handleStorageRequest(ServerPlayer sp, int messengerEntityId) {
         ServerLevel level = sp.serverLevel();
         if (!(level.getEntity(messengerEntityId) instanceof BarbarianEntity m)) return;
@@ -466,7 +441,6 @@ public final class MessengerManager {
             BarbarianBarter.liveGoods(camp, mine)));
     }
 
-    /** C→S: the player's barter move (propose / decline / defer). */
     public static void handleBarter(ServerPlayer sp, com.bannerbound.core.network.BarterActionPayload payload) {
         ServerLevel level = sp.serverLevel();
         if (!(level.getEntity(payload.messengerEntityId()) instanceof BarbarianEntity m)) return;
@@ -515,7 +489,7 @@ public final class MessengerManager {
             }
             case CANT_PAY -> sp.displayClientMessage(Component.translatable(
                 "bannerbound.barbarian.parley.cant_pay").withStyle(ChatFormatting.RED), true);
-            case INVALID -> { } // client/world desync — ignore
+            case INVALID -> { }
         }
     }
 
@@ -530,7 +504,7 @@ public final class MessengerManager {
 
     private static void doDefer(ServerLevel level, ServerPlayer sp, BarbarianData data, BarbarianCamp camp,
                                 Settlement mine, BarbarianEntity m) {
-        if (!BarbarianBarter.canDefer(camp, mine)) { // hostile camps want it now
+        if (!BarbarianBarter.canDefer(camp, mine)) {
             sp.displayClientMessage(Component.translatable("bannerbound.barbarian.barter.grace_refused")
                 .withStyle(ChatFormatting.RED), true);
             return;
@@ -543,7 +517,6 @@ public final class MessengerManager {
         leave(level, m);
     }
 
-    /** Resolves the player's parley choice server-side (validated). */
     public static void handleAction(ServerPlayer sp, BarbarianParleyActionPayload payload) {
         ServerLevel level = sp.serverLevel();
         Entity e = level.getEntity(payload.messengerEntityId());
@@ -579,7 +552,6 @@ public final class MessengerManager {
             InventoryItemHelper.consume(sp, cost);
         }
         if (camp.type.relationCeiling() == CampRelationState.HOSTILE) {
-            // Marauders pocket the tribute and merely delay the next raid — no real peace.
             BarbarianCampManager.buyRaidCooldown(level, camp);
             data.setDirty();
             sp.displayClientMessage(Component.translatable("bannerbound.barbarian.parley.tribute_marauder")
@@ -588,8 +560,8 @@ public final class MessengerManager {
             CampRelationState st = BarbarianCampManager.applyRelationDelta(data, camp, sid, ACCEPT_DELTA);
             BarbarianCampManager.buyRaidCooldown(level, camp);
             sp.displayClientMessage(Component.translatable("bannerbound.barbarian.parley.tribute_ok",
-                stateName(st)).withStyle(ChatFormatting.GREEN), true); // actionbar transaction note
-            broadcastRelationShift(level, camp, sid, true); // chat: "Relations with X improve."
+                stateName(st)).withStyle(ChatFormatting.GREEN), true);
+            broadcastRelationShift(level, camp, sid, true);
         }
         leave(level, m);
     }
@@ -599,8 +571,8 @@ public final class MessengerManager {
         CampRelationState st = BarbarianCampManager.applyRelationDelta(data, camp, sid, REFUSE_DELTA);
         if (st == CampRelationState.HOSTILE) BarbarianCampManager.scheduleRaidSoon(level, camp);
         sp.displayClientMessage(Component.translatable("bannerbound.barbarian.parley.refused")
-            .withStyle(ChatFormatting.RED), true); // actionbar transaction note
-        broadcastRelationShift(level, camp, sid, false); // chat: "Relations with X worsen."
+            .withStyle(ChatFormatting.RED), true);
+        broadcastRelationShift(level, camp, sid, false);
         leave(level, m);
     }
 
@@ -626,12 +598,9 @@ public final class MessengerManager {
         CampRelationState after = BarbarianCampManager.applyRelationDelta(data, camp, sid, TRADE_DELTA);
         sp.displayClientMessage(Component.translatable("bannerbound.barbarian.parley.traded")
             .withStyle(ChatFormatting.GREEN), true);
-        // Broadcast the relation gain only when it actually crosses a tier — repeat trades shouldn't spam.
         if (after != before) broadcastRelationShift(level, camp, sid, true);
-        // Messenger stays so the player can keep trading; it leaves on its own timer.
     }
 
-    /** A messenger killed mid-journey or at the hall — a hard refusal (relations drop, raid sooner). */
     public static void onMessengerKilled(ServerLevel level, BarbarianEntity m) {
         UUID key = keyForEntity(m.getUUID());
         if (key == null) return;
@@ -641,7 +610,7 @@ public final class MessengerManager {
         if (camp == null) return;
         BarbarianData data = BarbarianData.get(level);
         CampRelationState st = BarbarianCampManager.applyRelationDelta(data, camp, j.settlementId, KILLED_DELTA);
-        broadcastRelationShift(level, camp, j.settlementId, false); // chat: "Relations with X worsen."
+        broadcastRelationShift(level, camp, j.settlementId, false);
         if (st == CampRelationState.HOSTILE) BarbarianCampManager.scheduleRaidSoon(level, camp);
     }
 

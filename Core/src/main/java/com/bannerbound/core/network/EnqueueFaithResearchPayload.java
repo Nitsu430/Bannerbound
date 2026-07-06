@@ -8,7 +8,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: queue (or toggle off) a faith-tree node — right-click on the FAITH tab. */
+/** C->S: queue (or toggle off) a faith-tree node - right-click on the FAITH tab. */
 public record EnqueueFaithResearchPayload(String researchId) implements CustomPacketPayload {
 
     public static final CustomPacketPayload.Type<EnqueueFaithResearchPayload> TYPE =

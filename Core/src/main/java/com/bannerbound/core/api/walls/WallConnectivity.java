@@ -49,20 +49,29 @@ import net.minecraft.world.ticks.BlackholeTickAccess;
 import net.minecraft.world.ticks.LevelTickAccess;
 
 /**
- * Simulates vanilla shape connections (fences, walls, panes, stairs, doors, chests…) over a
- * detached map of block states — WITHOUT touching the real level. Used everywhere wall designs
- * are shown before they exist as placed blocks: the designer viewport and the in-world ghost
- * preview both render raw authored states, which left connectable blocks floating as lone posts
- * (playtest 2026-06-12, "simulate connected blocks and their connections").
+ * Simulates vanilla shape connections (fences, walls, panes, stairs, doors, chests...) over a
+ * detached map of block states, WITHOUT touching the real level. Used everywhere wall designs are
+ * shown before they exist as placed blocks: the designer viewport and the in-world ghost preview
+ * both render raw authored states, which left connectable blocks floating as lone posts (playtest
+ * 2026-06-12, "simulate connected blocks and their connections").
  *
- * <p>Technique: run each state through {@link BlockState#updateShape} against all six neighbors
- * — the exact code path the real world runs on neighbor changes — inside a throwaway
- * {@link LevelAccessor} whose {@code getBlockState} serves the map. Two sweeps so order-dependent
- * properties settle (wall posts read side connections computed in the first pass).
+ * <p>Technique: run each state through {@link BlockState#updateShape} against all six neighbors -
+ * the exact code path the real world runs on neighbor changes - inside a throwaway
+ * {@link LevelAccessor} ({@code SimLevel}) whose {@code getBlockState} serves the map, then the real
+ * level or air per {@code worldFallback}. Two sweeps so order-dependent properties settle (wall posts
+ * read side connections computed in the first pass).
+ *
+ * <p>{@link #bake} freezes connections INTO a packed-pos blueprint resolved against blueprint blocks
+ * ONLY (void outside - the design, not the terrain, is the authority), yielding the EXACT final wall
+ * states: builders place them verbatim, ghosts show them verbatim, player placements snap to them.
+ * {@link #simulate} is the general form - {@code worldFallback=true} connects to existing terrain
+ * (in-world ghosts), {@code false} floats the piece in a void (the designer). Invariant: a state whose
+ * updateShape collapses to air (e.g. a lone door half) keeps its RAW state, so a block never vanishes
+ * from a preview just because its partner isn't authored.
  */
 public final class WallConnectivity {
 
-    /** Horizontals first, then vertical — wall/fence side props settle before up-post logic. */
+    // Horizontals first, then vertical: wall/fence side props settle before up-post logic.
     private static final Direction[] UPDATE_ORDER = {
         Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST,
         Direction.UP, Direction.DOWN};
@@ -70,14 +79,6 @@ public final class WallConnectivity {
     private WallConnectivity() {
     }
 
-    /**
-     * Bakes design connections INTO a packed-pos blueprint: every state's connection
-     * properties resolved against the other blueprint blocks only (void outside — the
-     * design, not the terrain, is the authority). This is what makes the blueprint's
-     * expected states the EXACT final wall states: builders place them verbatim, ghosts
-     * show them verbatim, and player placements get snapped to them ("keep exactly the
-     * block-states/connections from the wall design", playtest 2026-06-12).
-     */
     public static it.unimi.dsi.fastutil.longs.Long2ObjectMap<BlockState> bake(
             it.unimi.dsi.fastutil.longs.Long2ObjectMap<BlockState> raw, Level context) {
         Map<BlockPos, BlockState> in = new HashMap<>(raw.size());
@@ -94,14 +95,6 @@ public final class WallConnectivity {
         return out;
     }
 
-    /**
-     * Returns a copy of {@code raw} with every state's connection properties resolved against
-     * its map neighbors. {@code worldFallback} controls what an absent neighbor reads as:
-     * {@code true} = the real level's block (in-world ghosts connect to existing terrain),
-     * {@code false} = air (the designer's piece floats in a void). States whose updateShape
-     * collapses to air (e.g. a lone door half) keep their raw state — a block must never
-     * vanish from a preview just because its partner isn't authored.
-     */
     public static Map<BlockPos, BlockState> simulate(Map<BlockPos, BlockState> raw, Level context,
                                                      boolean worldFallback) {
         Map<BlockPos, BlockState> out = new HashMap<>(raw);
@@ -122,12 +115,6 @@ public final class WallConnectivity {
         return out;
     }
 
-    /**
-     * Map-backed throwaway level: {@code getBlockState} serves the simulation map (then the
-     * real level or air, per {@code worldFallback}); writes mutate the map; ticks/sounds/
-     * particles/events are black holes; everything else defers to the real level. Only the
-     * surface {@code updateShape} implementations actually touch is meaningfully implemented.
-     */
     private static final class SimLevel implements LevelAccessor {
         private final Level delegate;
         private final Map<BlockPos, BlockState> states;
@@ -176,8 +163,6 @@ public final class WallConnectivity {
             return true;
         }
 
-        // ─── Ticks, effects, events: black holes ────────────────────────────────────────────
-
         @Override
         public LevelTickAccess<Block> getBlockTicks() {
             return BlackholeTickAccess.emptyLevelList();
@@ -210,8 +195,6 @@ public final class WallConnectivity {
         @Override
         public void gameEvent(Holder<GameEvent> event, Vec3 pos, GameEvent.Context context) {
         }
-
-        // ─── Inert queries ──────────────────────────────────────────────────────────────────
 
         @Override
         public boolean isStateAtPosition(BlockPos pos, Predicate<BlockState> predicate) {
@@ -250,8 +233,6 @@ public final class WallConnectivity {
         public boolean hasChunk(int chunkX, int chunkZ) {
             return true;
         }
-
-        // ─── Deferred to the real level ─────────────────────────────────────────────────────
 
         @Override
         public LevelData getLevelData() {

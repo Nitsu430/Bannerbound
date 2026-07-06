@@ -40,9 +40,20 @@ import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Blocks;
 
 /**
- * The Potter NPC's craft driver at a Pottery Slab. Unfired outputs are shaped from clay recipes;
- * fired outputs consume an already-shaped unfired item plus fire-starting/fuel supplies. If that
- * unfired item is missing, the stocker chain queues the shaping recipe as a normal intermediate.
+ * The Potter NPC's WorkExecutor (craft driver) at a Pottery Slab. Two plan kinds: unfired outputs
+ * are shaped directly from clay recipes on the slab; fired outputs consume an already-shaped
+ * unfired item plus kiln supplies (fire sticks + charcoal) and run in the workshop's kiln, with
+ * workTarget redirecting the worker there. If the unfired intermediate is missing, the stocker
+ * chain queues the shaping recipe as a normal self auto-order; this class both prunes those
+ * orders when the fired demand disappears and clears them after the last fired craft, so stale
+ * intermediates never linger. Demand sizing is deliberately split: missingInputs (the haul
+ * surface) buffers raws up to INPUT_BUFFER_CRAFTS crafts, while trueInputDemand sizes
+ * chain-crafted inputs at the TRUE need (orders + min-stock deficit, no rolling buffer); both
+ * subtract the kiln's in-progress contents as already-committed work. Fired crafts ignite the
+ * kiln over FIRE_STICKS_USE_TICKS (unless already lit), then stoke from the craft's charcoal
+ * budget whenever litTicks falls to STOKE_WHEN_LIT_TICKS_AT_OR_BELOW; completion is external
+ * (the kiln holding the fired result ends the craft). Fire sticks are a reusable tool, never
+ * consumed. The per-kiln stoke/ignite maps are transient runtime state, never persisted.
  */
 @ApiStatus.Internal
 public class PotterExecutor implements WorkExecutor {
@@ -158,15 +169,9 @@ public class PotterExecutor implements WorkExecutor {
     @Override
     public List<ItemStack> trueInputDemand(ServerLevel sl, Settlement settlement, Workshop workshop,
                                            BlockPos workBlock) {
-        // Production sizing: no rolling buffer — if an input has to be chain-crafted, the producer
-        // makes only what the orders/min-stock truly need. (Kiln in-progress gating still applies.)
         return demandStacks(sl, settlement, workshop, workBlock, false);
     }
 
-    /** Per-input deficit for every wanted plan. {@code bufferRaws} = the haul surface (inputs
-     *  pre-stocked to {@link #INPUT_BUFFER_CRAFTS} crafts); without it inputs are sized at the TRUE
-     *  need (orders + min-stock deficit) for chain production. The fired-plan kiln in-progress
-     *  subtraction (a waiting-stage guard) applies to both. */
     private List<ItemStack> demandStacks(ServerLevel sl, Settlement settlement, Workshop workshop,
                                          BlockPos workBlock, boolean bufferRaws) {
         Map<Item, Integer> desired = new LinkedHashMap<>();

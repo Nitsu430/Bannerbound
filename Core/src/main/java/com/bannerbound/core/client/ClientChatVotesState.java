@@ -30,7 +30,6 @@ public final class ClientChatVotesState {
 
     public static List<ChatVotesStatePayload.Entry> getEntries() { return entries; }
 
-    /** Locally-ticked seconds left for an entry (its synced value minus time since the sync). */
     public static int secondsLeftNow(ChatVotesStatePayload.Entry e) {
         long elapsed = (System.currentTimeMillis() - receivedAtMs) / 1000L;
         return (int) Math.max(0L, e.secondsLeft() - elapsed);

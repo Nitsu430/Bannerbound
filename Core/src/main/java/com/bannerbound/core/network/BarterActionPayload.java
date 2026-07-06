@@ -13,10 +13,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: the player's move in a barbarian barter. {@code PROPOSE} submits the offer as edited (the camp
- * evaluates it — accept executes + warms relations by generosity, reject sours them); {@code DECLINE}
+ * C->S: the player's move in a barbarian barter. {@code PROPOSE} submits the offer as edited (the camp
+ * evaluates it - accept executes + warms relations by generosity, reject sours them); {@code DECLINE}
  * walks away; {@code DEFER} takes the "we'll get it for you" grace on a demand. The item values in the
- * lists are ignored — the server recomputes everything authoritatively from live state.
+ * lists are ignored - the server recomputes everything authoritatively from live state.
  */
 @ApiStatus.Internal
 public record BarterActionPayload(

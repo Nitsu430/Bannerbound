@@ -10,7 +10,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: flip a stocker's "Trading" opt-in from the Job tab — whether this stocker may be adopted
+/** C->S: flip a stocker's "Trading" opt-in from the Job tab - whether this stocker may be adopted
  *  as a walking trade courier. The server re-checks management permission + the stocker job. */
 @ApiStatus.Internal
 public record SetCitizenTradingPayload(int entityId, boolean enabled) implements CustomPacketPayload {

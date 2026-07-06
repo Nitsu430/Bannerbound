@@ -15,9 +15,11 @@ import net.minecraft.world.entity.player.Player;
 
 /**
  * Drunk black-out collapse (GROG_PLAN.md Phase 3.5): while a player is blacked-out from grog
- * ({@code PASS_OUT_UNTIL}), topple their rendered body over onto the ground — curare-style, but a
- * slower slump: they tip over the first ~1.5s, lie there out cold, then get back up as they come to.
- * {@code require = 0} so a mappings shift just disables the collapse rather than crashing.
+ * ({@code PASS_OUT_UNTIL} in the future), topple their rendered body over onto the ground -
+ * curare-style, but a slower slump: they tip over the first ~1.5s (30 ticks), lie there out cold,
+ * then rise over the last ~1.2s (24 ticks) as they come to. Render-only pose change at the TAIL of
+ * setupRotations; {@code require = 0} so a mappings shift just disables the collapse rather than
+ * crashing.
  */
 @Mixin(LivingEntityRenderer.class)
 public class DrunkProneMixin {
@@ -36,13 +38,11 @@ public class DrunkProneMixin {
             return;
         }
         float elapsed = com.bannerbound.antiquity.item.Intoxication.PASS_OUT_TICKS - remaining;
-        float down = Math.min(1.0F, elapsed / 30.0F);   // ~1.5s to tip over
-        float up = Math.min(1.0F, remaining / 24.0F);    // ~1.2s to get back up
+        float down = Math.min(1.0F, elapsed / 30.0F);
+        float up = Math.min(1.0F, remaining / 24.0F);
         float t = Math.max(0.0F, Math.min(down, up));
         if (t > 0.0F) {
-            // Topple sideways about the feet (that lays the body flat at ground level), lifting only by
-            // ~half the body WIDTH so the lying body rests ON the ground instead of half-sinking — NOT
-            // half the height, which floated it.
+            // Lift by ~half the body WIDTH so the toppled body rests ON the ground; half HEIGHT floats it.
             poseStack.translate(0.0F, entity.getBbWidth() * 0.5F * t, 0.0F);
             poseStack.mulPose(Axis.ZP.rotationDegrees(90.0F * t));
         }

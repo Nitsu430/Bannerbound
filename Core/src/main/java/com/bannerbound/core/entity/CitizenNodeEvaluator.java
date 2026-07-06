@@ -14,31 +14,35 @@ import net.minecraft.world.level.pathfinder.PathfindingContext;
 import net.minecraft.world.level.pathfinder.WalkNodeEvaluator;
 
 /**
- * Walk evaluator with two citizen-specific tweaks over vanilla:
+ * Walk evaluator with citizen-specific tweaks over vanilla so citizens path through their own
+ * settlement infrastructure:
  * <ul>
- *   <li><b>Fence gates</b> — vanilla classifies a closed fence gate as {@link PathType#FENCE}
- *       (impassable, malus -1). This reclassifies it as {@link PathType#DOOR_WOOD_CLOSED} so —
- *       with {@code canOpenDoors} set — the pathfinder routes through it; {@link OpenFenceGateGoal}
- *       opens it on arrival, mirroring {@code OpenDoorGoal} for real doors.</li>
- *   <li><b>Dirt path preference</b> — every walkable tile <i>not</i> standing on a dirt path
- *       gets a small extra cost, so the pathfinder routes over {@code dirt_path} infrastructure
- *       when a path is reasonably close instead of cutting straight across the terrain. The
- *       malus stays positive (negative is the pathfinder's "blocked" sentinel). This preference
- *       is gated on the <b>Roads policy</b> being active — without it citizens path normally.</li>
+ *   <li>Fence gates: vanilla treats a closed fence gate as FENCE/impassable (and the modded rope
+ *       gate as BLOCKED). getPathType matches the fence_gates tag (covering vanilla and rope gates)
+ *       and reclassifies a closed gate to {@link PathType#DOOR_WOOD_CLOSED} so A* routes through it
+ *       with canOpenDoors set; {@link OpenFenceGateGoal} opens it on arrival. An OPEN gate's cell is
+ *       force-accepted as a walkable node in findAcceptedNode, because vanilla otherwise rejects it
+ *       (its non-empty render shape fails the floor/occupancy check) and A* could not route through.</li>
+ *   <li>Dirt-path preference: gated on the Roads policy, or on a road-building stocker doing an
+ *       outpost haul leg (which prefers paths regardless, so later trips follow the road its first
+ *       trip trampled). A walkable tile not standing on dirt_path gets +OFF_PATH_MALUS (1.0, tuned
+ *       for a detour up to ~2x straight-line without starving the node budget), so routes hug path
+ *       infrastructure when it is close. The malus stays positive because a negative costMalus is
+ *       the pathfinder's "blocked" sentinel.</li>
+ *   <li>Fisher avoid-water: a fisher that must not swim hard-blocks actual WATER (a high malus was
+ *       not enough - a short diagonal swim could out-cost the long way round). WATER_BORDER (the
+ *       land the pier sits on) stays walkable so the pier itself remains routable.</li>
  * </ul>
+ * Antiquity's partial-collision workstation blocks (mortar, basket, crafting stone) declare
+ * isPathfindable=false themselves, so vanilla already classifies them BLOCKED here - no id
+ * special-case needed. roadsActive/avoidWater are cached once per path build in {@link #prepare}
+ * to avoid a per-node settlement lookup.
  */
 @ApiStatus.Internal
 public class CitizenNodeEvaluator extends WalkNodeEvaluator {
-    /** Extra path cost for a walkable tile that isn't on a dirt path. Tuned so citizens take a
-     *  path detour up to ~2× the straight-line distance, without distorting long cross-country
-     *  routes enough to starve the pathfinder's node budget. */
     private static final float OFF_PATH_MALUS = 1.0F;
 
-    /** Cached once per path build in {@link #prepare}: whether the pathing citizen's settlement
-     *  has the Roads policy active. Avoids a SettlementData lookup per evaluated node. */
     private boolean roadsActive = false;
-    /** Cached once per path build: whether the pathing citizen is a fisher that must keep out of the
-     *  water (walk the shore/pier rather than swim a shortcut). See {@link CitizenEntity#isAvoidWaterPathing}. */
     private boolean avoidWater = false;
 
     @Override
@@ -49,8 +53,6 @@ public class CitizenNodeEvaluator extends WalkNodeEvaluator {
         avoidWater = false;
         if (mob instanceof CitizenEntity c) {
             com.bannerbound.core.api.settlement.Settlement s = c.getSettlement();
-            // Road-building stockers (outpost haul legs) prefer paths regardless of the policy —
-            // the first trip tramples the road, this preference makes every later trip follow it.
             roadsActive = (s != null && s.hasPolicy(
                 com.bannerbound.core.api.settlement.PolicyRegistry.ROADS))
                 || c.isRoadBuilding();
@@ -62,20 +64,9 @@ public class CitizenNodeEvaluator extends WalkNodeEvaluator {
     public PathType getPathType(PathfindingContext context, int x, int y, int z) {
         PathType base = super.getPathType(context, x, y, z);
         BlockState state = context.getBlockState(new BlockPos(x, y, z));
-        // Note: Antiquity's partial-collision workstation blocks (mortar, basket, crafting stone, etc.)
-        // declare isPathfindable=false on the block itself, so vanilla already classifies them BLOCKED
-        // here — no id special-case needed. (They used to be matched by registry id in this method.)
-        // A fisher walking to its spot must not swim: hard-block actual water so the only route is over
-        // land (the shore and the pier). A high malus wasn't enough — a short diagonal swim could still
-        // out-cost the long way round — so we make water impassable for it outright. WATER_BORDER (the
-        // water-adjacent LAND the pier is built from) stays walkable, so the pier remains routable.
         if (avoidWater && base == PathType.WATER) {
             return PathType.BLOCKED;
         }
-        // Gate-like blocks identified by the fence_gates tag (vanilla AND the modded rope gate): a CLOSED
-        // gate is a barrier the pathfinder won't cross — FENCE for vanilla, BLOCKED for the rope gate (its
-        // isPathfindable is false when closed). Reclassify to a routable closed door so A* paths through it;
-        // OpenFenceGateGoal opens it on arrival. Open gates keep their normal (walkable) type.
         if (state.is(BlockTags.FENCE_GATES) && state.hasProperty(BlockStateProperties.OPEN)
                 && !state.getValue(BlockStateProperties.OPEN)) {
             return PathType.DOOR_WOOD_CLOSED;
@@ -88,11 +79,8 @@ public class CitizenNodeEvaluator extends WalkNodeEvaluator {
                                     Direction direction, PathType pathType) {
         Node node = super.findAcceptedNode(x, y, z, verticalDeltaLimit, nodeFloorLevel, direction, pathType);
         if (node == null) {
-            // An OPEN fence gate's cell is rejected by vanilla as a node (its non-empty render shape fails
-            // the node's floor/occupancy check) even though it's physically passable — so A* can't route
-            // THROUGH the open gate (the herder was only getting inside via its stuck-teleport). Force-accept
-            // an OPEN gate as a plain walkable node so it's a real connector. CLOSED gates are handled by the
-            // getPathType DOOR_WOOD_CLOSED reclass + canOpenDoors; they aren't forced here.
+            // Vanilla rejects an OPEN gate's cell (non-empty render shape) though it is passable;
+            // force-accept it as a walkable node so A* can route through the gate.
             BlockState g = this.currentContext.getBlockState(new BlockPos(x, y, z));
             if (g.is(BlockTags.FENCE_GATES) && g.hasProperty(BlockStateProperties.OPEN)
                     && g.getValue(BlockStateProperties.OPEN)) {

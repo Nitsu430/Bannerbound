@@ -26,17 +26,24 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Block entity for the Kiln multiblock (lives on the controller cell, {@code PART == 0}). Like the
- * Bloomery, it tracks an item held inside, a burn timer, and firing progress — but it has no door:
- * it fires whenever it's lit with a valid ingredient inside. Lit with flint &amp; steel / fire
- * sticks; the burn is kept alive by feeding charcoal (in place of the bloomery's bellows). Burn +
- * firing timers run server-side; the burn timer and slide animation mirror to the client.
+ * Block entity for the 2x2x2 Kiln multiblock; lives on the controller cell (PART == 0), whose
+ * BlockPos is the min corner -- world coordinates in this class add +1.0 to reach the footprint
+ * center. Like the Bloomery it tracks a held item, a burn timer (MAX_LIT_TICKS = 30s) and firing
+ * progress, but it has no door: it fires whenever lit (flint and steel / fire sticks) with a
+ * valid KilnRecipe ingredient inside, and the burn is kept alive by stoking with coal/charcoal --
+ * stoke() only refreshes an already-lit fire, it never starts one. All timers run server-side;
+ * setChanged() broadcasts block updates so litTicks, the slide-in animation (SLIDE_TICKS) and
+ * smeltingActive mirror to the client for rendering and particles. Firing time is linear in stack
+ * count (64 items = 64x one item); at completion each item independently rolls recipe.chance(),
+ * and a batch where every roll misses is consumed with no output. If the fire dies mid-firing,
+ * progress drains back gradually instead of resetting. Research gating (CraftGating) is applied
+ * before progress accrues, not at completion, so an unresearched output just idles the kiln and
+ * never consumes the ingredient. reconcileLitState keeps the LIT blockstate (mouth light
+ * emission) on all eight cells in step with the burn timer.
  */
 @ApiStatus.Internal
 public class KilnBlockEntity extends BlockEntity {
-    /** Ticks the inserted item's slide-in animation runs. */
     public static final int SLIDE_TICKS = 6;
-    /** Burn duration once ignited or stoked — 30 seconds. */
     public static final int MAX_LIT_TICKS = 600;
 
     private ItemStack heldItem = ItemStack.EMPTY;
@@ -48,8 +55,6 @@ public class KilnBlockEntity extends BlockEntity {
     public KilnBlockEntity(BlockPos pos, BlockState state) {
         super(BannerboundAntiquity.KILN_BE.get(), pos, state);
     }
-
-    // ─── Held item ─────────────────────────────────────────────────────────────────────────────
 
     public ItemStack getHeldItem() {
         return heldItem;
@@ -91,8 +96,6 @@ public class KilnBlockEntity extends BlockEntity {
         return out;
     }
 
-    // ─── Fire ──────────────────────────────────────────────────────────────────────────────────
-
     public boolean isLit() {
         return litTicks > 0;
     }
@@ -101,14 +104,12 @@ public class KilnBlockEntity extends BlockEntity {
         return litTicks;
     }
 
-    /** Lights the kiln (fire sticks / flint &amp; steel). Plays the ignite sound if it was unlit. */
     public void ignite() {
         boolean wasLit = litTicks > 0;
         litTicks = MAX_LIT_TICKS;
         if (level != null) {
             level.playSound(null, getBlockPos(), SoundEvents.FLINTANDSTEEL_USE, SoundSource.BLOCKS, 1.0F, 1.0F);
             if (!wasLit) {
-                // A soft whoosh as the fire catches.
                 level.playSound(null, getBlockPos(), SoundEvents.FIRECHARGE_USE, SoundSource.BLOCKS, 0.6F, 1.2F);
             }
         }
@@ -116,15 +117,13 @@ public class KilnBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    /** Stokes an already-lit kiln with coal or charcoal, resetting the burn timer. No effect when unlit. */
     public boolean stoke() {
         if (litTicks <= 0) {
-            return false; // fuel only feeds an existing fire — light it first
+            return false;
         }
         litTicks = MAX_LIT_TICKS;
         spawnIgniteBurst();
         if (level != null) {
-            // A clear "fwoomp" of the fire catching the fresh fuel, plus the crackle.
             level.playSound(null, getBlockPos(), SoundEvents.FIRECHARGE_USE, SoundSource.BLOCKS, 0.8F, 1.4F);
             level.playSound(null, getBlockPos(), SoundEvents.FURNACE_FIRE_CRACKLE, SoundSource.BLOCKS, 1.2F, 0.9F);
         }
@@ -132,7 +131,6 @@ public class KilnBlockEntity extends BlockEntity {
         return true;
     }
 
-    /** A splash of flame particles when the kiln is ignited or stoked. */
     private void spawnIgniteBurst() {
         if (level instanceof ServerLevel server) {
             server.sendParticles(ParticleTypes.FLAME,
@@ -141,9 +139,6 @@ public class KilnBlockEntity extends BlockEntity {
         }
     }
 
-    // ─── Ticking ───────────────────────────────────────────────────────────────────────────────
-
-    /** Ticker — runs on both sides; drives the slide animation, burn timer and firing. */
     public static void tick(Level level, BlockPos pos, BlockState state, KilnBlockEntity be) {
         if (be.insertAnimTicks > 0) {
             be.insertAnimTicks--;
@@ -171,7 +166,6 @@ public class KilnBlockEntity extends BlockEntity {
         }
     }
 
-    /** Keeps the LIT blockstate (and thus the mouth's light emission) in step with the burn timer. */
     private void reconcileLitState(Level level) {
         boolean shouldBeLit = litTicks > 0;
         BlockState st = getBlockState();
@@ -191,11 +185,9 @@ public class KilnBlockEntity extends BlockEntity {
         }
     }
 
-    /** Server-side firing: progress accrues while the kiln is lit with a valid ingredient inside. */
     private void tickSmelting(Level level) {
         KilnRecipe recipe = heldItem.isEmpty() ? null : KilnRecipeManager.find(heldItem);
-        // Won't fire toward an output the owning civ hasn't researched yet. Gating here (rather
-        // than at completion) means the ingredient is never consumed — the kiln just sits idle.
+        // Gate BEFORE progress, not at completion, so an unresearched output never consumes the ingredient.
         if (recipe != null && !com.bannerbound.core.api.research.CraftGating.canProduceAt(
                 level, getBlockPos(), recipe.result().getItem())) {
             recipe = null;
@@ -213,7 +205,6 @@ public class KilnBlockEntity extends BlockEntity {
                 setChanged();
             }
         } else if (litTicks <= 0 && smeltProgress > 0) {
-            // Fire's out — progress slowly drains away.
             smeltProgress--;
             if (smeltProgress == 0 || smeltProgress % 20 == 0) {
                 setChanged();
@@ -221,8 +212,6 @@ public class KilnBlockEntity extends BlockEntity {
         }
     }
 
-    /** Total firing time for a stack — linear: every item costs a full base time, so a bigger
-     *  batch takes proportionally longer (64 logs = 64× one log). */
     private static int totalTicks(KilnRecipe recipe, int count) {
         return recipe.ticks() * Math.max(1, count);
     }
@@ -235,18 +224,17 @@ public class KilnBlockEntity extends BlockEntity {
             }
         }
         if (produced <= 0) {
-            heldItem = ItemStack.EMPTY; // every roll missed — the batch yielded nothing
+            heldItem = ItemStack.EMPTY;
         } else {
             ItemStack output = recipe.result().copy();
             output.setCount(Math.min(produced, output.getMaxStackSize()));
             heldItem = output;
-            insertAnimTicks = SLIDE_TICKS; // the result settles in with a little slide
+            insertAnimTicks = SLIDE_TICKS;
         }
         smeltProgress = 0;
         smeltingActive = false;
         level.playSound(null, getBlockPos(), BannerboundAntiquity.SMELTING_DONE_SOUND.get(),
             SoundSource.BLOCKS, 1.0F, 1.0F);
-        // A puff of smoke from the apex + a lick of flame at the mouth signals the firing is done.
         if (level instanceof ServerLevel server) {
             Direction facing = getBlockState().getValue(KilnBlock.FACING);
             server.sendParticles(ParticleTypes.LARGE_SMOKE,
@@ -261,14 +249,12 @@ public class KilnBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    /** Flame + embers at the mouth and smoke rising from the dome top; thins as the fire dies. */
     private void spawnFireParticles(Level level, BlockPos pos) {
         float intensity = litTicks / (float) MAX_LIT_TICKS;
         RandomSource rand = level.random;
         Direction facing = getBlockState().getValue(KilnBlock.FACING);
         double mouthX = pos.getX() + 1.0 + facing.getStepX() * 0.55;
         double mouthZ = pos.getZ() + 1.0 + facing.getStepZ() * 0.55;
-        // Flames licking out of the mouth (front-bottom, toward the kiln's facing).
         if (rand.nextFloat() < intensity) {
             level.addParticle(ParticleTypes.SMALL_FLAME,
                 mouthX + (rand.nextDouble() - 0.5) * 0.4,
@@ -276,11 +262,9 @@ public class KilnBlockEntity extends BlockEntity {
                 mouthZ + (rand.nextDouble() - 0.5) * 0.4,
                 0.0, 0.0, 0.0);
         }
-        // The odd ember drifting up from the mouth.
         if (rand.nextFloat() < intensity * 0.3F) {
             level.addParticle(ParticleTypes.LAVA, mouthX, pos.getY() + 0.3, mouthZ, 0.0, 0.0, 0.0);
         }
-        // Smoke from the apex of the dome (centered over the 2×2 footprint).
         if (rand.nextFloat() < intensity) {
             level.addParticle(ParticleTypes.SMOKE,
                 pos.getX() + 1.0 + (rand.nextDouble() - 0.5) * 0.3,
@@ -290,7 +274,6 @@ public class KilnBlockEntity extends BlockEntity {
         }
     }
 
-    /** The "it's working" tell: thick smoke from the apex + the odd spark spat from the mouth. */
     private void spawnMouthSmoke(Level level, BlockPos pos, BlockState state) {
         Direction facing = state.getValue(KilnBlock.FACING);
         RandomSource rand = level.random;
@@ -316,8 +299,6 @@ public class KilnBlockEntity extends BlockEntity {
             level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
         }
     }
-
-    // ─── NBT + client sync ─────────────────────────────────────────────────────────────────────
 
     @Override
     protected void saveAdditional(CompoundTag tag, HolderLookup.Provider provider) {

@@ -9,7 +9,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: the player left drop-location edit mode (left-click / Escape / opened a screen) without
+/** C->S: the player left drop-location edit mode (left-click / Escape / opened a screen) without
  *  marking. Clears the server-side edit flag so their next block right-click works normally. */
 @ApiStatus.Internal
 public record CancelDropLocationEditPayload() implements CustomPacketPayload {

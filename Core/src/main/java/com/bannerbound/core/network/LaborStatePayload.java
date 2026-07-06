@@ -14,19 +14,13 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: the settlement's gatherer-labor state for the Town Hall "Labor" tab — the unlocked gatherer
- * jobs in priority order, with per-job enabled flag + current/target worker counts, and the global
- * auto-assign flag. Sent when the town hall opens and after any labor edit.
- *
- * @param jobIds    unlocked gatherer job ids in priority order
- * @param enabled   parallel to {@code jobIds}: false = the job is switched off (0 target)
- * @param current   parallel: how many citizens currently hold each job
- * @param caps      parallel: the player-set worker cap for each job ({@code -1} = no limit)
- * @param autoAssign whether the settlement auto-distributes labor (always on in anarchy)
- * @param workloadShareActive whether the Workload Share policy is active (delegates labor editing to
- *                  every member in a chiefdom) — the client folds this into its can-edit gate
- * @param preferredStorage packed {@link net.minecraft.core.BlockPos#asLong} of the settlement's
- *                  default depot, or {@link Long#MIN_VALUE} if none is set
+ * S->C: the settlement's gatherer-labor state for the Town Hall "Labor" tab -- the unlocked gatherer
+ * jobs in priority order (jobIds), each with a parallel enabled flag (false = job off, 0 target),
+ * current worker count, and player-set cap (-1 = no limit), plus the global auto-assign flag (always
+ * on in anarchy). workloadShareActive means the Workload Share policy delegates labor editing to every
+ * chiefdom member (the client folds it into its can-edit gate). preferredStorage is the packed
+ * BlockPos.asLong of the default depot, or Long.MIN_VALUE if none. Sent when the town hall opens and
+ * after any labor edit.
  */
 @ApiStatus.Internal
 public record LaborStatePayload(

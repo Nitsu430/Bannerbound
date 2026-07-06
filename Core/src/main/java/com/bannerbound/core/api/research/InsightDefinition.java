@@ -9,7 +9,14 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.GsonHelper;
 
-/** Data-driven learn-by-doing boost attached to a research, culture, or faith node. */
+/**
+ * Data-driven learn-by-doing boost (Civ "Eureka" analog) attached as an optional field on a
+ * research/culture/faith node, parsed from the node JSON's "insight" object. The trigger type
+ * must be registered in {@link InsightTriggerRegistry}; the boost is either a fraction of the
+ * node's cost ("boost", default 0.40) or flat points ("boost_points") - "boost" wins if both are
+ * present. A malformed insight logs a warning and disables only itself, so one bad datapack node
+ * cannot take down the whole tree. Stream codecs sync definitions to clients for tooltips.
+ */
 public record InsightDefinition(
         InsightTrigger trigger,
         double boostFraction,
@@ -46,10 +53,6 @@ public record InsightDefinition(
             ByteBufCodecs.STRING_UTF8.decode(buf))
     );
 
-    /**
-     * Parses and validates an optional insight. A malformed insight disables only itself so one
-     * bad datapack node cannot take down the whole tree.
-     */
     public static InsightDefinition parse(JsonObject node, ResourceLocation nodeId) {
         if (!node.has("insight")) return null;
         try {

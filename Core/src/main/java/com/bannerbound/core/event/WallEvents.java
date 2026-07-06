@@ -14,12 +14,16 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 
 /**
- * Walls-system glue events: blueprint push on login, and the placement-time wall tagging —
- * a block placed into a blueprint position that satisfies it is recorded in
- * {@code WallData.builtWall} the moment it lands (user decision 2026-06-11: wall membership
- * is tagged AT PLACEMENT, so even a cancelled dirt wall is remembered as wall, never read as
- * terrain). Breaking a tracked block untags it; non-event removals (explosions) are swept by
- * {@code WallData.reconcile} on construct/status.
+ * Walls-system glue events: blueprint push on login, and placement-time wall tagging. A block
+ * placed into a blueprint position that satisfies it is recorded in WallData.builtWall the moment
+ * it lands (user decision 2026-06-11: wall membership is tagged AT PLACEMENT, so even a cancelled
+ * dirt wall is remembered as wall, never read as terrain). Breaking a tracked block untags it;
+ * non-event removals (explosions) are swept by WallData.reconcile on construct/status.
+ *
+ * <p>The DESIGN is authoritative for block states: on placement we snap the placed block AND its
+ * neighbors back to the blueprint's exact baked states, undoing the connections vanilla picked
+ * during placement/shape updates ("keep exactly the block-states/connections from the wall design",
+ * playtest 2026-06-12).
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -54,19 +58,12 @@ public final class WallEvents {
         if (expected != null && event.getPlacedBlock().is(expected.getBlock())) {
             walls.markBuilt(settlement.id(), event.getPos().asLong());
         }
-        // The DESIGN is the authority on block states: snap the placed block (vanilla
-        // placement picked its own connections) AND any neighboring wall blocks vanilla's
-        // shape updates just mutated back to the blueprint's exact baked states ("keep
-        // exactly the block-states/connections from the wall design", playtest 2026-06-12).
         snapToBlueprint(level, blueprint, event.getPos());
         for (net.minecraft.core.Direction direction : net.minecraft.core.Direction.values()) {
             snapToBlueprint(level, blueprint, event.getPos().relative(direction));
         }
     }
 
-    /** If {@code pos} is a blueprint position holding the RIGHT block in the WRONG state,
-     *  rewrite it to the design's exact state — flag 2|16 (client update, NO neighbor shape
-     *  updates) so the correction can't cascade into more vanilla mutations. */
     private static void snapToBlueprint(net.minecraft.server.level.ServerLevel level,
             it.unimi.dsi.fastutil.longs.Long2ObjectMap<net.minecraft.world.level.block.state.BlockState> blueprint,
             net.minecraft.core.BlockPos pos) {
@@ -74,6 +71,7 @@ public final class WallEvents {
         if (expected == null) return;
         net.minecraft.world.level.block.state.BlockState actual = level.getBlockState(pos);
         if (actual != expected && actual.is(expected.getBlock())) {
+            // flag 2|16 = client update, NO neighbor shape updates, so the fix cannot cascade
             level.setBlock(pos, expected, 2 | 16);
         }
     }

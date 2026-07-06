@@ -14,7 +14,7 @@ import net.minecraft.world.level.block.CampfireBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Suppress a campfire's client display FX — its tall smoke column, spark/lava pops, and crackle — while
+ * Suppress a campfire's client display FX (tall smoke column, spark/lava pops, crackle) while
  * a {@link StoneCookingPotBlock} sits directly on top. The pot is rendered down inside the flames, so
  * the campfire's own smoke would pour straight up through the pot (and its flame would peek through);
  * the pot supplies its own simmer particles instead. Plain campfires (no pot) are untouched. Client

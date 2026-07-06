@@ -3,7 +3,7 @@ package com.bannerbound.antiquity.network;
 import org.jetbrains.annotations.ApiStatus;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
-import com.bannerbound.antiquity.RopeFenceInteractions;
+import com.bannerbound.antiquity.RopeFenceEvents;
 import com.bannerbound.antiquity.SpearFishing;
 
 import net.minecraft.server.level.ServerPlayer;
@@ -15,8 +15,23 @@ import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 
 /**
- * Antiquity's payload registration (mirrors Core's {@code BannerboundNetwork}). Currently just the
- * empty-hand reel-in signal — the server resolves and reels the sender's tethered spear/catch.
+ * Antiquity's payload registration, mirroring Core's {@code BannerboundNetwork}; every handler hops
+ * to the game thread via {@code context.enqueueWork}. The C2S payloads share one pattern: the client
+ * only reports minigame input (fletching / pottery / mortar grind / knapping / carpentry saw /
+ * tannery scrape / masonry chisel / stone-anvil cold-hammer steps, plus the empty-hand spear reel,
+ * rope-post left-clicks, and workstation ghost-preview clicks - the ghost targets are client-side
+ * billboards, so clicks can only arrive as payloads) while the SERVER owns the session, ingredient
+ * consumption, quality rolls, and output. CarveCommitPayload exists because a previewed carve block
+ * is hidden (air) client-side and can't be ray-clicked, so the use-key press is sent up and the
+ * server replays the carve at the anchor (Carves.commit re-fires the real RightClickBlock handler).
+ * S2C: ArrowPartsSyncPayload replaces the datapack arrow-part registry on the client so modular
+ * arrows render with tooltips; the Open* payloads pop the minigame screens; HammerArmPayload drives
+ * the third-person hammer-arm raise; DecoChunkSync/DecoUpdate sync face decorations (full chunk on
+ * watch, single-face deltas on edit); OpenArmorerPayload opens the player-designed-armor screen
+ * (ARMOR_PLAN.md). GOTCHA (haschannel-false-negative): any S2C payload whose handler touches
+ * client-only classes must be registered in BOTH dist branches - real handler on the client, and
+ * TYPE + CODEC with a no-op handler on the server (which still needs the codec to encode it);
+ * skip the server-side registration and single-player throws.
  */
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID)
 @ApiStatus.Internal
@@ -34,16 +49,14 @@ public final class AntiquityNetwork {
                     SpearFishing.startReel(player);
                 }
             }));
-        // Left-click on a rope post's rope part: cancel the player's tie, or break one of the post's ropes.
         registrar.playToServer(
             RopeFenceActionPayload.TYPE,
             RopeFenceActionPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() -> {
                 if (context.player() instanceof ServerPlayer player) {
-                    RopeFenceInteractions.serverHandle(player, payload.pos());
+                    RopeFenceEvents.serverHandle(player, payload.pos());
                 }
             }));
-        // Fletching minigame: client reports each step; the server owns the session + quality roll.
         registrar.playToServer(
             FletchingActionPayload.TYPE,
             FletchingActionPayload.STREAM_CODEC,
@@ -52,7 +65,6 @@ public final class AntiquityNetwork {
                     com.bannerbound.antiquity.Fletching.handleAction(player, payload);
                 }
             }));
-        // Pottery wheel minigame: non-scored spin loop; the server owns the session and output.
         registrar.playToServer(
             PotteryActionPayload.TYPE,
             PotteryActionPayload.STREAM_CODEC,
@@ -62,7 +74,6 @@ public final class AntiquityNetwork {
                 }
             }));
 
-        // Mortar press-and-grind minigame: non-scored; the server owns the loaded batch and output.
         registrar.playToServer(
             MortarGrindActionPayload.TYPE,
             MortarGrindActionPayload.STREAM_CODEC,
@@ -72,8 +83,6 @@ public final class AntiquityNetwork {
                 }
             }));
 
-        // Knapping minigame: client reports each step; the server owns the session, the rock
-        // consumption, and the quality roll (no station — a pure two-rocks hand-craft).
         registrar.playToServer(
             KnappingActionPayload.TYPE,
             KnappingActionPayload.STREAM_CODEC,
@@ -83,9 +92,6 @@ public final class AntiquityNetwork {
                 }
             }));
 
-        // Ghost-preview clicks (browse arrows / ghost result) on the crafting stone + fletching
-        // station + carpenter's table — the targets are client-side billboards, so the click arrives
-        // as a payload.
         registrar.playToServer(
             GhostActionPayload.TYPE,
             GhostActionPayload.STREAM_CODEC,
@@ -96,9 +102,6 @@ public final class AntiquityNetwork {
                 }
             }));
 
-        // In-world carve commit: the previewed block is hidden (air) on the client and can't be
-        // ray-clicked, so the use-key press arrives here and the server replays the carve at the
-        // anchor (Carves.commit re-fires the real RightClickBlock handler).
         registrar.playToServer(
             CarveCommitPayload.TYPE,
             CarveCommitPayload.STREAM_CODEC,
@@ -108,8 +111,6 @@ public final class AntiquityNetwork {
                 }
             }));
 
-        // Carpentry saw minigame: client reports completion/cancel; the server owns the session and
-        // outputs the build list.
         registrar.playToServer(
             CarpentryActionPayload.TYPE,
             CarpentryActionPayload.STREAM_CODEC,
@@ -119,8 +120,6 @@ public final class AntiquityNetwork {
                 }
             }));
 
-        // Tannery scrape minigame: client reports completion/cancel; the server owns the session and
-        // emits the scraped hides scaled by the input hide's quality.
         registrar.playToServer(
             TanningActionPayload.TYPE,
             TanningActionPayload.STREAM_CODEC,
@@ -130,8 +129,6 @@ public final class AntiquityNetwork {
                 }
             }));
 
-        // Masonry chisel-strike minigame: client reports completion/cancel; the server owns the
-        // session and outputs the build list.
         registrar.playToServer(
             MasonryActionPayload.TYPE,
             MasonryActionPayload.STREAM_CODEC,
@@ -141,8 +138,6 @@ public final class AntiquityNetwork {
                 }
             }));
 
-        // Cold-hammer minigame at the stone anvil: client reports each strike; the server owns the
-        // session, the rank-gated quality roll, and the finished tool.
         registrar.playToServer(
             HammerActionPayload.TYPE,
             HammerActionPayload.STREAM_CODEC,
@@ -151,17 +146,13 @@ public final class AntiquityNetwork {
                     com.bannerbound.antiquity.Hammer.handleAction(player, payload);
                 }
             }));
-        // Client-bound: the datapack arrow-part registry, so clients render modular arrows + tooltips.
-        // The handler only touches the COMMON ArrowPartRegistry, so no dist guard is needed (the server
-        // registers it solely to encode the payload; the handler runs client-side).
+        // Handler touches only the COMMON ArrowPartRegistry -> safe to register unguarded on both dists.
         registrar.playToClient(
             ArrowPartsSyncPayload.TYPE,
             ArrowPartsSyncPayload.STREAM_CODEC,
             (payload, context) -> context.enqueueWork(() ->
                 com.bannerbound.antiquity.recipe.ArrowPartRegistry.replace(payload.parts())));
-        // Client-bound: open the fletching minigame. The real handler touches client-only classes
-        // (FletchingScreen), so it's dist-guarded with a no-op on the server (which still must
-        // register TYPE + CODEC to encode the payload). See the haschannel-false-negative lesson.
+        // Client-only handlers: every payload registered here MUST also be no-op registered in the else branch.
         if (FMLEnvironment.dist == Dist.CLIENT) {
             registrar.playToClient(
                 OpenFletchingPayload.TYPE,
@@ -203,13 +194,11 @@ public final class AntiquityNetwork {
                 OpenHammerPayload.STREAM_CODEC,
                 (payload, context) -> context.enqueueWork(() ->
                     com.bannerbound.antiquity.client.HammerClientHandler.open(payload)));
-            // Cold-hammer third-person arm raise: flag the player so the model lifts the hammer arm.
             registrar.playToClient(
                 HammerArmPayload.TYPE,
                 HammerArmPayload.STREAM_CODEC,
                 (payload, context) -> context.enqueueWork(() ->
                     com.bannerbound.antiquity.client.HammerArmState.setActive(payload.player(), payload.active())));
-            // Face-decoration sync: full chunk on watch, single-face deltas on edit.
             registrar.playToClient(
                 DecoChunkSyncPayload.TYPE,
                 DecoChunkSyncPayload.STREAM_CODEC,
@@ -220,13 +209,13 @@ public final class AntiquityNetwork {
                 DecoUpdatePayload.STREAM_CODEC,
                 (payload, context) -> context.enqueueWork(() ->
                     com.bannerbound.antiquity.client.DecoClientHandler.applyUpdate(payload)));
-            // Armorer's Workbench: open the player-designed-armor screen (ARMOR_PLAN.md).
             registrar.playToClient(
                 OpenArmorerPayload.TYPE,
                 OpenArmorerPayload.STREAM_CODEC,
                 (payload, context) -> context.enqueueWork(() ->
                     com.bannerbound.antiquity.client.ArmorerClientHandler.open(payload)));
         } else {
+            // Server dist still registers TYPE + CODEC (no-op handler) or single-player throws at send time.
             registrar.playToClient(
                 OpenFletchingPayload.TYPE,
                 OpenFletchingPayload.STREAM_CODEC,

@@ -19,8 +19,11 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Picker screen opened from the citizen detail screen's "Assign to Workstation" button. Lists
- * every workstation in the settlement; clicking one assigns the focal citizen to that station.
+ * Client-only picker, opened from the citizen detail screen's "Assign to Workstation" button.
+ * Lists every workstation in the settlement (first 6 shown); clicking one assigns the focal
+ * citizen to that station and closes. Each row reads "Station (worker: Name)" or "Station
+ * (vacant)" so the player sees who they're displacing before clicking; the worker name is drawn
+ * green when it matches the focal citizen, disambiguating two same-named workers at a glance.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -80,12 +83,6 @@ public class WorkstationPickerScreen extends PolishedScreen {
             .build());
     }
 
-    /**
-     * Renders an entry as "Forester's Log (worker: Magnus)" or "Forester's Log (vacant)" so the
-     * player can see who they're displacing before clicking. The worker-name part is colored
-     * green when it matches the focal citizen — disambiguates two same-named workers ("which
-     * Vlad is at the Forester's Log?") at a glance.
-     */
     private Component labelFor(WorkstationListPayload.Entry entry) {
         String stationType = stationDisplayName(entry.type());
         if (entry.currentWorker() == null) {

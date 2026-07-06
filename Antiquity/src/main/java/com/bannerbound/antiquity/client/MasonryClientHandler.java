@@ -8,7 +8,11 @@ import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-/** Client-only entry point for the server's {@link OpenMasonChiselPayload} — opens the chisel minigame. */
+/**
+ * Client-only entry point for the server's {@link OpenMasonChiselPayload}: opens the chisel
+ * minigame screen. Kept in its own class so payload registration code never touches Screen
+ * classes on a dedicated server.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class MasonryClientHandler {

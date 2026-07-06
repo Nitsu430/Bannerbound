@@ -12,8 +12,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: the player pressed "Assign Worker" on a workstation. Server replies with a
- * {@link CitizenListPayload} listing unemployed citizens in that settlement.
+ * C->S request fired when the player presses "Assign Worker" on a workstation; the server replies
+ * with a {@link CitizenListPayload} of unemployed citizens in that settlement. Carries only the
+ * workstation BlockPos, hand-serialized as three ints.
  */
 @ApiStatus.Internal
 public record RequestUnemployedCitizensPayload(BlockPos workstationPos) implements CustomPacketPayload {

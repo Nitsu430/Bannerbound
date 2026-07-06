@@ -27,14 +27,18 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Block entity renderer for the Fermentation Trough — draws the liquid surface as a horizontal quad
- * inside the hollow, at the shared pool's fill height. Plain water tints blue; once charged, the
- * liquid ripens from a murky must to the grog recipe's full colour as it ferments ({@link
- * GrogRecipeManager}). The quad is rotated to match the block's facing and stretched to the open ends
- * so a connected pool reads as one surface. (Ambient bubbling FX live in the block's animateTick.)
- *
- * <p>Uses {@link RenderType#translucent()} (the terrain translucent layer) + the block's real light, so
- * it lights like water and doesn't glow full-bright under shaderpacks — matching {@link ClayTankRenderer}.
+ * Block entity renderer for the Fermentation Trough - draws the liquid surface as a horizontal
+ * quad inside the hollow (cavity 2..14 in model pixels, opened out to the rim at a connected end
+ * so a joined run reads as one continuous surface). Every cell draws at the shared run pool's fill
+ * height (FermentationTroughBlock.runFraction) so the whole run conserves material. Plain water
+ * tints WATER_COLOR (vanilla plains water blue - the water_still sprite is greyscale); once
+ * charged, the colour itself reads as fermentation progress, lerping all four ARGB channels from a
+ * murky must (recipe tint mixed 55% toward pale grey-brown 0x6B675F, lower alpha) to the grog
+ * recipe's full colour ({@link GrogRecipeManager}). The quad rotates about the block centre to
+ * match the blockstate's y-rotation (authored facing north, +90 per clockwise step). Uses
+ * {@link RenderType#translucent()} (the terrain translucent layer) + the block's real light, so it
+ * lights like water and does not glow full-bright under shaderpacks - matching
+ * {@link ClayTankRenderer}. Ambient bubbling FX live in the block's animateTick.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -42,7 +46,6 @@ public class FermentationTroughRenderer implements BlockEntityRenderer<Fermentat
     private static final ResourceLocation WATER_STILL =
         ResourceLocation.withDefaultNamespace("block/water_still");
 
-    /** Plain water tint for the greyscale {@code water_still} sprite (vanilla plains water blue). */
     private static final int WATER_COLOR = 0xCC3F76E4;
 
     public FermentationTroughRenderer(BlockEntityRendererProvider.Context context) {
@@ -54,26 +57,23 @@ public class FermentationTroughRenderer implements BlockEntityRenderer<Fermentat
         BlockState state = be.getBlockState();
         if (!(state.getBlock() instanceof FermentationTroughBlock) || be.getLevel() == null) return;
 
-        // Shared run pool: every cell draws its surface at the run's fill level (material conservation).
         float frac = FermentationTroughBlock.runFraction(be.getLevel(), be.getBlockPos());
         if (frac <= 0.001F) return;
 
-        // Liquid extent in model pixels (cavity 2..14), opened to the rim at a connected end.
-        boolean left = state.getValue(FermentationTroughBlock.LEFT);    // connected_left → +x end open
-        boolean right = state.getValue(FermentationTroughBlock.RIGHT);  // connected_right → -x end open
+        // mind the flip: connected_left opens the +x end, connected_right the -x end
+        boolean left = state.getValue(FermentationTroughBlock.LEFT);
+        boolean right = state.getValue(FermentationTroughBlock.RIGHT);
         float x0 = (right ? 0.0F : 2.0F) / 16.0F;
         float x1 = (left ? 16.0F : 14.0F) / 16.0F;
         float z0 = 3.0F / 16.0F;
         float z1 = 13.0F / 16.0F;
         float y = (2.0F + frac * 4.5F) / 16.0F;
 
-        // Liquid colour: plain water blue, or grog's tint once charged — ripening from a murky must to
-        // the full vivid colour as it ferments, so the colour itself reads as progress.
         GrogRecipe recipe = be.isCharged() ? GrogRecipeManager.byId(be.grogRecipeId()) : null;
         int argb = WATER_COLOR;
         if (recipe != null) {
             int full = 0xFF000000 | (recipe.tint() & 0xFFFFFF);
-            int must = 0xCC000000 | (mix(recipe.tint(), 0x6B675F, 0.55F) & 0xFFFFFF); // pale, watery start
+            int must = 0xCC000000 | (mix(recipe.tint(), 0x6B675F, 0.55F) & 0xFFFFFF);
             argb = lerpColor(must, full, be.fermentProgress(be.getLevel().getGameTime()));
         }
         float a = (argb >>> 24) / 255.0F;
@@ -81,14 +81,12 @@ public class FermentationTroughRenderer implements BlockEntityRenderer<Fermentat
         float g = ((argb >> 8) & 0xFF) / 255.0F;
         float b = (argb & 0xFF) / 255.0F;
 
-        // The block's own light (steady, water-like) — not the entity light that blooms under shaders.
+        // block light, NOT the entity light parameter - entity light blooms under shaderpacks
         int packed = LevelRenderer.getLightColor(be.getLevel(), be.getBlockPos());
         TextureAtlasSprite sprite = Minecraft.getInstance()
             .getTextureAtlas(InventoryMenu.BLOCK_ATLAS).apply(WATER_STILL);
 
         pose.pushPose();
-        // Match the blockstate's y-rotation (facing=north authored; +90 per clockwise step) about the
-        // block centre so the liquid aligns with the wooden body.
         pose.translate(0.5, 0.0, 0.5);
         pose.mulPose(Axis.YP.rotationDegrees(-yRot(state.getValue(FermentationTroughBlock.FACING))));
         pose.translate(-0.5, 0.0, -0.5);
@@ -113,7 +111,6 @@ public class FermentationTroughRenderer implements BlockEntityRenderer<Fermentat
             .setNormal(0.0F, 1.0F, 0.0F);
     }
 
-    /** Blend two RGB colours ({@code t} of the way from {@code a} to {@code b}); returns RGB only. */
     private static int mix(int a, int b, float t) {
         int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
         int br = (b >> 16) & 0xFF, bg = (b >> 8) & 0xFF, bb = b & 0xFF;
@@ -123,7 +120,6 @@ public class FermentationTroughRenderer implements BlockEntityRenderer<Fermentat
         return (rr << 16) | (gg << 8) | bl;
     }
 
-    /** Blend two ARGB colours, all four channels (for the must → ripe-grog transition). */
     private static int lerpColor(int a, int b, float t) {
         int aa = (a >>> 24), ba = (b >>> 24);
         int alpha = (int) (aa + (ba - aa) * t);
@@ -135,7 +131,7 @@ public class FermentationTroughRenderer implements BlockEntityRenderer<Fermentat
             case EAST -> 90.0F;
             case SOUTH -> 180.0F;
             case WEST -> 270.0F;
-            default -> 0.0F; // NORTH
+            default -> 0.0F;
         };
     }
 }

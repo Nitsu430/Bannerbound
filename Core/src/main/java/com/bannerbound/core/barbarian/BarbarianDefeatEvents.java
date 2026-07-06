@@ -18,7 +18,9 @@ import net.neoforged.neoforge.event.level.BlockEvent;
  * defeat progress, and breaking a camp's STANDARD razes its banner. When both are satisfied the camp
  * is permanently cleared (see {@code BarbarianCampManager.checkDefeat}). Banner-break detection keys
  * off {@code BarbarianData.bannerAt(pos)}, so a camp standard is never confused with a settlement
- * banner (handled separately by {@code FactionBannerEvents}).
+ * banner (handled separately by {@code FactionBannerEvents}). Killing a messenger is not defeat
+ * progress: it routes to {@code MessengerManager.onMessengerKilled} as a hard diplomatic refusal.
+ * Both handlers are OVERWORLD-only and server-side.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -31,7 +33,7 @@ public final class BarbarianDefeatEvents {
         if (!(event.getEntity() instanceof BarbarianEntity b)) return;
         if (!(b.level() instanceof ServerLevel sl) || sl.dimension() != Level.OVERWORLD) return;
         if (b.isMessenger()) {
-            MessengerManager.onMessengerKilled(sl, b); // killing an envoy = hard refusal
+            MessengerManager.onMessengerKilled(sl, b);
             return;
         }
         BarbarianCampManager.onBarbarianDeath(sl, b);
@@ -40,7 +42,7 @@ public final class BarbarianDefeatEvents {
     @SubscribeEvent
     public static void onBannerBroken(BlockEvent.BreakEvent event) {
         if (!(event.getLevel() instanceof ServerLevel sl) || sl.dimension() != Level.OVERWORLD) return;
-        if (!FactionBanner.isBanner(event.getState())) return; // cheap filter before the camp lookup
+        if (!FactionBanner.isBanner(event.getState())) return;
         BarbarianCampManager.onBannerBroken(sl, event.getPos());
     }
 }

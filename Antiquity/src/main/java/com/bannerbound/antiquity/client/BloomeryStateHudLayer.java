@@ -26,9 +26,11 @@ import net.neoforged.api.distmarker.OnlyIn;
 /**
  * The bloomery temperature readout (METALWORKING_PLAN.md Part 1). While the player looks at a
  * bloomery, draws a dark box below the crosshair with three rows: the fire-driven temperature judged
- * against the active band ({@code 856°C (Good)}), the contents/output line ({@code Output: Molten
+ * against the active band ({@code 856 C (Good)}), the contents/output line ({@code Output: Molten
  * Copper (200mB)}), and a progress bar. Reads the looked-at bloomery's synced block-entity state
- * directly — no extra polling payloads.
+ * directly - no extra polling payloads. The temperature band and the contents line are two
+ * independent axes: the contents (crucible charge, molten metal, or a bloomery recipe) resolve the
+ * target band and total ticks, and the fire temperature is then classified against that band.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -57,7 +59,6 @@ public final class BloomeryStateHudLayer implements LayeredDraw.Layer {
         float temp = be.temperatureC();
         ItemStack held = be.getHeldItem();
 
-        // Resolve the active band + the line-2 verb from the contents (the two independent axes).
         int low = 0, high = 0;
         boolean hasBand = false;
         Component line2;
@@ -72,7 +73,6 @@ public final class BloomeryStateHudLayer implements LayeredDraw.Layer {
                         cap(c.dominantMetal()), c.totalMb())
                     .withStyle(s -> s.withColor(WHITE));
             } else {
-                // Pre-melt charge: resolve what it will become to show the target band.
                 var resolved = com.bannerbound.antiquity.metalworking.MetalworkingItems
                     .resolveCharge(c.charge());
                 if (resolved == null) {
@@ -104,7 +104,6 @@ public final class BloomeryStateHudLayer implements LayeredDraw.Layer {
             }
         }
 
-        // Line 1: temperature, judged against the band.
         BloomeryHeat.Band band = BloomeryHeat.classify(fireLit, hasBand, temp, low, high);
         String labelKey = switch (band) {
             case GOOD -> "bannerboundantiquity.hud.bloomery.band.good";
@@ -138,7 +137,6 @@ public final class BloomeryStateHudLayer implements LayeredDraw.Layer {
         graphics.drawCenteredString(font, line1, cx, top, WHITE);
         graphics.drawCenteredString(font, line2, cx, top + font.lineHeight + 1, WHITE);
 
-        // Progress bar along the bottom.
         if (total > 0) {
             float frac = Math.min(1.0F, be.getSmeltProgress() / total);
             int barTop = top + 2 * font.lineHeight + 3;

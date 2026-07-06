@@ -12,27 +12,29 @@ import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 
 /**
- * A node in the research tree. ID is the full ResourceLocation string (e.g. "bannerboundantiquity:knapping")
- * derived from the JSON file path. Cost is in science points; sciencePerSecond fills the bar.
- * {@code minAge} is the minimum settlement era required to research this — if the civ regresses
- * below it, the research becomes un-completed.
- *
- * Unlocks are split into three orthogonal lists:
- *   - items: ItemStack IDs the settlement now recognizes (additive to starting_items)
- *   - features: one-shot effects triggered on completion (e.g. bannerbound.advance_age:medieval,
- *     bannerbound.science_per_second_delta:0.5)
- *   - flags: persistent capability gates, true as long as the research is completed
- *     (e.g. bannerbound.allow_animal_breeding)
- *
- * {@code ponderScene} is an optional id of a Create-style Ponder scene that an expansion mod
- * (or a future Create-aware bridge) may register for this node. Core itself never resolves the
- * id — it just carries it to the client, which asks {@link ResearchPonderBridge} to open it.
- * Empty string = no ponder.
- *
- * {@code governmentType} is an optional visibility gate: when non-null, the node only renders
- * (and is only researchable) in a settlement whose current government matches. Null = visible
- * under any government. Drives government-exclusive policy unlocks — a Council can't see a
- * Chiefdom-only policy node and vice versa.
+ * One node in a research/culture/faith tree, parsed from a datapack JSON file and synced to
+ * clients verbatim via STREAM_CODEC. id is the full ResourceLocation string (e.g.
+ * "bannerboundantiquity:knapping") derived from the file path; cost is in points and the tree's
+ * per-second rate fills the bar. minAge is the minimum settlement era required - if the civ
+ * regresses below it, a completed node un-completes (see the *Manager regress paths).
+ * <p>
+ * Unlocks are three orthogonal lists: items (ItemStack ids the settlement now recognizes,
+ * additive to starting_items), features (one-shot effects fired on completion, e.g.
+ * bannerbound.advance_age:medieval or bannerbound.science_per_second_delta:0.5), and flags
+ * (persistent capability gates true while completed, e.g. bannerbound.allow_animal_breeding).
+ * <p>
+ * Optional gates/fields: ponderScene carries a Create-style Ponder scene id that Core never
+ * resolves - it just ships it to the client, which asks {@link ResearchPonderBridge} to open it
+ * ("" = none). governmentType restricts render/research to a matching current government (null =
+ * any) and drives government-exclusive policy nodes. faithPath is the faith-tree analog (null =
+ * shared trunk, and always null for science/culture nodes). heraldryPoints ("heraldry_points",
+ * default 0) accrue while completed and are spent on banner pattern layers (see FactionBanner).
+ * important ("important", default false) renders an ornate frame so era-defining choices read as
+ * bigger. insight is the optional learn-by-doing boost ({@link InsightDefinition}).
+ * <p>
+ * Wire format: governmentType and faithPath use a null-safe VarInt scheme (0 = none, else
+ * ordinal+1) to avoid negative varints; encode and decode MUST stay in lockstep, and decode
+ * guards against an out-of-range ordinal from a malformed packet.
  */
 public record ResearchDefinition(
     String id,
@@ -50,17 +52,8 @@ public record ResearchDefinition(
     String ponderScene,
     @Nullable Settlement.Government governmentType,
     boolean requiresTribe,
-    /** Heraldry points granted while this research is completed ("heraldry_points" in the
-     *  node JSON, default 0). Spent on banner-design pattern layers — see FactionBanner. */
     int heraldryPoints,
-    /** Milestone marker ("important": true in the node JSON, default false): the research
-     *  screen renders this node with an ornate frame so era-defining choices (Code of Laws
-     *  analogs, Spiritualism, age advances) read as bigger than ordinary nodes. */
     boolean important,
-    /** Faith-path visibility gate ("faith_path" in faith-tree JSON, e.g. "ASTROLOGY"):
-     *  the node only renders/researches for faiths on the matching path. Null = shared
-     *  trunk (and always null for science/culture nodes). The faith-tree analog of
-     *  {@code governmentType}. */
     @Nullable com.bannerbound.core.api.faith.FaithPath faithPath,
     @Nullable InsightDefinition insight
 ) {
@@ -82,14 +75,12 @@ public record ResearchDefinition(
             STRING_LIST.encode(buf, def.unlocksFeatures());
             STRING_LIST.encode(buf, def.unlocksFlags());
             ByteBufCodecs.STRING_UTF8.encode(buf, def.ponderScene());
-            // Government gate: 0 = no restriction (general), else ordinal+1. Avoids negative
-            // varints for the null case.
+            // Null-safe wire scheme: 0 = none, else ordinal+1 (decode side must match).
             ByteBufCodecs.VAR_INT.encode(buf,
                 def.governmentType() == null ? 0 : def.governmentType().ordinal() + 1);
             buf.writeBoolean(def.requiresTribe());
             ByteBufCodecs.VAR_INT.encode(buf, def.heraldryPoints());
             buf.writeBoolean(def.important());
-            // Faith-path gate: 0 = none, else ordinal+1 (same null-safe scheme as government).
             ByteBufCodecs.VAR_INT.encode(buf,
                 def.faithPath() == null ? 0 : def.faithPath().ordinal() + 1);
             buf.writeBoolean(def.insight() != null);
@@ -126,8 +117,6 @@ public record ResearchDefinition(
         return idx < vals.length ? vals[idx] : null;
     }
 
-    /** Inverse of the encode side: 0 → null (general), else ordinal-1 into Government values.
-     *  Out-of-range guards against a malformed packet selecting a bad ordinal. */
     @Nullable
     private static Settlement.Government decodeGovernment(int wire) {
         if (wire <= 0) return null;

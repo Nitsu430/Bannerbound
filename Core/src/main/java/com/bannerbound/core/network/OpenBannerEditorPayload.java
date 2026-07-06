@@ -13,10 +13,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: open (or refresh) the Heraldry banner editor. Carries the saved design (parallel
+ * S->C: open (or refresh) the Heraldry banner editor. Carries the saved design (parallel
  * pattern-id / color-id lists, bottom-up), the faction base color, and the settlement's total
- * EARNED Heraldry points — the client computes "available" live as
- * {@code pointsEarned − workingLayers.size()} while the player edits.
+ * EARNED Heraldry points; the client computes "available" live as pointsEarned minus
+ * workingLayers.size() while the player edits.
  */
 @ApiStatus.Internal
 public record OpenBannerEditorPayload(int baseColorOrdinal, int pointsEarned,

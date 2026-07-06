@@ -9,19 +9,15 @@ import net.minecraft.nbt.StringTag;
 import net.minecraft.nbt.Tag;
 
 /**
- * A timed effect attached to a {@link Settlement}. Drives both gameplay (e.g. summed food
- * bonuses from fishing) and UI (the Statuses tab on the town hall screen). Mutable so the tick
- * loop can decrement {@link #remainingTicks} without allocating; everything else is final.
- * <p>
- * Sourcing: anyone (work goals, research, events) creates a {@code StatusEffect} via the
- * constructor and adds it via {@link Settlement#addStatusEffect}. Lifetime is bounded by
- * {@link #totalDurationTicks} — no manual cleanup required.
- *
- * <h2>Translation</h2>
- * The {@link #translationKey} resolves to a chat-component on the client (e.g.
- * {@code bannerbound.status.fish_caught} → "Fisher caught {0}"); {@link #args} are positional
- * substitutions. Keep args plain strings — the screen wraps them as
- * {@link net.minecraft.network.chat.Component#literal} on render.
+ * A timed effect attached to a Settlement. Drives both gameplay (e.g. summed food bonuses from
+ * fishing) and UI (the Statuses tab on the town hall screen). Mutable only in remainingTicks so the
+ * tick loop can decrement without allocating; everything else is final. Anyone (work goals,
+ * research, events) creates one via the constructor and adds it via Settlement.addStatusEffect;
+ * lifetime is bounded by totalDurationTicks with no manual cleanup. The two-arg-longer constructor
+ * exists for NBT/network loaders restoring a partially-elapsed effect. translationKey resolves to a
+ * client chat-component (e.g. bannerbound.status.fish_caught -> "Fisher caught {0}") with args as
+ * positional substitutions; keep args plain strings since the screen wraps them as
+ * Component.literal on render. Persisted by StatusEffectIcon.ordinal via save/load.
  */
 public final class StatusEffect {
     private final UUID instanceId;
@@ -43,7 +39,6 @@ public final class StatusEffect {
         this.remainingTicks = totalDurationTicks;
     }
 
-    /** Constructor used by NBT/network loaders that need to restore a partially-elapsed effect. */
     public StatusEffect(UUID instanceId, String translationKey, List<String> args,
                          StatusEffectIcon icon, double iconValue,
                          int totalDurationTicks, int remainingTicks) {
@@ -64,8 +59,6 @@ public final class StatusEffect {
     public int totalDurationTicks() { return totalDurationTicks; }
     public int remainingTicks() { return remainingTicks; }
 
-    /** Decrement the remaining-time counter. Returns true if the effect has expired (caller is
-     *  expected to remove it from the parent settlement's list). */
     public boolean tickDown() {
         remainingTicks--;
         return remainingTicks <= 0;

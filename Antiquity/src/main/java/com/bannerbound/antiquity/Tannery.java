@@ -22,7 +22,12 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.neoforged.neoforge.network.PacketDistributor;
 
-/** Server-authoritative driver for the tanning-rack scrape minigame (mirrors {@code Pottery}). */
+/**
+ * Server-authoritative driver for the tanning-rack scrape minigame (mirrors Pottery). Tracks one open
+ * scrape session per player (SESSIONS) keyed to the rack position, locks the work block for its duration
+ * via WorkBlockLocks, and on COMPLETE consumes the raw hide and pops scraped hide scaled by HideQuality.
+ * The session is cleared and the lock released on completion, disconnect, or an external abort of the rack.
+ */
 @ApiStatus.Internal
 public final class Tannery {
     private Tannery() {
@@ -30,7 +35,6 @@ public final class Tannery {
 
     private static final Map<UUID, BlockPos> SESSIONS = new HashMap<>();
 
-    /** Open the scrape minigame for a raw hide on the rack. */
     public static void startSession(ServerPlayer player, BlockPos pos) {
         if (!(player.serverLevel().getBlockEntity(pos) instanceof TanningRackBlockEntity be) || !be.isRaw()) {
             return;

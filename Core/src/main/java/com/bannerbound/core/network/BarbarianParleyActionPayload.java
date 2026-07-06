@@ -11,9 +11,10 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: the player's choice in the barbarian parley. {@code action} 0=ACCEPT (hand over demands),
- * 1=REFUSE, 2=TRADE (the offer at {@code tradeIndex}). The server re-validates the messenger, the
- * acting player's settlement, and the items before applying any relationship change.
+ * C->S: the player's choice in the barbarian parley. action 0=ACCEPT (hand over demands), 1=REFUSE,
+ * 2=TRADE (the offer at tradeIndex). The server re-validates the messenger, the acting player's
+ * settlement, and the items before applying any relationship change, so these fields are untrusted
+ * input.
  */
 @ApiStatus.Internal
 public record BarbarianParleyActionPayload(int messengerEntityId, int action, int tradeIndex)

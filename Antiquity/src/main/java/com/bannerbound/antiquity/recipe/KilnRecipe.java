@@ -9,13 +9,11 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.crafting.Ingredient;
 
 /**
- * A data-driven Kiln firing recipe — the early-game ceramics/lime counterpart to the Bloomery
+ * A data-driven Kiln firing recipe - the early-game ceramics/lime counterpart to the Bloomery
  * (see {@link BloomeryRecipe}). While the kiln is lit, an {@code ingredient} stack inside is fired;
- * each item takes {@code ticks} of base time (bulk batches are discounted — see
+ * each item takes {@code ticks} of base time (bulk batches are discounted - see
  * {@code KilnBlockEntity}). On completion each item rolls {@code chance} to yield {@code result}.
- * Loaded from {@code data/<namespace>/kiln_recipes/*.json}.
- * <p>
- * Example — {@code data/bannerboundantiquity/kiln_recipes/brick.json}:
+ * Loaded from {@code data/<namespace>/kiln_recipes/*.json}, e.g.:
  * <pre>
  * { "ingredient": { "item": "minecraft:clay_ball" }, "ticks": 100,
  *   "result": { "id": "minecraft:brick", "count": 1 }, "chance": 1.0 }
@@ -30,7 +28,6 @@ public record KilnRecipe(Ingredient ingredient, int ticks, ItemStack result, flo
         Codec.FLOAT.optionalFieldOf("chance", 1.0F).forGetter(KilnRecipe::chance)
     ).apply(instance, KilnRecipe::new));
 
-    /** True if {@code stack} is this recipe's ingredient. */
     public boolean matches(ItemStack stack) {
         return ingredient.test(stack);
     }

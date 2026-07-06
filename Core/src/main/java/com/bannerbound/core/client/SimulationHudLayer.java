@@ -12,7 +12,7 @@ import net.neoforged.api.distmarker.OnlyIn;
 
 /**
  * Top-center debug overlay for the {@code /bannerbound simulate} stress test. The headline line is
- * <b>believed vs rendered</b> — the ratio we're trying to make convincing — plus per-tier mover
+ * <b>believed vs rendered</b> - the ratio we're trying to make convincing - plus per-tier mover
  * counts, client FPS, and the server's ms/tick (which should barely move, proving the crowd is
  * client-only). Only drawn while a simulation is active.
  */

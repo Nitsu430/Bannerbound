@@ -19,19 +19,17 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Chief-election sub-screen. Two stages, same shape as
- * {@link ChooseGovernmentScreen}:
- * <ol>
- *   <li>Click any candidate row to <i>select</i> that player — purely local, no packet sent.
- *       Re-clicking another row changes the selection. The selected row gets a check + the
- *       Cast Vote button enables.</li>
- *   <li>Click <b>Cast Vote</b> to send {@link CastChiefNominationPayload}. All buttons lock;
- *       the player cannot change their nomination.</li>
- * </ol>
+ * Chief-election sub-screen, two stages shaped like {@link ChooseGovernmentScreen}: (1) click a
+ * candidate row to select that player locally -- no packet, re-clicking another row just moves the
+ * selection and enables Cast Vote; (2) Cast Vote sends {@link CastChiefNominationPayload}, after
+ * which every button locks and the nomination can no longer change. Extends {@link PolishedScreen};
+ * client-only, and closes back to the optional {@code parent} screen.
  *
- * <p>A small crown icon (the same {@code crown.png} that will become the in-world Chief
- * nametag glyph in Step 7) draws beside each candidate's name, reinforcing that this vote is
- * about *who wears the crown*.
+ * <p>candidateVotes is copied into a mutable ArrayList because the incoming payload list may be
+ * immutable and the caster's own +1 must land on their button immediately (other members only see
+ * it after a server refresh). {@code selected} uses the all-zero UUID as "none" and {@code hasCast}
+ * seeds from the player's existing nomination. A crown icon ({@code crown.png}, the same 16x16 art
+ * that becomes the in-world Chief nametag glyph) overlays each row to reinforce who wears the crown.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -42,19 +40,15 @@ public class NominateChiefScreen extends PolishedScreen {
     private static final int BTN_H = 22;
     private static final int BTN_PITCH = 28;
 
-    /** {@code assets/bannerbound/textures/gui/crown.png}. 16×16. */
     private static final ResourceLocation CROWN_TEX =
         ResourceLocation.fromNamespaceAndPath("bannerbound", "textures/gui/crown.png");
 
     @Nullable private final Screen parent;
     private final List<UUID> candidates;
     private final List<String> candidateNames;
-    /** Mutable so the casting player's own +1 lands on their button immediately. The payload
-     *  may hand us an immutable list, so we copy into an ArrayList in the constructor. */
     private final java.util.ArrayList<Integer> candidateVotes;
     private final int onlineMembers;
 
-    /** Local selection (all-zero UUID = none). Free to change until {@link #hasCast}. */
     private UUID selected;
     private boolean hasCast;
 
@@ -62,7 +56,6 @@ public class NominateChiefScreen extends PolishedScreen {
     private Button castBtn;
     private final TransientClickFeedback feedback = new TransientClickFeedback();
 
-    /** Geometry for the crown icons (drawn in render()), mirrors the candidate buttons. */
     private int firstRowY;
     private int rowX;
 
@@ -112,8 +105,6 @@ public class NominateChiefScreen extends PolishedScreen {
                     return;
                 }
                 PacketDistributor.sendToServer(new CastChiefNominationPayload(selected));
-                // Local +1 on the selected candidate's tally so the caster's button updates
-                // immediately. Other members still need a server refresh to see this vote.
                 int idx = candidates.indexOf(selected);
                 if (idx >= 0 && idx < candidateVotes.size()) {
                     candidateVotes.set(idx, candidateVotes.get(idx) + 1);
@@ -161,8 +152,7 @@ public class NominateChiefScreen extends PolishedScreen {
         Component prefix = myPick
             ? Component.literal("✓ ").withStyle(ChatFormatting.GREEN)
             : Component.literal("");
-        // The leading spaces leave room for the crown icon that render() draws on top of the
-        // button. Without them the icon would overlap the first character of the name.
+        // Leading spaces reserve room for the per-row crown icon drawn on top in renderPolishedExtras.
         return Component.empty()
             .append(prefix)
             .append(Component.literal("    " + name))
@@ -171,8 +161,7 @@ public class NominateChiefScreen extends PolishedScreen {
 
     @Override
     protected void renderPolishedBackdrop(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        // Panel chrome must be drawn BEFORE the widgets — drawIdentityPanel's fill is opaque and
-        // would hide the candidate buttons if it stayed in renderPolishedExtras.
+        // Opaque panel fill: must draw here (pre-widgets), not in renderPolishedExtras, or it hides the buttons.
         int panelX = (this.width - PANEL_W) / 2;
         int panelY = (this.height - PANEL_H) / 2;
         drawIdentityPanel(g, panelX, panelY, PANEL_W, PANEL_H, identityAccents);
@@ -193,8 +182,6 @@ public class NominateChiefScreen extends PolishedScreen {
         g.drawCenteredString(this.font, subtitle,
             panelX + PANEL_W / 2, panelY + 28, 0xFFCCCCCC);
 
-        // Crown icon overlays — one per candidate row, sitting just inside the left edge of
-        // the button. Draw AFTER super.render() so the icon paints on top of the button face.
         int iconSize = 12;
         int iconY = firstRowY + (BTN_H - iconSize) / 2;
         for (int i = 0; i < candidates.size(); i++) {

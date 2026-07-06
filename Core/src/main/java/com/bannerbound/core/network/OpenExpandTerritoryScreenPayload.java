@@ -18,21 +18,18 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client. Carries everything the {@code ExpandTerritoryScreen} needs to render the
- * birdseye chunk picker without making extra round-trips:
- * <ul>
- *   <li>{@link #claimedChunks} — long-packed ChunkPos for every chunk this settlement owns.</li>
- *   <li>{@link #foreignChunks} — long-packed ChunkPos for chunks owned by OTHER settlements
- *       inside the visible window (rendered with a dimmer color, non-interactive).</li>
- *   <li>{@link #townHallChunkPacked} — anchor for the camera/centering.</li>
- *   <li>{@link #colorOrdinal} — own settlement color for highlight.</li>
- *   <li>{@link #expansionsInEra} / {@link #maxExpansions} — progress + cap label.</li>
- *   <li>{@link #currentTierPopulation} / {@link #currentTierItemIds} / {@link #currentTierItemCounts}
- *       — the cost ladder entry for the NEXT expansion, so the side panel can render and the
- *       button can grey out if the player can't afford.</li>
- *   <li>{@link #biome} — the resolved majority biome (for display, e.g. "Desert tier").</li>
- *   <li>{@link #canAfford} — server-computed flag (covers items + population + cap together).</li>
- * </ul>
+ * S->C: everything the ExpandTerritoryScreen needs to render the birdseye chunk picker without extra
+ * round-trips. claimedChunks / foreignChunks are long-packed ChunkPos (own vs other settlements'
+ * chunks in the visible window; foreign ones render dimmer and non-interactive). townHallChunkPacked
+ * anchors the camera; colorOrdinal is the own settlement color. expansionsInEra / maxExpansions give
+ * progress + cap; the currentTier* fields carry the cost ladder entry for the NEXT expansion so the
+ * side panel can render and the button can grey out when unaffordable. biome is the resolved majority
+ * biome for display; canAfford is a server-computed flag covering items + population + cap together.
+ *
+ * <p>votes are Council per-chunk tallies (empty in Chiefdom / NONE); each ChunkMarker's playerIds
+ * list who voted in cast order so the screen can render skin heads next to the (N/X) text.
+ * suggestions are the Chiefdom equivalent. councilVoteThreshold is the live threshold
+ * (1 / 2 / ceil(N/2)), 0 in non-Council settlements.
  */
 @ApiStatus.Internal
 public record OpenExpandTerritoryScreenPayload(
@@ -52,19 +49,11 @@ public record OpenExpandTerritoryScreenPayload(
     List<Integer> beautyTagIds,
     List<Integer> beautyAdjacency,
     List<Integer> beautyEffective,
-    /** Council per-chunk vote tallies — parallel lists, one entry per chunk with at least
-     *  one active vote. Empty in Chiefdom / NONE. {@link #voteVoterIds} lists who voted on
-     *  each chunk in cast order, so the screen can render their skin heads next to the
-     *  {@code (N/X)} text. */
     List<ChunkMarker> votes,
-    /** Chiefdom per-chunk suggestion markers. Empty in Council / NONE. */
     List<ChunkMarker> suggestions,
-    /** Live council threshold (1 / 2 / ceil(N/2)). Used by the screen to label markers as
-     *  {@code (votes/needed)}. 0 in non-Council settlements. */
     int councilVoteThreshold
 ) implements CustomPacketPayload {
 
-    /** One per-chunk marker — used for both Council votes and Chiefdom suggestions. */
     public record ChunkMarker(long packedChunkPos, List<UUID> playerIds) {
     }
     public static final CustomPacketPayload.Type<OpenExpandTerritoryScreenPayload> TYPE =
@@ -159,7 +148,6 @@ public record OpenExpandTerritoryScreenPayload(
     @Override
     public CustomPacketPayload.Type<? extends CustomPacketPayload> type() { return TYPE; }
 
-    /** Convenience: townHall chunk pos as BlockPos at chunk min-corner. */
     public BlockPos townHallChunkOrigin() {
         net.minecraft.world.level.ChunkPos cp = new net.minecraft.world.level.ChunkPos(townHallChunkPacked);
         return new BlockPos(cp.getMinBlockX(), 0, cp.getMinBlockZ());

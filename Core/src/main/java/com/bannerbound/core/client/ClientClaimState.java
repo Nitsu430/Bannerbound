@@ -12,6 +12,11 @@ import com.bannerbound.core.network.ClaimEntry;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
+/**
+ * Client-side mirror of chunk claims (packed chunk pos -> {@link ClaimEntry}) for the local
+ * player, replaced wholesale by the server sync. Read by the map/territory overlays to color
+ * chunks by their owning settlement.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientClaimState {

@@ -14,19 +14,22 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: opens the barbarian parley screen for the messenger the player right-clicked. Carries the
+ * S->C: opens the barbarian parley screen for the messenger the player right-clicked. Carries the
  * camp's identity + stance and its data-driven demands/trades so the screen renders without further
  * server queries. Item references are registry id strings the client resolves for name + icon.
+ * campColor is RGB from the camp type's ChatFormatting; typeName is the englishName header; relState
+ * is a CampRelationState ordinal; canImprove false means accepting only clears a cooldown (marauders)
+ * instead of lifting relations.
  */
 @ApiStatus.Internal
 public record OpenBarbarianParleyPayload(
     int messengerEntityId,
     String campName,
-    int campColor,        // ARGB-less RGB from the camp type's ChatFormatting
-    String typeName,      // englishName (e.g. "Raiders") for the header
-    String greetingKey,   // lang key for the greeting line
-    int relState,         // CampRelationState ordinal
-    boolean canImprove,   // accepting can lift relations (false for marauders → cooldown only)
+    int campColor,
+    String typeName,
+    String greetingKey,
+    int relState,
+    boolean canImprove,
     List<Demand> demands,
     List<Trade> trades
 ) implements CustomPacketPayload {

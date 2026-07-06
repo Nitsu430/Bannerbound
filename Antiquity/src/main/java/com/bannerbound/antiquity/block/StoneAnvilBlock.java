@@ -40,16 +40,15 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * The Stone Anvil — a Crafting-Stone-style pile station with the cold-hammer minigame, doubling as the
- * casting bench. Created by right-clicking a stone block with a hammer ({@link HammerItem}).
- *
- * <ul>
- *   <li>Right-click with an item → add ONE to the pile (blade, stick…); a matched recipe floats a preview.</li>
- *   <li><b>Shift</b>-right-click holding a hammer → start the cold-hammer minigame for the matched recipe.</li>
- *   <li>Right-click empty-handed → take the last pile item back.</li>
- *   <li>Right-click an <b>empty pile</b> with a fired mold → place it; pour a molten crucible; empty-hand
- *       to pop the casting (or scrap a cooled dud / take the empty mold back).</li>
- * </ul>
+ * The Stone Anvil - a Crafting-Stone-style pile station hosting the cold-hammer minigame, doubling as
+ * the casting bench. Created by right-clicking a stone block with a hammer ({@link HammerItem}).
+ * Right-clicking with an item adds ONE to the pile (a matched recipe floats a preview); a held hammer
+ * never enters the pile - it (or shift-click) starts the cold-hammer minigame via Hammer.startSession,
+ * with the hammer's rank (either hand) gating attainable quality. Empty-hand takes the last pile item
+ * back. Casting mode: a fired mold placed on an EMPTY pile accepts a molten crucible pour (hold-to-use;
+ * a cooled crucible is refused); empty-hand then pops the finished casting, scraps an underfilled dud,
+ * or takes the mold back. All mutating interactions check WorkBlockLocks so players cannot fight a
+ * citizen mid-craft; breaking the block pops pile/mold/forge contents and aborts any hammer session.
  */
 public class StoneAnvilBlock extends BaseEntityBlock {
     public static final MapCodec<StoneAnvilBlock> CODEC = simpleCodec(StoneAnvilBlock::new);
@@ -81,10 +80,7 @@ public class StoneAnvilBlock extends BaseEntityBlock {
         return SHAPE;
     }
 
-    /**
-     * The collision box isn't a full block, so vanilla classifies the cell as walkable and NPCs path
-     * onto it and snag. Mark it un-pathfindable so every pathfinder routes around it.
-     */
+    // Partial collision box: without this override vanilla marks the cell walkable and NPCs snag on it.
     @Override
     protected boolean isPathfindable(BlockState state,
                                      net.minecraft.world.level.pathfinder.PathComputationType type) {
@@ -117,21 +113,18 @@ public class StoneAnvilBlock extends BaseEntityBlock {
             return ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
         }
 
-        // A hammer in hand starts the cold-hammer minigame — it never goes into the pile.
         if (stack.getItem() instanceof HammerItem) {
             return tryStart(level, pos, player, be)
                 ? ItemInteractionResult.sidedSuccess(level.isClientSide)
                 : ItemInteractionResult.SKIP_DEFAULT_BLOCK_INTERACTION;
         }
 
-        // Shift → start the cold-hammer minigame on the matched pile recipe.
         if (player.isSecondaryUseActive()) {
             return tryStart(level, pos, player, be)
                 ? ItemInteractionResult.sidedSuccess(level.isClientSide)
                 : ItemInteractionResult.PASS_TO_DEFAULT_BLOCK_INTERACTION;
         }
 
-        // Casting mode: place a fired mold on an empty pile, then pour a molten crucible into it.
         String moldShape = MetalworkingItems.shapeOfFiredMold(stack.getItem());
         if (moldShape != null && be.pileEmpty() && !be.hasMold()) {
             if (!level.isClientSide) {
@@ -154,13 +147,11 @@ public class StoneAnvilBlock extends BaseEntityBlock {
                 }
                 return ItemInteractionResult.sidedSuccess(level.isClientSide);
             }
-            // Hold to pour: the crucible item drains a little per tick (CrucibleItem.onUseTick) so the
-            // mold fills gradually. Started on both sides so the use stays in sync.
+            // Pour is hold-to-use (CrucibleItem.onUseTick drains per tick); must start on BOTH sides or the use desyncs.
             player.startUsingItem(hand);
             return ItemInteractionResult.sidedSuccess(level.isClientSide);
         }
 
-        // Pile mode: add one item to the pile.
         if (!be.hasMold() && !stack.isEmpty()) {
             if (!level.isClientSide
                     && !com.bannerbound.core.api.workshop.WorkBlockLocks.isLockedByOther(pos, player.getUUID())
@@ -207,7 +198,6 @@ public class StoneAnvilBlock extends BaseEntityBlock {
             }
             return InteractionResult.sidedSuccess(level.isClientSide);
         }
-        // Pile mode: take the last item back.
         if (!level.isClientSide
                 && !com.bannerbound.core.api.workshop.WorkBlockLocks.isLockedByOther(pos, player.getUUID())) {
             ItemStack out = be.removeOne();
@@ -216,8 +206,6 @@ public class StoneAnvilBlock extends BaseEntityBlock {
         return InteractionResult.sidedSuccess(level.isClientSide);
     }
 
-    /** Opens the cold-hammer minigame when the pile has a researched recipe and the player holds a
-     *  hammer (its rank gates the quality), and no citizen is mid-craft on the station. */
     private static boolean tryStart(Level level, BlockPos pos, Player player, StoneAnvilBlockEntity be) {
         if (com.bannerbound.core.api.workshop.WorkBlockLocks.isLockedByOther(pos, player.getUUID())) {
             if (!level.isClientSide) {
@@ -242,7 +230,6 @@ public class StoneAnvilBlock extends BaseEntityBlock {
         return true;
     }
 
-    /** The rank of a hammer in either hand, or -1 if the player isn't holding one. */
     private static int hammerRank(Player player) {
         for (InteractionHand h : InteractionHand.values()) {
             if (player.getItemInHand(h).getItem() instanceof HammerItem hammer) return hammer.rank();

@@ -29,37 +29,36 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Builder {@link WorkGoal} (WALLS_PLAN.md Phase 4) — works the settlement's wall plan via the
- * derived {@link WallTasks} board: PLACE blueprint blocks (materials withdrawn from the
- * drop-off depot first, then settlement stockpiles — remote, like every worker's yield),
- * CLEAR footprint vegetation (logs banked to the depot), DEMOLISH obsolete wall blocks
- * (broken block refunded to the depot). No marker: the workplace IS the plan, so the goal
- * activates whenever the settlement has open wall tasks.
+ * Builder {@link WorkGoal} (WALLS_PLAN.md Phase 4): works the settlement's wall plan via the
+ * derived {@link WallTasks} board. Three task kinds -- PLACE blueprint blocks (materials
+ * withdrawn from the drop-off depot first, then settlement stockpiles, remote like every
+ * worker's yield), CLEAR footprint vegetation (logs banked to the depot), DEMOLISH obsolete
+ * wall blocks (broken block refunded to the depot). No marker: the workplace IS the plan, so
+ * the goal activates whenever the settlement has open wall tasks.
  *
  * <p>Approach/reach/swing mechanics mirror {@link MinerWorkGoal} (stand near, raycast,
- * generous reach, stagnation watchdog). Placement and demolition MUST call
- * {@code WallData.markBuilt}/{@code clearBuilt} inline — workers bypass block events
- * (established pattern), and the placement-time wall memory is what keeps terrain-block
- * walls from ever reading as terrain.
+ * generous reach, stagnation watchdog). WORK_TICKS is one swing then the block lands (user
+ * decision 2026-06-11: building reads as brisk placement, not mining). Placement and
+ * demolition MUST call {@code WallData.markBuilt}/{@code clearBuilt} inline -- workers bypass
+ * block events (established pattern), and the placement-time wall memory is what keeps
+ * terrain-block walls from ever reading as terrain. canStartWork and finishAndNext each claim
+ * up to CLAIM_ATTEMPTS tasks, skipping unsupplied/unreachable ones and reporting them to the
+ * board so a builder never silently spins on an impossible task; finishAndNext re-claims
+ * inline so the builder flows along the wall without goal churn.
  *
- * <p>Known v1 limit (plan §F): reach ~4.5 from walkable ground covers ~5 courses; taller
- * designs' upper courses fall to the player until scaffolding ships. Unreachable tasks are
- * reported to the board, never silently spun on.
+ * <p>Known v1 limit (plan section F): reach ~4.5 from walkable ground covers ~5 courses; taller
+ * designs' upper courses fall to the player until scaffolding ships.
  */
 @ApiStatus.Internal
 public class BuilderWorkGoal extends WorkGoal {
-    /** Per-citizen job id (Job tab / unlocks / icons all key off this). */
     public static final String JOB_TYPE_ID = "builder";
 
-    /** Ticks per block: ONE swing, then the block lands (user decision 2026-06-11 — building
-     *  reads as brisk placement, not mining; half a second keeps the arm animation visible). */
     private static final int WORK_TICKS = 10;
     private static final int RESCAN_COOLDOWN_TICKS = 60;
     private static final double REACH = 4.5;
     private static final double REACH_SQ = REACH * REACH;
     private static final int TARGET_TIMEOUT_TICKS = 240;
     private static final int STAGNATION_LIMIT = 30;
-    /** Bounded attempts to find a workable task per scan (skipping unsupplied/unreachable). */
     private static final int CLAIM_ATTEMPTS = 8;
 
     private WallTasks.Task task;
@@ -81,8 +80,6 @@ public class BuilderWorkGoal extends WorkGoal {
     protected String workstationTypeId() {
         return JOB_TYPE_ID;
     }
-
-    // ─── Start / continue ────────────────────────────────────────────────────────────────────
 
     @Override
     protected boolean canStartWork() {
@@ -167,8 +164,8 @@ public class BuilderWorkGoal extends WorkGoal {
         if (canWorkFromHere(targetPos)) {
             citizen.getNavigation().stop();
             workTimer++;
-            if (workTimer == 1) playSwing(sl, targetPos);   // exactly one swing per block
-            if (workTimer >= skilledWorkTicks(WORK_TICKS)) { // a practiced builder lays blocks faster
+            if (workTimer == 1) playSwing(sl, targetPos);
+            if (workTimer >= skilledWorkTicks(WORK_TICKS)) {
                 perform(sl);
                 workTimer = 0;
             }
@@ -189,9 +186,6 @@ public class BuilderWorkGoal extends WorkGoal {
         }
     }
 
-    // ─── The work ────────────────────────────────────────────────────────────────────────────
-
-    /** The world may have changed under the task (hand-built, regen, another builder). */
     private boolean taskStillValid(ServerLevel sl) {
         BlockState actual = sl.getBlockState(targetPos);
         return switch (task.kind) {
@@ -213,11 +207,8 @@ public class BuilderWorkGoal extends WorkGoal {
                     abandonTask();
                     return;
                 }
-                // The blueprint's expected states carry the design's BAKED connections
-                // (WallData.blueprint → WallConnectivity.bake) — place them VERBATIM, and
-                // with flag 2|16 (client update, NO neighbor shape updates) so vanilla can't
-                // mutate this block or the already-placed wall around it ("keep exactly the
-                // block-states/connections from the wall design", playtest 2026-06-12).
+                // Flag 2|16 = client update, NO neighbor shape updates: task.expected carries the
+                // design's baked connections; without 16 vanilla mutates this block and the placed wall.
                 sl.setBlock(targetPos, task.expected, 2 | 16);
                 com.bannerbound.core.api.research.InsightManager.recordEvent(
                     sl.getServer(), settlement, "place_block",
@@ -229,7 +220,6 @@ public class BuilderWorkGoal extends WorkGoal {
             }
             case CLEAR, DEMOLISH -> {
                 BlockState before = sl.getBlockState(targetPos);
-                // Refund: demolished wall blocks always; cleared vegetation banks logs only.
                 Item refund = task.kind == WallTasks.Kind.DEMOLISH
                     ? before.getBlock().asItem()
                     : (before.is(BlockTags.LOGS) ? before.getBlock().asItem() : null);
@@ -256,8 +246,6 @@ public class BuilderWorkGoal extends WorkGoal {
         finishAndNext(sl, true);
     }
 
-    /** Depot first (the builder's own drop-off doubles as the material staging chest), then
-     *  the settlement-wide stockpiles. Remote, like every other worker's yield routing. */
     private boolean withdrawMaterial(ServerLevel sl, Settlement settlement, Item material) {
         Container depot = resolveDepot();
         if (depot != null) {
@@ -296,7 +284,6 @@ public class BuilderWorkGoal extends WorkGoal {
         task = null;
         targetPos = null;
         targetAge = 0;
-        // Claim the next task inline so a builder flows along the wall without goal churn.
         if (settlement != null) {
             for (int attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
                 WallTasks.Task next = WallTasks.claim(sl, settlement, citizen.getUUID(),
@@ -323,11 +310,9 @@ public class BuilderWorkGoal extends WorkGoal {
                 return;
             }
         }
-        // Nothing workable — canKeepWorking goes false; rescan cooldown paces the restart.
         rescanCooldown = RESCAN_COOLDOWN_TICKS;
     }
 
-    /** Visible carry: PLACE shows the material in hand; CLEAR/DEMOLISH work bare-handed. */
     private void showHandFor(WallTasks.Task t) {
         if (t != null && t.kind == WallTasks.Kind.PLACE && t.expected != null) {
             citizen.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND,
@@ -336,8 +321,6 @@ public class BuilderWorkGoal extends WorkGoal {
             citizen.setItemSlot(net.minecraft.world.entity.EquipmentSlot.MAINHAND, ItemStack.EMPTY);
         }
     }
-
-    // ─── Movement / reach (miner regime) ─────────────────────────────────────────────────────
 
     private Container resolveDepot() {
         return DropOffContainers.resolveOrPreferred(citizen, citizen.getDropOff());

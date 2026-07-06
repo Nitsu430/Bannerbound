@@ -29,12 +29,18 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * The barbarian barter: a four-quadrant counter-offer screen. Top row = the deal on the table
- * ("Your offer" = what you'd give from the town storage, "Their offer" = what the camp would hand
- * over); bottom row = the two pools you draw from ("Storage" = your pool, "Their storage" = the camp's
- * goods). Left-click a storage row to add a unit to that side's offer (shift = +5); left-click an offer
- * row to take one back (shift = clear). A live verdict + balance bar score the deal against the camp's
- * value bar, and the screen polls live storage so Accept + the add rows grey out the instant the pool
- * can't back the offer. The server re-validates everything on submit.
+ * ("Your offer" = what you'd give from town storage, "Their offer" = what the camp hands over);
+ * bottom row = the two pools you draw from ("Storage" = your pool, "Their storage" = camp goods).
+ * Left-click a storage row to add a unit to that side's offer (shift = +5); left-click an offer row
+ * to take one back (shift = clear). A live verdict + balance bar score the deal: acceptable when
+ * value(give) >= value(get)*marginPercent/100 + tributeFloor. The screen polls live storage every
+ * POLL_INTERVAL ticks so Accept and the add rows grey out the instant the pool can't back the offer;
+ * the server re-validates everything on submit.
+ *
+ * PolishedScreen auto-fits the fixed PANEL_W x PANEL_H panel to the window, so every mouse event
+ * remaps its coords through virtualX/virtualY and every card's scissor goes through scissorX/scissorY
+ * (raw enableScissor ignores the auto-fit pose). Item names are revealed even for un-researched goods
+ * (consistent with the parley) so a barter stays readable.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -44,13 +50,12 @@ public final class BarbarianBarterScreen extends PolishedScreen {
     private static final int HEADER_H = 50;
     private static final int QUAD_W = 150;
     private static final int QUAD_H = 92;
-    private static final int SLOT = 18;       // inventory-grid cell size
-    private static final int GRID_PAD = 5;    // inset of the slot grid from the card edges
-    private static final int ROWS_TOP = 17;   // grid starts this far below a card's top (under its header)
-    private static final int GAP = 12;        // vertical gap between the offer row and the pool row
+    private static final int SLOT = 18;
+    private static final int GRID_PAD = 5;
+    private static final int ROWS_TOP = 17;
+    private static final int GAP = 12;
     private static final int POLL_INTERVAL = 10;
 
-    // Palette ─ a cohesive dark-slate panel with a warm "worth" accent.
     private static final int BODY_TOP = 0xF016202C;
     private static final int BODY_BOT = 0xF00B1018;
     private static final int EDGE = 0xFF3A4A5E;
@@ -108,8 +113,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         unitValues.put(e.itemId(), e.unitValue());
     }
 
-    // Auto-fit: the fixed panel scales to the window (PolishedScreen opt-in); the mouse events
-    // below remap through virtualX/virtualY so hit-tests track the scaled layout.
     @Override
     protected int fitPanelWidth() {
         return PANEL_W;
@@ -125,7 +128,7 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         panelX = (this.width - PANEL_W) / 2;
         panelY = (this.height - PANEL_H) / 2;
         int cx = panelX + PANEL_W / 2;
-        int by = bottomY() + 8;                  // button column, centred between the bottom panels
+        int by = bottomY() + 8;
         int bw = 92;
         acceptBtn = addRenderableWidget(PolishButton.polished(
             Component.translatable("bannerbound.barbarian.barter.accept").withStyle(ChatFormatting.GREEN),
@@ -144,8 +147,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
             .bounds(cx - bw / 2, by + (isDemand && canDefer ? 62 : 42), bw, 16).build());
         refreshButtons();
     }
-
-    // ─── Valuation ────────────────────────────────────────────────────────────────────────────────
 
     private int valueOf(Map<String, Integer> offer) {
         int v = 0;
@@ -178,8 +179,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         counterBtn.active = afford && !ok;
     }
 
-    // ─── Live storage poll + update ─────────────────────────────────────────────────────────────────
-
     @Override
     public void tick() {
         super.tick();
@@ -198,12 +197,10 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         refreshButtons();
     }
 
-    // ─── Interaction ────────────────────────────────────────────────────────────────────────────────
-
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
         mx = virtualX(mx);
-        my = virtualY(my); // map into auto-fit panel space (widgets included via super)
+        my = virtualY(my);
         if (button == 0) {
             int step = hasShiftDown() ? 5 : 1;
             String sId = slotAt(storage, storageScroll, leftX(), bottomY(), mx, my);
@@ -226,7 +223,7 @@ public final class BarbarianBarterScreen extends PolishedScreen {
     @Override
     public boolean mouseScrolled(double mx, double my, double dx, double dy) {
         mx = virtualX(mx);
-        my = virtualY(my); // map into auto-fit panel space
+        my = virtualY(my);
         if (inPanel(leftX(), bottomY(), mx, my)) {
             storageScroll = clampRows(storageScroll - (int) Math.signum(dy), storage.size());
             return true;
@@ -271,13 +268,10 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         return out;
     }
 
-    // ─── Rendering ──────────────────────────────────────────────────────────────────────────────────
-
     @Override
     protected void renderPolishedBackdrop(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         int accent = 0xFF000000 | (campColor & 0xFFFFFF);
 
-        // Panel: drop shadow, gradient body, bevelled border, camp-colour accent stripe along the top.
         g.fill(panelX + 4, panelY + 5, panelX + PANEL_W + 4, panelY + PANEL_H + 5, 0x80000000);
         g.fillGradient(panelX, panelY, panelX + PANEL_W, panelY + PANEL_H, BODY_TOP, BODY_BOT);
         g.renderOutline(panelX, panelY, PANEL_W, PANEL_H, EDGE_DARK);
@@ -285,7 +279,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         drawHorizontalGradient(g, panelX + 2, panelY + 2, PANEL_W - 4, 2,
             accent & 0x88FFFFFF, accent & 0x00FFFFFF);
 
-        // Header: name (camp colour) + type · stance, with an accent divider beneath.
         g.drawString(this.font, Component.literal(campName).withStyle(s -> s.withColor(accent)),
             panelX + 12, panelY + 9, accent, true);
         g.drawString(this.font, Component.literal(typeName).withStyle(ChatFormatting.GRAY)
@@ -297,7 +290,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         drawHorizontalGradient(g, panelX + 12, panelY + HEADER_H - 4, PANEL_W - 24, 1,
             accent & 0xCCFFFFFF, accent & 0x10FFFFFF);
 
-        // Four cards — offer cards show their total worth in the header so "worth" is always visible.
         card(g, leftX(), topY(), "bannerbound.barbarian.barter.your_offer", give, 0, false, mouseX, mouseY,
             valueOf(give));
         card(g, rightX(), topY(), "bannerbound.barbarian.barter.their_offer", get, 0, false, mouseX, mouseY,
@@ -311,8 +303,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         buttonBacking(g);
     }
 
-    /** Labelled "deal balance" meter in the gap between the offer cards: how the worth you've put on the
-     *  table compares to what the camp will accept, with plain-language guidance on the shortfall. */
     private void centreExchange(GuiGraphics g) {
         int cx = panelX + PANEL_W / 2;
         int gx0 = leftX() + QUAD_W + 8;
@@ -324,7 +314,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
 
         drawCentred(g, Component.translatable("bannerbound.barbarian.barter.balance").getString(),
             cx, y, TXT_OFF);
-        // Worth you've offered vs the worth the camp wants, as a progress fraction.
         drawCentred(g, giveV + " / " + need, cx, y + 11, statusCol);
 
         int barY = y + 22;
@@ -341,7 +330,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         drawCentred(g, status.getString(), cx, barY + 9, statusCol);
     }
 
-    /** A faint plate behind the central button column so it reads as one control group. */
     private void buttonBacking(GuiGraphics g) {
         int cx = panelX + PANEL_W / 2;
         int half = 92 / 2 + 5;
@@ -355,21 +343,20 @@ public final class BarbarianBarterScreen extends PolishedScreen {
                       boolean pool, int mouseX, int mouseY, int worth) {
         g.fillGradient(x, y, x + QUAD_W, y + QUAD_H, CARD_TOP, CARD_BOT);
         g.renderOutline(x, y, QUAD_W, QUAD_H, CARD_EDGE);
-        g.fill(x + 1, y + 1, x + QUAD_W - 1, y + 2, 0x12FFFFFF);          // soft top inner highlight
+        g.fill(x + 1, y + 1, x + QUAD_W - 1, y + 2, 0x12FFFFFF);
 
         g.drawString(this.font, Component.translatable(titleKey).withStyle(ChatFormatting.GRAY),
             x + 5, y + 4, TXT_DIM, false);
-        if (worth >= 0) {                                                 // offer cards label their worth
+        if (worth >= 0) {
             String w = Component.translatable("bannerbound.barbarian.barter.worth", worth).getString();
             g.drawString(this.font, w, x + QUAD_W - 5 - this.font.width(w), y + 4, GOLD, false);
         }
         g.fill(x + 4, y + 14, x + QUAD_W - 4, y + 15, DIVIDER);
 
-        // Items as a packed inventory-slot grid (bundle-style), names → hover tooltip, count in the
-        // corner. Scissor is pre-mapped through scissorX/Y — it ignores the auto-fit pose.
         List<String> ids = new ArrayList<>(rows.keySet());
         int cols = gridCols(), vis = gridRows();
         int gx = x + GRID_PAD, gy = y + ROWS_TOP;
+        // Scissor must go through scissorX/Y; raw enableScissor ignores the auto-fit pose.
         g.enableScissor(scissorX(gx), scissorY(gy),
             scissorX(gx + cols * SLOT), scissorY(gy + vis * SLOT));
         int start = scroll * cols;
@@ -396,7 +383,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         }
     }
 
-    /** A recessed inventory slot cell, themed to the panel (dark fill, shadow top-left, highlight bot-right). */
     private void drawSlot(GuiGraphics g, int x, int y) {
         g.fill(x, y, x + SLOT, y + SLOT, 0x55000000);
         g.fill(x, y, x + SLOT, y + 1, 0xFF0C1118);
@@ -437,8 +423,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         return give.getOrDefault(id, 0) + get.getOrDefault(id, 0);
     }
 
-    // ─── Tooltips (drawn AFTER widgets so they sit on top) ──────────────────────────────────────────
-
     @Override
     protected void renderPolishedExtras(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         String id = hoveredId(mouseX, mouseY);
@@ -448,7 +432,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
                     unitValues.getOrDefault(id, 0)).withStyle(ChatFormatting.GRAY)), mouseX, mouseY);
             return;
         }
-        // Hovering the centre meter explains what "worth" means.
         if (mouseX >= leftX() + QUAD_W && mouseX < rightX() && mouseY >= topY() && mouseY < topY() + QUAD_H) {
             g.renderComponentTooltip(this.font, List.of(
                 Component.translatable("bannerbound.barbarian.barter.help.title").withStyle(ChatFormatting.GOLD),
@@ -487,8 +470,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
             .withStyle(c);
     }
 
-    // ─── Geometry helpers ────────────────────────────────────────────────────────────────────────────
-
     private int leftX() { return panelX + 12; }
     private int rightX() { return panelX + PANEL_W - 12 - QUAD_W; }
     private int topY() { return panelY + HEADER_H; }
@@ -498,7 +479,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         return mx >= x && mx < x + QUAD_W && my >= y + ROWS_TOP && my < y + QUAD_H;
     }
 
-    /** The item id of the grid cell under the cursor (scroll is a ROW offset), or null. */
     private String slotAt(Map<String, Integer> rows, int scroll, int x, int y, double mx, double my) {
         int cols = gridCols(), vis = gridRows();
         int gx = x + GRID_PAD, gy = y + ROWS_TOP;
@@ -515,7 +495,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         goodsScroll = clampRows(goodsScroll, goods.size());
     }
 
-    /** Clamp a ROW scroll offset so the last grid row can't scroll past the visible window. */
     private int clampRows(int scrollRows, int size) {
         int totalRows = (size + gridCols() - 1) / gridCols();
         return Math.max(0, Math.min(scrollRows, Math.max(0, totalRows - gridRows())));
@@ -530,7 +509,6 @@ public final class BarbarianBarterScreen extends PolishedScreen {
         return rl == null ? Items.AIR : BuiltInRegistries.ITEM.get(rl);
     }
 
-    /** Reveal the real name even for un-researched goods (consistent with the parley) so a barter is readable. */
     private Component itemName(String id) {
         ItemStack stack = new ItemStack(item(id));
         return UnknownItemHelper.isUnknownForLocalPlayer(stack) ? item(id).getDescription()

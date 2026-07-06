@@ -26,15 +26,40 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
+/**
+ * Server-side hub for every client -> server payload in Core: one static handle*(payload, context)
+ * method per packet, wired to the payloads at network registration time (elsewhere). Every handler
+ * hops off the network thread with context.enqueueWork(...) before touching game state -- doing work
+ * inline would race the server thread; this is the single non-negotiable rule for adding a handler.
+ *
+ * <p>The client is NEVER authority. Each handler independently re-resolves the acting player's
+ * settlement and re-checks membership, permissions, research/era gates and target validity from
+ * scratch, so a spoofed or stale packet cannot bypass the UI's own gating. That is why the checks
+ * look redundant with what the client already enforces -- they are the real enforcement.
+ *
+ * <p>Weighty / issuing actions (exile, registration tablet/paper, territory claim, policy and
+ * palette changes, disband) route by government type: anarchy = direct or disallowed (no authority
+ * exists), COUNCIL = a clickable ChatVoteManager vote (majority of online members), CHIEFDOM = the
+ * seated chief (or acting regent) acts directly while any other member instead toggles a SUGGESTION
+ * the chief sees in the Suggestions tab. rejectIfChiefdomNonChief guards the research start/enqueue
+ * endpoints the same way; non-chiefs there are routed to suggestions on the client.
+ *
+ * <p>Shared helpers: canManageJobs / resolveManageable centralize the Job-tab permission-plus-lookup
+ * gate (chief/regent, any council member, or any member under the Workload Share policy; in anarchy
+ * any member may make the narrow self-organizing tweaks). sendJobState builds the whole Job-tab
+ * payload and is reused by the open path AND the ~1 Hz live poll (piggybacked on the citizen live
+ * state poll). Compliance-driven refusal: assigning a low-compliance citizen may roll a rejection
+ * that stamps a per-job NO_WORK_AS_JOB thought (job key derived stably from the job id) instead of
+ * taking effect. markStorage / markPreferredStorage / markDropOff are called from
+ * DropLocationServerGuard when the editing player clicks a block; they return true to END edit mode
+ * and false to let the player retry on a rejected block. Foreman's-Rod commit handlers whitelist the
+ * workstation-type string and re-validate territory/enclosure before writing component data.
+ */
 @ApiStatus.Internal
 public final class ServerPayloadHandler {
     private ServerPayloadHandler() {
     }
 
-    /** Helper: returns true (after sending a red toast) if {@code player} is a non-Chief in a
-     *  Chiefdom and therefore can't act as Chief for routine research actions. Returns false
-     *  in Council / NONE governments — those have no Chief gate. Used to defend the
-     *  start-research + enqueue-research endpoints against spoofed packets. */
     private static boolean rejectIfChiefdomNonChief(ServerPlayer player) {
         MinecraftServer server = player.getServer();
         if (server == null) return false;
@@ -49,9 +74,6 @@ public final class ServerPayloadHandler {
         return true;
     }
 
-    /** Client asked for the starting-items set once it was fully in-world — (re)send it. A reliable
-     *  pull to back up the {@code OnDatapackSyncEvent} push, which can miss during the join handshake
-     *  and leave the client's known-set empty (JEI then shows a wall of "?"). */
     public static void handleRequestStartingItems(RequestStartingItemsPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (context.player() instanceof ServerPlayer player) {
@@ -93,9 +115,7 @@ public final class ServerPayloadHandler {
             if (!(context.player() instanceof ServerPlayer player)) {
                 return;
             }
-            // Chiefdom gate: only the seated Chief may even *initiate* the disband vote.
-            // Council + NONE governments are unaffected (canActWeighty returns true for any
-            // member in those cases).
+
             net.minecraft.server.MinecraftServer server = player.getServer();
             if (server != null) {
                 SettlementData data = SettlementData.get(server.overworld());
@@ -114,8 +134,7 @@ public final class ServerPayloadHandler {
     public static void handleCastGovernmentVote(CastGovernmentVotePayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
-            // Decode ordinal → enum; reject NONE / out-of-range silently (a tampered packet
-            // shouldn't be able to "vote for anarchy" or crash the server).
+
             com.bannerbound.core.api.settlement.Settlement.Government[] vals =
                 com.bannerbound.core.api.settlement.Settlement.Government.values();
             int ord = payload.governmentOrdinal();
@@ -184,7 +203,6 @@ public final class ServerPayloadHandler {
             if (settlement == null) return;
             if (!com.bannerbound.core.api.faith.FaithManager.choiceWindowOpen(server, settlement)) {
                 if (settlement.faithChoiceWindowOpen()) {
-                    // Structurally open but cooling down after apostasy.
                     player.sendSystemMessage(Component.translatable("bannerbound.faith.cooldown")
                         .withStyle(ChatFormatting.YELLOW));
                 }
@@ -195,9 +213,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Non-Chief member of a Chiefdom clicked a research node. Instead of starting/queueing
-     *  the research, broadcast a suggestion chat to the seated Chief so they can decide.
-     *  No state mutation here — the Chief still has to act on the suggestion. */
     public static void handleSuggestResearch(SuggestResearchPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -206,17 +221,14 @@ public final class ServerPayloadHandler {
             SettlementData data = SettlementData.get(server.overworld());
             Settlement settlement = data.getByPlayer(player.getUUID());
             if (settlement == null) return;
-            // Only meaningful in CHIEFDOM with an actual seated Chief. Council members can
-            // start research themselves, so a suggestion makes no sense there; silently drop.
+
             if (settlement.governmentType() != Settlement.Government.CHIEFDOM
                     || settlement.chiefPlayerId() == null) {
                 return;
             }
             String researchId = payload.researchId();
             if (researchId == null || researchId.isBlank()) return;
-            // Toggle: if the player already had this node suggested, the click RETRACTS it.
-            // Per design: no chat broadcasts on vote/suggest actions — the on-screen marker
-            // update (broadcast below) IS the feedback. Avoids "X suggested Y" spam.
+
             if (payload.treeType() == SuggestResearchPayload.TREE_CULTURE) {
                 settlement.toggleCultureSuggestion(researchId, player.getUUID());
             } else {
@@ -296,8 +308,7 @@ public final class ServerPayloadHandler {
             if (!(context.player() instanceof ServerPlayer player)) {
                 return;
             }
-            // Chiefdom gate: non-Chiefs cannot enqueue, must use suggest. Defense in depth —
-            // the client routes their click as a suggestion, but a spoofed packet would skip.
+
             if (rejectIfChiefdomNonChief(player)) return;
             com.bannerbound.core.api.research.ResearchManager.EnqueueResult result =
                 com.bannerbound.core.api.research.ResearchManager.tryEnqueue(player, payload.researchId());
@@ -401,10 +412,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Step 9 polish: re-send compliance + resentment for an open citizen screen so values
-     *  tick live. The client polls this every ~20 ticks while a CitizenScreen is open;
-     *  server resolves the entity, validates the player can view it (member of same
-     *  settlement), then sends a CitizenLiveStatePayload. */
     public static void handleRequestCitizenLiveState(RequestCitizenLiveStatePayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -412,27 +419,23 @@ public final class ServerPayloadHandler {
             if (server == null) return;
             net.minecraft.world.entity.Entity ent = player.serverLevel().getEntity(payload.entityId());
             if (!(ent instanceof com.bannerbound.core.entity.CitizenEntity c)) return;
-            // Access: the requester must be in the same settlement OR be an admin (creative).
+
             SettlementData data = SettlementData.get(server.overworld());
             Settlement viewer = data.getByPlayer(player.getUUID());
             if (viewer == null || c.getSettlementId() == null
                     || !viewer.id().equals(c.getSettlementId())) {
                 return;
             }
-            // Filter to the viewer's own resentment value — same privacy rule as the
-            // open payload (citizens don't expose how they feel about OTHER players).
+
             int viewerResentment = c.getResentment(player.getUUID());
             net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(player,
                 new com.bannerbound.core.network.CitizenLiveStatePayload(
                     payload.entityId(), c.getCompliance(), viewerResentment));
-            // Piggyback the Job-tab state on the same 1 Hz poll so it stays fresh while open.
+
             sendJobState(player, c);
         });
     }
 
-    /** Step 15: the seated Chief is stepping down. Clears {@code chiefPlayerId} (which
-     *  re-opens the chief-election window), removes them from the chief scoreboard team,
-     *  and triggers a regent recompute. */
     public static void handleQuitChief(QuitChiefPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -447,16 +450,14 @@ public final class ServerPayloadHandler {
                     .withStyle(ChatFormatting.RED));
                 return;
             }
-            // Only the actual seated Chief may quit — a regent stepping down has no effect
-            // on the seat (they were never IN the seat); a non-Chief click here is a spoof.
+
             if (!player.getUUID().equals(settlement.chiefPlayerId())) {
                 player.sendSystemMessage(Component.translatable(
                         "bannerbound.chief.quit.not_chief")
                     .withStyle(ChatFormatting.RED));
                 return;
             }
-            // Anti-cheese: a freshly-elected chief must serve a minimum term before resigning.
-            // The button greys out with a live countdown; this re-check stops a spoofed packet.
+
             long since = settlement.chiefSinceTick();
             long elapsed = server.overworld().getGameTime() - since;
             if (since >= 0 && elapsed < com.bannerbound.core.api.settlement.SettlementManager.CHIEF_STEP_DOWN_COOLDOWN_TICKS) {
@@ -468,9 +469,7 @@ public final class ServerPayloadHandler {
                 return;
             }
             settlement.setChiefPlayerId(null);
-            // Demote the ex-chief from the chief scoreboard team — back to the regular
-            // settlement team. The scoreboard team itself can stick around (empty) until the
-            // next chief is elected; vanilla cleans it via removeSettlementTeams on disband.
+
             com.bannerbound.core.api.settlement.SettlementManager
                 .applyScoreboardTeam(server, player, settlement);
             data.setDirty();
@@ -478,23 +477,13 @@ public final class ServerPayloadHandler {
                 server, settlement,
                 Component.translatable("bannerbound.chief.quit.broadcast", player.getName())
                     .withStyle(ChatFormatting.GOLD));
-            // Regent recompute: with the seat vacant, an online member can step in until a
-            // new chief is elected. Even the just-resigned ex-chief might end up as their
-            // own settlement's regent if they're the least-resented member online.
+
             com.bannerbound.core.api.settlement.SettlementManager.recomputeRegent(server, settlement);
-            // Push refreshed town-hall state to every member so the choose-chief flow opens
-            // and the seated-Chief button (which we just clicked) clears.
+
             com.bannerbound.core.api.settlement.ImmigrationManager.broadcastState(server, settlement);
         });
     }
 
-    /**
-     * An individual member leaving their settlement (Town Hall "Leave Settlement" button). A seated
-     * Chief is refused — they must Step Down first (and serve the minimum term); the UI shows them
-     * Step Down in this slot instead of Leave, and this server check stops a spoofed packet.
-     * Everyone else runs {@link com.bannerbound.core.api.settlement.SettlementManager#tryLeave},
-     * which sends its own success message and collapses the settlement if they were the last member.
-     */
     public static void handleLeaveSettlement(LeaveSettlementPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -569,7 +558,7 @@ public final class ServerPayloadHandler {
             SettlementData data = SettlementData.get(server.overworld());
             Settlement settlement = data.getByPlayer(player.getUUID());
             if (settlement == null) return;
-            // Only respond if the workstation is actually owned by this player's settlement.
+
             if (settlement.getWorkstation(payload.workstationPos()) == null) return;
 
             java.util.List<CitizenListPayload.Entry> entries = new java.util.ArrayList<>();
@@ -620,19 +609,15 @@ public final class ServerPayloadHandler {
             com.bannerbound.core.api.settlement.Workstation ws = settlement.getWorkstation(payload.workstationPos());
             if (ws == null) return;
 
-            // Clear any *other* station this citizen used to work — one job per citizen.
             java.util.UUID assigning = payload.citizenId();
             if (assigning != null && assigning.getMostSignificantBits() != 0L) {
-                // Anarchy gate: with no code of laws, citizens don't obey assignments yet.
-                // The freelance AnarchyWorkGoal handles their behaviour during this window.
                 if (settlement.governmentType() == com.bannerbound.core.api.settlement.Settlement.Government.NONE) {
                     player.displayClientMessage(Component.translatable(
                         "bannerbound.workstation.anarchy_rejection")
                         .withStyle(ChatFormatting.RED), true);
                     return;
                 }
-                // Chiefdom: assigning jobs is a chief-only (or regent) action — UNLESS the
-                // Workload Share policy is active, which opens assignment to every member.
+
                 if (settlement.governmentType() == com.bannerbound.core.api.settlement.Settlement.Government.CHIEFDOM
                         && !settlement.canActAsChief(player.getUUID())
                         && !settlement.hasPolicy(com.bannerbound.core.api.settlement.PolicyRegistry.WORKLOAD_SHARE)) {
@@ -641,8 +626,7 @@ public final class ServerPayloadHandler {
                         .withStyle(ChatFormatting.RED), true);
                     return;
                 }
-                // Reject child assignment server-side — the client picker shouldn't list them,
-                // but a tampered packet shouldn't be able to put a kid at a workstation either.
+
                 if (player.serverLevel().getEntity(assigning)
                         instanceof com.bannerbound.core.entity.CitizenEntity ce && ce.isChild()) {
                     player.displayClientMessage(Component.translatable(
@@ -650,19 +634,13 @@ public final class ServerPayloadHandler {
                         .withStyle(ChatFormatting.RED), true);
                     return;
                 }
-                // Step 12: compliance-driven refusal. Look up the live citizen entity to
-                // read compliance + roll the refuseWorkstation table; on hit, stamp a
-                // NO_WORK_AS_JOB thought keyed by the workstation's job id so the citizen
-                // visibly refuses for a minute and the leader sees the rejection.
+
                 if (player.serverLevel().getEntity(assigning)
                         instanceof com.bannerbound.core.entity.CitizenEntity refusingCitizen) {
                     int compliance = refusingCitizen.getCompliance();
                     double refuseChance = com.bannerbound.core.api.settlement.ComplianceTables
                         .refuseWorkstation(compliance);
                     if (refuseChance > 0 && refusingCitizen.getRandom().nextDouble() < refuseChance) {
-                        // Per-job key so refusing a Forester assignment doesn't poison Farmer
-                        // assignments — the per-partner UUID is derived from the workstation
-                        // type/id string for stable identity.
                         String jobId = ws.type() != null
                             ? ws.type().toString()
                             : "unknown";
@@ -695,10 +673,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Exile routing by government: anarchy = not allowed (no authority exists to banish anyone);
-     *  council = clickable chat-vote (majority of online); chiefdom = the seated chief exiles
-     *  directly, any other member toggles a SUGGESTION the chief sees in the Suggestions tab. */
-    /** A player's choice in a barbarian parley (accept demands / refuse / trade). */
     public static void handleBarbarianParleyAction(BarbarianParleyActionPayload payload,
             IPayloadContext context) {
         context.enqueueWork(() -> {
@@ -708,7 +682,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** A player's move in a barbarian barter (propose / decline / defer). */
     public static void handleBarterAction(BarterActionPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (context.player() instanceof ServerPlayer player) {
@@ -717,7 +690,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** The open barter screen polling for a fresh storage snapshot (for live grey-out). */
     public static void handleRequestBarterStorage(RequestBarterStoragePayload payload,
             IPayloadContext context) {
         context.enqueueWork(() -> {
@@ -749,7 +721,7 @@ public final class ServerPayloadHandler {
             if (settlement == null) {
                 return;
             }
-            // Only members of the citizen's settlement can exile.
+
             if (!settlement.members().contains(player.getUUID())) {
                 player.sendSystemMessage(Component.translatable("bannerbound.citizen.exile.error.not_member")
                     .withStyle(ChatFormatting.RED));
@@ -784,9 +756,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Actually removes a citizen from the settlement (chief direct-exile or a passed council
-     *  vote). Resolves the entity by UUID when loaded (returns its tool, despawns it); the roster
-     *  entry is removed either way so a vote passing on an unloaded citizen still sticks. */
     public static void performExile(MinecraftServer server, Settlement settlement,
             java.util.UUID citizenUuid) {
         if (citizenUuid == null || settlement == null) return;
@@ -798,7 +767,7 @@ public final class ServerPayloadHandler {
         net.minecraft.world.entity.Entity raw = server.overworld().getEntity(citizenUuid);
         if (raw instanceof com.bannerbound.core.entity.CitizenEntity citizen) {
             if (citizen.getCustomName() != null) name = citizen.getCustomName().getString();
-            // Hand any held job tool back before the citizen is removed (drop-off, else feet).
+
             citizen.returnJobToolAndClear();
             citizen.discard();
         }
@@ -820,7 +789,6 @@ public final class ServerPayloadHandler {
         }
     }
 
-    /** Chat ping to the seated chief and the acting regent (when online) about a new suggestion. */
     private static void pingChief(MinecraftServer server, Settlement settlement, Component msg) {
         java.util.Set<java.util.UUID> targets = new java.util.LinkedHashSet<>();
         if (settlement.chiefPlayerId() != null) targets.add(settlement.chiefPlayerId());
@@ -831,15 +799,6 @@ public final class ServerPayloadHandler {
         }
     }
 
-    // ─── Job tab (per-citizen employment) ────────────────────────────────────────────────────────
-
-    /** True if {@code player} may manage jobs in {@code settlement}: any council member or the
-     *  chief/regent (via {@code canActAsChief}), or any member while the Workload Share policy is
-     *  active. Casual non-chiefs in a chiefdom are denied.
-     *  <p>In <b>anarchy</b> (no government) any settlement member may make the narrow refinements the
-     *  self-organizing phase allows — set a drop-off, request a gatherer job switch, hand over a tool.
-     *  The handlers themselves restrict what's possible there (no free assignment of ordered jobs, no
-     *  Foreman's-Rod orders); this just opens the door for members so the Job tab is usable. */
     private static boolean canManageJobs(ServerPlayer player, Settlement settlement) {
         if (settlement == null) return false;
         if (settlement.governmentType() == Settlement.Government.NONE) {
@@ -849,7 +808,6 @@ public final class ServerPayloadHandler {
             || settlement.hasPolicy(com.bannerbound.core.api.settlement.PolicyRegistry.WORKLOAD_SHARE);
     }
 
-    /** Implemented job type ids, in dropdown order. Add each here as it's migrated to the Job tab. */
     private static final String[] IMPLEMENTED_JOBS = {
         com.bannerbound.core.entity.ForesterWorkGoal.JOB_TYPE_ID,
         com.bannerbound.core.entity.DiggerWorkGoal.JOB_TYPE_ID,
@@ -859,11 +817,6 @@ public final class ServerPayloadHandler {
         com.bannerbound.core.entity.HerderWorkGoal.JOB_TYPE_ID,
     };
 
-    /** Research-unlocked job type ids this settlement may run (gated by each job's unlock flag).
-     *  Built-in jobs first, then {@link com.bannerbound.core.api.job.CitizenJobRegistry registry} jobs
-     *  (expansion gatherers). A registry job that has been superseded by a researched successor
-     *  ({@code obsoletedByUnit}, e.g. spear fisher once the rod fisher unlocks) is hidden so it can no
-     *  longer be assigned. */
     private static java.util.List<String> unlockedJobTypeIds(Settlement settlement) {
         java.util.List<String> out = new java.util.ArrayList<>();
         for (String job : IMPLEMENTED_JOBS) {
@@ -881,8 +834,6 @@ public final class ServerPayloadHandler {
         return out;
     }
 
-    /** Jobs the citizen Job tab may offer directly. Specific crafter specializations, such as
-     *  Potter and Carpenter, stay registered for workshop auto-selection but are not picker rows. */
     private static java.util.List<String> jobPickerJobTypeIds(Settlement settlement) {
         java.util.List<String> out = new java.util.ArrayList<>();
         for (String job : unlockedJobTypeIds(settlement)) {
@@ -904,10 +855,6 @@ public final class ServerPayloadHandler {
         return flag == null || ResearchManager.hasFlag(settlement, flag);
     }
 
-    /** Station type a citizen's generic-Crafter icon should show: its held station POSITION when
-     *  one is set (so a fletcher in a mixed workshop reads as a fletcher, not the workshop's MIXED
-     *  type), else the workshop's derived type. {@code null} when it has no workshop — JobIcons then
-     *  defaults the crafter to the crafting stone. */
     private static String assignedWorkshopType(Settlement settlement,
             com.bannerbound.core.entity.CitizenEntity citizen) {
         if (settlement == null || citizen.getAssignedWorkshopId() == null) return null;
@@ -919,9 +866,6 @@ public final class ServerPayloadHandler {
     }
 
     private static boolean anyCrafterProfessionUnlocked(Settlement settlement) {
-        // A single generic Crafter staffs every workshop; its specialties (fletcher, carpenter,
-        // potter, …) are the crafter-profession units declared per workshop type in
-        // WorkBlockRegistry. The job is offered once ANY one of them is researched.
         String genericFlag = com.bannerbound.core.api.settlement.WorkstationUnlocks
             .flagForWorkstation(com.bannerbound.core.entity.CrafterWorkGoal.JOB_TYPE_ID);
         if (genericFlag != null && ResearchManager.hasFlag(settlement, genericFlag)) return true;
@@ -932,16 +876,6 @@ public final class ServerPayloadHandler {
         return false;
     }
 
-    // Job-icon resolution — role mapping, the current-tool-age item, and the numeric icon id —
-    // lives in com.bannerbound.core.social.JobIcons, shared with the citizen name-tag suffix glyph
-    // so the JOB bubble and the name can never disagree about a job's icon (the herder-had-no-icon
-    // gap came from two such lists drifting apart). The herder's ICON is a vanilla lead; its tool
-    // SLOT accepts any item in #bannerbound:herder_rope (vanilla lead standalone, +fiber rope with
-    // Antiquity — the same tag HerderWorkGoal gates on), resolved in allowedToolItemIds below.
-
-    /** Item ids a job's tool slot accepts (current tool age or lower). Delegates to the shared
-     *  {@link com.bannerbound.core.entity.JobTools#allowedToolsFor} so the Job-tab slot and the
-     *  settlement's remote tool-provisioning never disagree about what counts as a valid tool. */
     private static java.util.List<Integer> allowedToolItemIds(Settlement settlement, String role) {
         java.util.List<Integer> out = new java.util.ArrayList<>();
         for (net.minecraft.world.item.Item tool
@@ -951,8 +885,6 @@ public final class ServerPayloadHandler {
         return out;
     }
 
-    /** Resolves the citizen + the viewer's settlement, verifies same-settlement, and sends the
-     *  Job-tab state. Shared by the open path and the live poll. No-op if anything doesn't resolve. */
     public static void sendJobState(ServerPlayer player, com.bannerbound.core.entity.CitizenEntity citizen) {
         MinecraftServer server = player.getServer();
         if (server == null || citizen.getSettlementId() == null) return;
@@ -965,30 +897,26 @@ public final class ServerPayloadHandler {
             : 0;
         net.minecraft.resources.ResourceLocation logId =
             net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(citizen.getPreferredLog());
-        // In anarchy the assign/switch list offers only the self-organizing gatherer jobs — ordered
-        // and logistics jobs are locked until a government is enacted.
+
         boolean anarchy = settlement.governmentType() == Settlement.Government.NONE;
         java.util.List<String> unlocked = anarchy
             ? com.bannerbound.core.entity.AnarchyJobs.unlockedGathererJobs(settlement)
             : jobPickerJobTypeIds(settlement);
         java.util.List<Integer> unlockedIcons = new java.util.ArrayList<>(unlocked.size());
         for (String t : unlocked) unlockedIcons.add(com.bannerbound.core.social.JobIcons.iconItemId(settlement, t));
-        // The citizen's own bubble: a generic Crafter shows the icon of the workshop it staffs, so
-        // its specialty (fletchery/carpentry/pottery/…) reads even though all crafters share one id.
+
         int jobIcon = jobType.isEmpty() ? 0 : com.bannerbound.core.social.JobIcons.iconItemId(
             settlement, jobType, assignedWorkshopType(settlement, citizen));
         java.util.List<Integer> allowedTools =
             allowedToolItemIds(settlement, com.bannerbound.core.social.JobIcons.roleForJob(jobType));
-        // Quarry research: gates the quarryworker's pickaxe slot AND the Digger→Quarryworker rename.
-        // Settlement-level (not tied to this citizen's job) so the assign dropdown can show the upgraded
-        // name too; the pickaxe slot itself is still drawn only for an actual digger citizen.
+
         boolean pickaxeUnlocked = ResearchManager.hasFlag(settlement, "bannerbound.unlock_quarry");
         int pickaxeItemId = citizen.hasJobPickaxe()
             ? net.minecraft.core.registries.BuiltInRegistries.ITEM.getId(citizen.getJobPickaxe().getItem())
             : 0;
         java.util.List<Integer> allowedPickaxes = pickaxeUnlocked
             ? allowedToolItemIds(settlement, "pickaxe") : java.util.List.of();
-        // Seed-cache contents for the farmer Job-tab display (non-empty slots only, as item id + count).
+
         java.util.List<Integer> cacheIds = new java.util.ArrayList<>();
         java.util.List<Integer> cacheCounts = new java.util.ArrayList<>();
         net.minecraft.world.SimpleContainer seedCache = citizen.getSeedCache();
@@ -998,9 +926,7 @@ public final class ServerPayloadHandler {
             cacheIds.add(net.minecraft.core.registries.BuiltInRegistries.ITEM.getId(s.getItem()));
             cacheCounts.add(s.getCount());
         }
-        // Workshop extras: the bound workshop + profession XP for the Job tab's workshop/skill rows.
-        // XP is keyed by the workshop's derived type (the profession — e.g. "fletchery"), so a
-        // mixed workshop shows 0 until a single-family profession is read.
+
         String workshopId = "", workshopName = "", workshopTypeId = "";
         int jobXp = jobType.isEmpty() ? 0 : (int) citizen.getJobXp(jobType);
         if (com.bannerbound.core.entity.CrafterWorkGoal.isWorkshopJob(jobType)
@@ -1011,16 +937,14 @@ public final class ServerPayloadHandler {
                 workshopId = workshop.id().toString();
                 workshopName = workshop.customName();
                 workshopTypeId = workshop.derivedTypeId();
-                // Skill follows the citizen's STATION POSITION when one is held (mixed workshops:
-                // a positioned fletcher's bar tracks "fletchery", not the workshop's MIXED type).
+
                 String position = workshop.positionOf(citizen.getUUID());
                 String fixed = com.bannerbound.core.entity.CrafterWorkGoal.workshopTypeForJob(jobType);
                 jobXp = (int) citizen.getJobXp(
                     fixed != null ? fixed : position != null ? position : workshop.derivedTypeId());
             }
         }
-        // Stocker extras: the settlement task board, queue order, with each row's destination
-        // name and claim state (this citizen's own haul renders highlighted).
+
         java.util.List<Integer> taskItems = new java.util.ArrayList<>();
         java.util.List<Integer> taskCounts = new java.util.ArrayList<>();
         java.util.List<String> taskDests = new java.util.ArrayList<>();
@@ -1045,15 +969,10 @@ public final class ServerPayloadHandler {
                 taskDests.add(dest);
             }
         }
-        // Silviculture research: gates the forester's "Select plantation area" Options row (mirrors
-        // the Quarry/pickaxe gate above). Settlement-level, like pickaxeUnlocked.
+
         boolean foresterPlantationUnlocked =
             ResearchManager.hasFlag(settlement, "bannerbound.unlock_forester_plantation");
-        // Job-tab status headline. A goal with meaningful live sub-states (currently only the
-        // plantation goal) publishes them on the citizen; for everything else we derive a verdict
-        // from observable facts here — no per-goal instrumentation needed. Hard blockers
-        // (stamina) win over a stale published value; the plantation goal clears itself to IDLE in
-        // stop(), so a non-IDLE published value is always current.
+
         com.bannerbound.core.entity.CitizenWorkStatus workStatus;
         com.bannerbound.core.entity.CitizenWorkStatus published = citizen.getCurrentWorkStatus();
         if (jobType.isEmpty()) {
@@ -1061,33 +980,24 @@ public final class ServerPayloadHandler {
         } else if (citizen.isSleeping()) {
             workStatus = com.bannerbound.core.entity.CitizenWorkStatus.SLEEPING;
         } else if (!settlement.hasFactionBanner()) {
-            // Banner down → ALL labor halts settlement-wide until it's raised again.
             workStatus = com.bannerbound.core.entity.CitizenWorkStatus.BANNER_DOWN;
         } else if (citizen.isPregnant()) {
             workStatus = com.bannerbound.core.entity.CitizenWorkStatus.EXPECTING;
         } else if (!anarchy && com.bannerbound.core.entity.WorkGoal.isAfternoonGathering(citizen)) {
-            // The pre-bed social window (dusk): work yields so citizens gather and chat.
             workStatus = com.bannerbound.core.entity.CitizenWorkStatus.SOCIALIZING;
         } else if (citizen.isStaminaExhausted()) {
             workStatus = com.bannerbound.core.entity.CitizenWorkStatus.NO_STAMINA;
         } else if (!anarchy && com.bannerbound.core.entity.WorkGoal.hasRefusalThought(citizen)) {
             workStatus = com.bannerbound.core.entity.CitizenWorkStatus.ON_STRIKE;
         } else if (published != com.bannerbound.core.entity.CitizenWorkStatus.IDLE) {
-            // A goal published a live sub-state (plantation states, crafter "nothing to craft", …).
             workStatus = published;
         } else if (com.bannerbound.core.entity.CrafterWorkGoal.isWorkshopJob(jobType)
                 && workshopId.isEmpty()) {
             workStatus = com.bannerbound.core.entity.CitizenWorkStatus.NO_WORKSHOP;
         } else if (!anarchy && com.bannerbound.core.social.JobIcons.requiresTool(jobType)
                 && !citizen.hasJobTool()) {
-            // Foragers (and any tool-free role) never read as NO_TOOL; nor does anyone in anarchy,
-            // where gatherers work tool-free. Without this, tool-free workers showed "no tool".
             workStatus = com.bannerbound.core.entity.CitizenWorkStatus.NO_TOOL;
         } else if (!anarchy && isDropOffFull(citizen)) {
-            // The worker's depot (its marked drop-off, or the settlement's preferred-storage fallback)
-            // has no free slot → it can't deposit and has stopped (the same hasFreeSlot gate the
-            // gatherers themselves use). Important to surface: from the Job tab the citizen otherwise
-            // looks like it's "Working" when it's actually stalled.
             workStatus = com.bannerbound.core.entity.CitizenWorkStatus.STORAGE_FULL;
         } else {
             workStatus = com.bannerbound.core.entity.CitizenWorkStatus.WORKING;
@@ -1096,8 +1006,7 @@ public final class ServerPayloadHandler {
             new CitizenJobStatePayload(citizen.getId(), canManageJobs(player, settlement),
                 jobType, jobIcon, citizen.hasJobTool(), toolItemId,
                 logId == null ? "" : logId.toString(),
-                // "has somewhere to deposit / take seeds": now reflects the settlement storage pool
-                // (or an outpost/anarchy override), not a per-worker marked container.
+
                 citizen.hasDropDepot(), unlocked, unlockedIcons,
                 allowedTools, pickaxeUnlocked, citizen.hasJobPickaxe(), pickaxeItemId, allowedPickaxes,
                 citizen.hasSeedDepot(),
@@ -1108,26 +1017,19 @@ public final class ServerPayloadHandler {
                 citizen.hasActiveJobRefusal(),
                 workshopId, workshopName, workshopTypeId, jobXp,
                 taskItems, taskCounts, taskDests, taskStates,
-                // Outpost-managed storage: the citizen's current work site is a working-claimed
-                // chunk, so the outpost (not the Job tab) decides the drop-off.
+
                 citizen.getOutpostSite() != null && settlement.workingClaims().contains(
                     new net.minecraft.world.level.ChunkPos(citizen.getOutpostSite()).toLong()),
                 workStatus.ordinal(), foresterPlantationUnlocked,
                 citizen.isTradingCourier()));
     }
 
-    /** True when the citizen's depot — its marked drop-off, or the settlement's preferred-storage
-     *  fallback when none is marked — resolves to a container with no free slot, so the worker can't
-     *  deposit and is stalled. Mirrors the {@code hasFreeSlot} gate the gatherers use, so the Job-tab
-     *  "Storage full" verdict matches their actual stop condition. */
     private static boolean isDropOffFull(com.bannerbound.core.entity.CitizenEntity citizen) {
         net.minecraft.world.Container c = com.bannerbound.core.entity.DropOffContainers
             .resolveOrPreferred(citizen, citizen.getDropOff());
         return c != null && !com.bannerbound.core.entity.DropOffContainers.hasFreeSlot(c);
     }
 
-    /** Reopens the citizen screen after an in-world storage marking succeeds, so the player can
-     *  continue configuring the same worker without walking back and right-clicking them again. */
     public static void reopenCitizenScreen(ServerPlayer player, int entityId) {
         com.bannerbound.core.entity.CitizenEntity citizen = resolveManageable(player, entityId);
         if (citizen == null) return;
@@ -1166,8 +1068,7 @@ public final class ServerPayloadHandler {
             Component label = partnerName != null
                 ? Component.translatable(t.kind().labelKey(), partnerName)
                 : Component.translatable(t.kind().labelKey());
-            // Show the CURRENT (escalated) modifier so a festering grievance reads "-28" not
-            // its day-one "-5". Matches what the happiness number actually reflects.
+
             thoughtRows.add(new com.bannerbound.core.network.ThoughtEntry(
                 label, t.effectiveModifier(sl.getGameTime()), t.expireGameTime(), t.totalDurationTicks(),
                 t.kind().category().ordinal()));
@@ -1192,10 +1093,6 @@ public final class ServerPayloadHandler {
         sendJobState(player, citizen);
     }
 
-    /** Outpost Banner screen: appoint a specific miner to the outpost (binds the banner-owned
-     *  deposit marker to them) or recall ({@code citizenUuid == ""} → marker removed). Validates
-     *  membership, claim ownership, labor permission and the target's job, then replies with a
-     *  fresh screen payload so the open UI live-updates. */
     public static void handleAssignOutpostWorker(AssignOutpostWorkerPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -1224,15 +1121,12 @@ public final class ServerPayloadHandler {
                     || !c.isAlive()
                     || !owner.id().equals(c.getSettlementId())
                     || !expectedJob.equals(c.getJobType())) {
-                    // Never fail silently — the candidate unloaded/died/changed job since the
-                    // screen was sent; tell the player and refresh so the stale row disappears.
                     player.displayClientMessage(Component.translatable("bannerbound.outpost.candidate_gone")
                         .withStyle(ChatFormatting.RED), true);
                     com.bannerbound.core.api.settlement.Outpost.openScreen(sl, player, payload.bannerPos());
                     return;
                 }
-                // Appointment works regardless, but a too-soft pickaxe means the miner will idle
-                // at the boulder (vanilla harvest-tier gate) — warn the player up front.
+
                 if (com.bannerbound.core.territory.BoulderLayout.isOreChunk(type)
                     && !c.getJobTool().isCorrectToolForDrops(
                         com.bannerbound.core.territory.BoulderLayout.oreBlock(type))) {
@@ -1251,9 +1145,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** "Establish outpost here" from the banner screen: validate + grant the working claim on the
-     *  banner's chunk, then reply with the management screen (or, on failure, the establish screen
-     *  again with the reason). The banner block itself is plain decoration until this confirms. */
     public static void handleEstablishOutpost(EstablishOutpostPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -1262,12 +1153,11 @@ public final class ServerPayloadHandler {
             net.minecraft.server.level.ServerLevel sl = player.serverLevel();
             if (!com.bannerbound.core.api.settlement.FactionBanner.isBanner(
                     sl.getBlockState(payload.bannerPos()))) {
-                return; // the banner was removed between opening the screen and confirming
+                return;
             }
             String failKey = com.bannerbound.core.api.settlement.Outpost.tryEstablish(
                 sl, player, payload.bannerPos());
             if (failKey != null) {
-                // Two args so every failure key formats: %1$s = range (too_far), %2$s = cap (limit).
                 Settlement mine = SettlementData.get(server.overworld()).getByPlayer(player.getUUID());
                 int max = mine != null ? com.bannerbound.core.api.settlement.Outpost.maxOutposts(mine)
                     : com.bannerbound.core.api.settlement.Outpost.BASE_OUTPOSTS;
@@ -1281,8 +1171,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Resolves a citizen by entity id, requires the player to be in the citizen's settlement AND
-     *  permitted to manage jobs; returns the citizen or null (after no-op) otherwise. */
     private static com.bannerbound.core.entity.CitizenEntity resolveManageable(
             ServerPlayer player, int entityId) {
         net.minecraft.world.entity.Entity raw = player.serverLevel().getEntity(entityId);
@@ -1308,24 +1196,15 @@ public final class ServerPayloadHandler {
             boolean anarchy = settlement.governmentType() == Settlement.Government.NONE;
             String typeId = payload.typeId();
             if (typeId == null || typeId.isEmpty()) {
-                // Unassign: return the tool, then clear the job. Not permitted in anarchy — there's
-                // no government to leave a citizen idle and they'd just auto-re-employ; the player can
-                // only request a switch to another gatherer job, not make them jobless.
                 if (anarchy) { sendJobState(player, citizen); return; }
                 citizen.returnJobToolAndClear();
                 citizen.setJobType(null);
             } else {
-                // Children can't work; reject a tampered packet that tries to employ one.
                 if (citizen.isChild()) return;
-                // In anarchy only the self-directed gatherer jobs may be chosen — ordered (digger/
-                // farmer) and logistics/herder jobs need a government and stay locked.
+
                 if (anarchy && !com.bannerbound.core.entity.AnarchyJobs.isGathererJob(typeId)) return;
                 if (!jobPickerJobTypeIds(settlement).contains(typeId)) return;
-                // Compliance-driven assignment refusal — the same roll the old workstation handler
-                // used, now applied to the citizen-menu jobs (forester/digger/farmer/fisher/forager).
-                // A low-compliance citizen may reject being put to work: stamp a per-job
-                // NO_WORK_AS_JOB thought (WorkGoal honours it so they visibly sit out for a minute),
-                // tell the leader, and DON'T assign. The leader can try again — each attempt re-rolls.
+
                 double refuseChance = com.bannerbound.core.api.settlement.ComplianceTables
                     .refuseWorkstation(citizen.getCompliance());
                 if (refuseChance > 0 && citizen.getRandom().nextDouble() < refuseChance) {
@@ -1342,17 +1221,13 @@ public final class ServerPayloadHandler {
                     sendJobState(player, citizen);
                     return;
                 }
-                // Crafters bind to a WORKSHOP, not a drop-off — the job isn't assigned here.
-                // Open the workshop picker instead; picking one sends AssignWorkshopWorkerPayload,
-                // which performs the real assignment (job + binding + roster, capacity-checked).
-                // The compliance roll above already ran, so the citizen has agreed to the work.
+
                 if (com.bannerbound.core.entity.CrafterWorkGoal.isWorkshopJob(typeId)) {
                     WorkshopMenu.openPicker(player, player.serverLevel(), settlement, citizen, typeId);
                     return;
                 }
                 citizen.setJobType(typeId);
-                // An explicit player assignment PINS the citizen so the settlement labor distributor
-                // leaves them alone (a manual override). The "Auto" button releases it.
+
                 citizen.setJobPinned(true);
                 CodexManager.onCustom(player, "job_assigned", typeId);
             }
@@ -1360,7 +1235,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** "Auto" button: release a citizen back to settlement labor auto-distribution. */
     public static void handleSetJobAuto(SetJobAutoPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -1385,21 +1259,21 @@ public final class ServerPayloadHandler {
             net.minecraft.world.entity.player.Inventory inv = player.getInventory();
             if (slot < 0 || slot >= inv.getContainerSize()) return;
             ItemStack inSlot = inv.getItem(slot);
-            // Pickaxe (second) slot is gated by the Quarry research; primary uses the job's role.
+
             boolean pickaxe = payload.pickaxe();
             if (pickaxe && !(com.bannerbound.core.entity.DiggerWorkGoal.JOB_TYPE_ID.equals(citizen.getJobType())
                     && ResearchManager.hasFlag(settlement, "bannerbound.unlock_quarry"))) {
                 return;
             }
             String role = pickaxe ? "pickaxe" : com.bannerbound.core.social.JobIcons.roleForJob(citizen.getJobType());
-            // The tool must be the right role tool at/below the settlement's current tool age.
+
             if (!allowedToolItemIds(settlement, role).contains(
                     net.minecraft.core.registries.BuiltInRegistries.ITEM.getId(inSlot.getItem()))) {
                 player.displayClientMessage(Component.translatable(
                     "bannerbound.job.tool_too_advanced").withStyle(ChatFormatting.RED), true);
                 return;
             }
-            // Return any existing tool in that slot to the player first.
+
             ItemStack existing = pickaxe ? citizen.getJobPickaxe() : citizen.getJobTool();
             if (!existing.isEmpty()) {
                 if (!player.getInventory().add(existing.copy())) {
@@ -1424,7 +1298,6 @@ public final class ServerPayloadHandler {
             boolean pickaxe = payload.pickaxe();
             ItemStack existing = pickaxe ? citizen.getJobPickaxe() : citizen.getJobTool();
             if (!existing.isEmpty()) {
-                // Prefer returning to the player's hands; fall back to drop-off / feet.
                 if (player.getInventory().add(existing.copy())) {
                     if (pickaxe) citizen.setJobPickaxe(ItemStack.EMPTY); else citizen.setJobTool(ItemStack.EMPTY);
                 } else {
@@ -1446,7 +1319,7 @@ public final class ServerPayloadHandler {
             if (logId == null || !net.minecraft.core.registries.BuiltInRegistries.BLOCK.containsKey(logId)) return;
             net.minecraft.world.level.block.Block block =
                 net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(logId);
-            // Whitelist actual logs, mirroring the old forester picker's filter.
+
             if (!block.defaultBlockState().is(net.minecraft.tags.BlockTags.LOGS)) return;
             citizen.setPreferredLog(block);
             sendJobState(player, citizen);
@@ -1461,7 +1334,7 @@ public final class ServerPayloadHandler {
             com.bannerbound.core.api.forager.ForageCategory cat =
                 com.bannerbound.core.api.forager.ForageCategory.byOrdinal(payload.categoryOrdinal());
             if (cat == null) return;
-            // A LOCKED category (not yet research-unlocked) can't be switched on — only off.
+
             if (payload.enabled()) {
                 MinecraftServer server = player.getServer();
                 if (server == null) return;
@@ -1478,8 +1351,7 @@ public final class ServerPayloadHandler {
             if (!(context.player() instanceof ServerPlayer player)) return;
             com.bannerbound.core.entity.CitizenEntity citizen = resolveManageable(player, payload.entityId());
             if (citizen == null) return;
-            // Only ids actually in the huntable tag are accepted — rejects tampered packets and
-            // keeps the disabled set from accumulating junk after a datapack removes a species.
+
             net.minecraft.resources.ResourceLocation id =
                 net.minecraft.resources.ResourceLocation.tryParse(payload.entityTypeId());
             if (id == null) return;
@@ -1504,8 +1376,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** The Foreman's-Rod unit string for an ORDERED job that marks work areas (digger/farmer), or
-     *  {@code null} for jobs that don't use the rod. */
     public static String rodTypeForJob(String jobType) {
         if (com.bannerbound.core.entity.DiggerWorkGoal.JOB_TYPE_ID.equals(jobType))
             return com.bannerbound.core.entity.DiggerWorkGoal.SELECTION_TYPE;
@@ -1515,11 +1385,10 @@ public final class ServerPayloadHandler {
             return com.bannerbound.core.entity.HerderWorkGoal.SELECTION_TYPE;
         if (com.bannerbound.core.entity.MinerWorkGoal.JOB_TYPE_ID.equals(jobType))
             return com.bannerbound.core.entity.MinerWorkGoal.SELECTION_TYPE;
-        // Forester plantation area (Silviculture-gated; the gate is enforced at bind time so the
-        // type can still resolve here for the Job-tab "Select plantation area" affordance).
+
         if (com.bannerbound.core.entity.ForesterWorkGoal.JOB_TYPE_ID.equals(jobType))
             return com.bannerbound.core.entity.ForesterWorkGoal.SELECTION_TYPE;
-        // Guard → guard-post markers (shift-right-click a guard to pin posts to just them).
+
         if (com.bannerbound.core.entity.GuardWorkGoal.JOB_TYPE_ID.equals(jobType))
             return com.bannerbound.core.entity.GuardWorkGoal.SELECTION_TYPE;
         return null;
@@ -1531,9 +1400,8 @@ public final class ServerPayloadHandler {
             com.bannerbound.core.entity.CitizenEntity citizen = resolveManageable(player, payload.entityId());
             if (citizen == null) return;
             String rodType = rodTypeForJob(citizen.getJobType());
-            if (rodType == null) return;   // only the rod-driven ordered workers bind to a citizen
-            // Forester plantations are research-gated: refuse the bind (and tell the player) until
-            // Silviculture is done. Other rod jobs have no such gate.
+            if (rodType == null) return;
+
             if (com.bannerbound.core.entity.ForesterWorkGoal.JOB_TYPE_ID.equals(citizen.getJobType())) {
                 Settlement fs = citizen.getSettlement();
                 if (fs == null || !ResearchManager.hasFlag(fs, "bannerbound.unlock_forester_plantation")) {
@@ -1542,7 +1410,7 @@ public final class ServerPayloadHandler {
                     return;
                 }
             }
-            // Find a Foreman's Rod in the player's inventory and point it at this worker.
+
             net.minecraft.world.entity.player.Inventory inv = player.getInventory();
             ItemStack rod = ItemStack.EMPTY;
             for (int i = 0; i < inv.getContainerSize(); i++) {
@@ -1575,8 +1443,8 @@ public final class ServerPayloadHandler {
                 ? citizen.getCustomName() : Component.literal("Citizen");
             Component jobTitle = Component.translatable(
                 "bannerbound.job." + (citizen.getJobType() == null ? "unemployed" : citizen.getJobType()));
-            // Track edit mode server-side so DropLocationServerGuard suppresses the chest-open on
-            // the server thread too (matters for the single-player integrated server).
+            // Track edit mode server-side too: DropLocationServerGuard needs it to suppress the
+            // chest-open on the integrated (single-player) server thread.
             com.bannerbound.core.event.DropLocationEditServer.begin(player.getUUID(), citizen.getId(), payload.seed());
             net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(player,
                 new OpenDropLocationEditPayload(citizen.getId(), name, jobTitle,
@@ -1592,26 +1460,10 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /**
-     * Marks {@code pos} as the drop-off for the citizen, server-authoritatively. Called from
-     * {@link com.bannerbound.core.event.DropLocationServerGuard} when the editing player right-clicks
-     * a block. Returns {@code true} if the mark succeeded (edit mode should end), {@code false} if
-     * the block was rejected (a non-storage / out-of-claim block — the player stays in edit mode and
-     * can try again). Always sends the player the appropriate green / red action-bar feedback.
-     */
     public static boolean markDropOff(ServerPlayer player, int citizenEntityId, BlockPos pos) {
         return markStorage(player, citizenEntityId, pos, false);
     }
 
-    /**
-     * Marks {@code pos} as either the citizen's harvest drop-off ({@code seed == false}) or the
-     * farmer's seed source ({@code seed == true}), server-authoritatively. Returns {@code true} if the
-     * mark succeeded or is moot (edit mode should end), {@code false} if the block was rejected (the
-     * player stays in edit mode and can try another block). Sends green / red action-bar feedback.
-     */
-    /** True only if the storage block at {@code pos} is a container type the settlement has actually
-     *  unlocked. Stops a player pointing workers at an un-researched container (stockpile, chest,
-     *  barrel, basket, …). Sends red feedback and returns false when it isn't known yet. */
     private static boolean storageBlockResearched(ServerPlayer player, Settlement settlement, BlockPos pos) {
         net.minecraft.world.item.Item item = player.serverLevel().getBlockState(pos).getBlock().asItem();
         if (com.bannerbound.core.api.research.ItemKnowledge.isKnown(settlement, item)) {
@@ -1624,14 +1476,13 @@ public final class ServerPayloadHandler {
 
     public static boolean markStorage(ServerPlayer player, int citizenEntityId, BlockPos pos, boolean seed) {
         net.minecraft.world.entity.Entity raw = player.serverLevel().getEntity(citizenEntityId);
-        if (!(raw instanceof com.bannerbound.core.entity.CitizenEntity citizen)) return true; // citizen gone → end
+        if (!(raw instanceof com.bannerbound.core.entity.CitizenEntity citizen)) return true;
         if (citizen.getSettlementId() == null) return true;
         MinecraftServer server = player.getServer();
         if (server == null) return true;
         Settlement settlement = SettlementData.get(server.overworld()).getById(citizen.getSettlementId());
         if (settlement == null || !canManageJobs(player, settlement)) return true;
-        // Working claims (outpost chunks) count as valid drop-off territory — that's how a remote
-        // miner's chest at the outpost gets marked.
+
         long packedChunk = new net.minecraft.world.level.ChunkPos(pos).toLong();
         boolean inClaim = settlement.claimedChunks().contains(packedChunk)
             || settlement.workingClaims().contains(packedChunk);
@@ -1669,8 +1520,6 @@ public final class ServerPayloadHandler {
         return true;
     }
 
-    /** Town Hall Labor-tab "Preferred storage" button: drop the player into the same click-a-block
-     *  edit mode the per-citizen drop-off uses, but with the settlement-level sentinel target. */
     public static void handleBeginEditPreferredStorage(BeginEditPreferredStoragePayload payload,
             IPayloadContext context) {
         context.enqueueWork(() -> {
@@ -1678,7 +1527,7 @@ public final class ServerPayloadHandler {
             MinecraftServer server = player.getServer();
             if (server == null) return;
             Settlement settlement = SettlementData.get(server.overworld()).getByPlayer(player.getUUID());
-            // Government-only, and only for a member who may edit labor (chief/regent/council/Workload Share).
+
             if (settlement == null || settlement.governmentType() == Settlement.Government.NONE
                     || !SettlementManager.canEditLabor(player, settlement)) {
                 return;
@@ -1693,16 +1542,13 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Sets the settlement's preferred-storage depot from the editing player's block click — the
-     *  settlement-level analogue of {@link #markStorage}. Returns true to end edit mode, false to let
-     *  the player retry on a rejected block. Gated by {@code canEditLabor}. */
     public static boolean markPreferredStorage(ServerPlayer player, BlockPos pos) {
         MinecraftServer server = player.getServer();
         if (server == null) return true;
         Settlement settlement = SettlementData.get(server.overworld()).getByPlayer(player.getUUID());
         if (settlement == null || settlement.governmentType() == Settlement.Government.NONE
                 || !SettlementManager.canEditLabor(player, settlement)) {
-            return true;   // not allowed / not applicable → just leave edit mode
+            return true;
         }
         boolean validStorage = com.bannerbound.core.entity.DropOffContainers.resolveDropOff(
             player.serverLevel(), pos) != null;
@@ -1720,8 +1566,7 @@ public final class ServerPayloadHandler {
             return false;
         }
         settlement.setPreferredStoragePos(pos);
-        // No longer force-assigns a per-worker drop-off: that would override the settlement storage
-        // pool. Preferred storage is just one (optional) pooled container now.
+
         SettlementData.get(server.overworld()).setDirty();
         CodexManager.onCustom(player, "preferred_storage_marked", "settlement");
         player.serverLevel().playSound(null, pos,
@@ -1846,9 +1691,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Tablet routing by government: anarchy = direct (the requester just takes one); council =
-     *  clickable chat-vote (majority of online; the document goes to the initiator on pass);
-     *  chiefdom = chief/regent issue directly, any other member toggles a SUGGESTION instead. */
     public static void handleGetRegistrationTablet(GetRegistrationTabletPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) {
@@ -1897,10 +1739,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Creates and hands a registration document to {@code recipient} (chief direct-issue, anarchy
-     *  self-issue, or a passed council vote). Re-checks capacity — a vote may pass after the last
-     *  slot was used. Antiquity issues a stone Registration Tablet; Medieval and every later age
-     *  issue a Registration Paper instead (identical behaviour, three charges either way). */
     public static void issueTablet(ServerPlayer recipient, Settlement settlement) {
         MinecraftServer server = recipient.getServer();
         if (server == null) return;
@@ -1928,7 +1766,6 @@ public final class ServerPayloadHandler {
         SettlementManager.broadcastExtraSuggestions(server, settlement);
     }
 
-    /** Votes-tab Yes/No button — same server path as the chat [Yes]/[No] command. */
     public static void handleCastChatVote(CastChatVotePayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -1955,8 +1792,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Suggestions-tab [Ignore]: chief/regent dismisses a suggestion. Clears it, tells each
-     *  suggester it was ignored (with what it was about), and re-syncs the matching state. */
     public static void handleIgnoreSuggestion(IgnoreSuggestionPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -2045,14 +1880,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /**
-     * C→S retract: a member pulls their OWN suggestion (vs. the chief's Ignore which clears the
-     * whole set). Removes ONLY the calling player's UUID from the suggestion's suggester set, then
-     * re-broadcasts the matching state so the chief's Suggestions tab updates live. Any settlement
-     * member may retract their own — no chief gate (unlike Ignore). Uses the existing toggle methods,
-     * which remove a player when present; guarded by a membership check so a stray packet for a
-     * suggestion the player never made is a no-op (a toggle would otherwise ADD them).
-     */
     public static void handleRetractSuggestion(RetractSuggestionPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -2124,12 +1951,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /**
-     * Looks up the requesting player's settlement, walks its citizen roster, samples live
-     * health + stamina for any entity currently loaded, and ships the roster + snapshots back
-     * for the Citizens screen. Citizens whose entity isn't loaded contribute name only with
-     * 0-filled stats — they still appear so the player can see they exist.
-     */
     public static void handleRequestSettlementCitizens(RequestSettlementCitizensPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -2145,8 +1966,7 @@ public final class ServerPayloadHandler {
                 float health = 0f, maxHealth = 20f;
                 int stamina = 0, maxStamina = com.bannerbound.core.entity.CitizenEntity.MAX_STAMINA;
                 String displayName = c.name();
-                // Job is only known from the loaded entity; an unloaded citizen reads as
-                // unemployed in the roster (same lean-low convention as its 0-filled stats).
+
                 String jobTypeId = "";
                 int jobIconItemId = 0;
                 if (raw instanceof com.bannerbound.core.entity.CitizenEntity ce) {
@@ -2161,8 +1981,7 @@ public final class ServerPayloadHandler {
                         jobIconItemId = com.bannerbound.core.social.JobIcons.iconItemId(settlement, jt);
                     }
                 }
-                // Happiness has no live system yet — ship the same 10/10 placeholder
-                // CitizenEntity.mobInteract uses, so the screen can render the icon now.
+
                 entries.add(new SettlementCitizensListPayload.Entry(
                     c.entityId(), displayName, health, maxHealth, stamina, maxStamina, 10, 10,
                     jobTypeId, jobIconItemId));
@@ -2172,11 +1991,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /**
-     * Teleports the named citizen to its settlement's town hall via
-     * {@link com.bannerbound.core.entity.CitizenEntity#recallToTownHall}. Requester must be
-     * a member of the citizen's settlement.
-     */
     public static void handleToggleWorkstationActive(ToggleWorkstationActivePayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -2207,15 +2021,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /**
-     * Player picked a workstation type in the rod picker (or chose "Clear"). Writes the choice
-     * to whichever stack is in the player's main hand if it's a Foreman's Rod. An empty type
-     * string just resets the rod's workstation type + in-progress A/B; committed selections in
-     * the {@link com.bannerbound.core.api.world.BlockSelectionRegistry registry} are NOT touched
-     * — the player removes those individually via shift-left-click on a block inside one.
-     * Whitelist on workstation type — only known types are accepted; unknown values silently
-     * ignored so a misbehaving client can't junk-write component data.
-     */
     public static void handlePickForemansRodWorkstation(PickForemansRodWorkstationPayload payload,
                                                          IPayloadContext context) {
         context.enqueueWork(() -> {
@@ -2229,18 +2034,15 @@ public final class ServerPayloadHandler {
             if (chosen == null) return;
 
             if (chosen.isEmpty()) {
-                // Clear path: just reset rod state. Committed selections persist in the registry.
                 stack.remove(BannerboundCore.FOREMAN_WORKSTATION_TYPE.get());
                 stack.remove(BannerboundCore.FOREMAN_POINT_A.get());
                 stack.remove(BannerboundCore.FOREMAN_POINT_B.get());
                 return;
             }
 
-            // Allow-list of supported workstation types.
             if (!"digger".equals(chosen) && !"farmer".equals(chosen) && !"herder".equals(chosen)
                 && !"miner".equals(chosen) && !"guard".equals(chosen)) return;
 
-            // Require settlement membership so commits later know which color to draw with.
             Settlement settlement = SettlementData.get(server.overworld()).getByPlayer(player.getUUID());
             if (settlement == null) {
                 player.displayClientMessage(Component.translatable(
@@ -2248,7 +2050,7 @@ public final class ServerPayloadHandler {
                     .withStyle(ChatFormatting.RED), true);
                 return;
             }
-            // Research gate — the chosen unit must be unlocked for the player's settlement.
+
             if (!com.bannerbound.core.api.research.ResearchManager.hasFlag(settlement,
                     com.bannerbound.core.api.settlement.WorkstationUnlocks.flagForUnit(chosen))) {
                 player.displayClientMessage(Component.translatable(
@@ -2259,9 +2061,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Commit a herder pen with the animal the player chose in {@code PenAnimalPickerScreen}. Re-validates
-     *  the pen, territory, and that the animal was actually offered, then registers a point selection whose
-     *  packed seedItemId stores {@code "<animalId>|0"} (kill counter starts at 0). */
     public static void handlePickPenAnimal(PickPenAnimalPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -2282,7 +2081,7 @@ public final class ServerPayloadHandler {
                     .withStyle(ChatFormatting.RED), true);
                 return;
             }
-            // Animal must be one the server offered: the basics anywhere, horse only on a horse chunk.
+
             boolean allowed = com.bannerbound.core.item.ForemansRodItem.BASIC_PEN_ANIMALS.contains(animalId)
                 || ("minecraft:horse".equals(animalId)
                     && com.bannerbound.core.territory.ChunkResources.typeAt(level,
@@ -2311,7 +2110,7 @@ public final class ServerPayloadHandler {
             if (targetStr != null && !targetStr.isEmpty()) {
                 try {
                     candidate = candidate.withAssignedCitizen(java.util.UUID.fromString(targetStr));
-                } catch (IllegalArgumentException ignored) { /* malformed → open to all herders */ }
+                } catch (IllegalArgumentException ignored) {  }
             }
             BlockSelectionRegistry registry = BlockSelectionRegistry.get(overworld);
             if (registry.anyOverlapExcluding(candidate, selectionId)) {
@@ -2328,8 +2127,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Player set a pen's "keep how many adults alive" harvest threshold in {@code PenKeepScreen}. Writes it
-     *  into the pen marker's packed seedItemId (animalId|kills|keep) and re-broadcasts. */
     public static void handleSetPenKeep(SetPenKeepPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -2349,8 +2146,7 @@ public final class ServerPayloadHandler {
                 if (sel.minX() != clicked.getX() || sel.minY() != clicked.getY() || sel.minZ() != clicked.getZ()) continue;
                 String packed = sel.seedItemId();
                 int keep = Math.max(0, payload.keep());
-                // Clamp to the pen's live capacity so a stale or spoofed packet can't poison the marker
-                // (adultKeepTarget clamps at runtime anyway, but keep the stored data honest).
+
                 var scan = com.bannerbound.core.building.PenEnclosure.scan(overworld, clicked);
                 if (scan.valid()) {
                     var rl = net.minecraft.resources.ResourceLocation.tryParse(
@@ -2373,11 +2169,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    // ─── Chunk-claim expansion ────────────────────────────────────────────────────────────────
-
-    /** Client pressed "Expand Territory" in the Town Hall screen. Server checks the player is in
-     *  a settlement with a Town Hall and replies with the bundled birdseye state so the screen
-     *  can render. No state mutation here. */
     public static void handleRequestExpandTerritory(RequestExpandTerritoryPayload payload,
                                                      IPayloadContext context) {
         context.enqueueWork(() -> {
@@ -2393,35 +2184,22 @@ public final class ServerPayloadHandler {
                     .withStyle(ChatFormatting.RED), true);
                 return;
             }
-            // No gate on opening the screen — every member needs to be able to view it
-            // (Chiefdom non-chief to suggest chunks, Council member to cast a vote, anarchy
-            // members to claim outright). The gate now lives inside TerritoryService.tryClaim
-            // which dispatches by government type.
+
             OpenExpandTerritoryScreenPayload screen = com.bannerbound.core.api.territory.TerritoryService
                 .buildScreenPayload(overworld, settlement, player);
             net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(player, screen);
         });
     }
 
-    /** Client clicked a chunk in the ExpandTerritoryScreen. Server re-validates everything from
-     *  scratch (adjacency, unclaimed, era cap, tier afford, settlement membership) and either
-     *  performs the claim or replies with a red action-bar error. On success: consumes items,
-     *  claims chunk, force-loads it, increments expansion counter, broadcasts the claim sync to
-     *  all clients, and announces in chat. */
     public static void handleExpandTerritoryClaim(ExpandTerritoryClaimPayload payload,
                                                    IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
-            // No upfront gate — TerritoryService.tryClaim itself dispatches by government:
-            // Chiefdom non-chief becomes a suggestion, Council member becomes a vote, Chief
-            // (or anarchy member) becomes a direct claim. The old canActWeighty wrap blocked
-            // non-chiefs from suggesting at all.
+
             com.bannerbound.core.api.territory.TerritoryService.tryClaim(player, payload.packedChunkPos());
         });
     }
 
-    /** Player chose a seed (or skip) in the seed-picker. Validates ownership, writes the seed to
-     *  the selection, and broadcasts the updated registry so the floating-seed marker renders. */
     public static void handlePickSeed(PickSeedPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -2432,14 +2210,12 @@ public final class ServerPayloadHandler {
                 com.bannerbound.core.api.world.BlockSelectionRegistry.get(overworld);
             com.bannerbound.core.api.world.BlockSelection sel = registry.get(payload.rodId());
             if (sel == null) return;
-            // Only the creator can answer the prompt.
+
             if (!player.getUUID().equals(sel.creatorId())) return;
             if (!"farmer".equals(sel.workstationType())) return;
 
             String chosen = payload.seedItemId();
             if (chosen == null || chosen.isEmpty()) {
-                // Skip / Esc: erase the selection entirely. The popup is one-shot — the player
-                // commits to a seed or they lose the selection.
                 registry.unregister(sel.rodId());
                 com.bannerbound.core.api.farmer.AwaitingSeedRegistry.unqueue(sel.rodId());
                 com.bannerbound.core.world.SelectionBroadcaster.broadcast(overworld);
@@ -2453,11 +2229,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Player confirmed edits from the field-edit screen (shift-right-click a farmer field with the
-     *  Foreman's Rod). Re-points the field's crop and assigned worker. Unlike the seed popup this is
-     *  NOT one-shot — Cancel/Esc sends nothing, so we always have a valid crop here and never delete
-     *  the field. Validates the player owns the field, the crop is a real seed, and the worker is an
-     *  actual farmer in the settlement (else falls back to "all farmers" rather than rejecting). */
     public static void handleEditField(EditFieldPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -2470,7 +2241,7 @@ public final class ServerPayloadHandler {
             if (sel == null) return;
             if (sel.kind() != com.bannerbound.core.api.world.BlockSelection.Kind.WORKSTATION
                 || !"farmer".equals(sel.workstationType())) return;
-            // The field must belong to the editing player's own settlement.
+
             com.bannerbound.core.api.settlement.Settlement settlement =
                 com.bannerbound.core.api.settlement.SettlementData.get(overworld).getByPlayer(player.getUUID());
             if (settlement == null || !settlement.id().equals(sel.settlementId())) return;
@@ -2501,10 +2272,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Client opened the resident picker for a House Block. Builds the three-bucket roster
-     *  (current residents · homeless · residents of other homes in the same settlement) and
-     *  ships it back as a {@link HomeCitizenListPayload}. Only the player's own settlement is
-     *  surveyed — neighbour faction citizens aren't visible. */
     public static void handleRequestHomeCitizenList(RequestHomeCitizenListPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -2528,8 +2295,7 @@ public final class ServerPayloadHandler {
                     role = HomeCitizenListPayload.Role.HOMELESS;
                 } else {
                     role = HomeCitizenListPayload.Role.OTHER;
-                    // Chebyshev distance — same metric the home size cap uses, so the number the
-                    // player sees in the picker matches the units they think in.
+
                     BlockPos a = current.pos();
                     BlockPos b = thisHome.pos();
                     distance = Math.max(Math.max(
@@ -2544,11 +2310,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** Player clicked Assign / Unassign in the resident picker. One-home-per-citizen rule:
-     *  on assign, drop the citizen from whatever home they currently live in first, then add
-     *  them to the target home (bed cap enforced). On unassign, remove from the target home
-     *  only — citizen becomes homeless and the auto-assignment poll picks the next bed for them.
-     *  Refreshes the picker by re-sending the list on success. */
     public static void handleAssignCitizenToHome(AssignCitizenToHomePayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -2562,8 +2323,7 @@ public final class ServerPayloadHandler {
 
             java.util.UUID cid = payload.citizenId();
             if (cid == null) return;
-            // Citizen must belong to this settlement — guards against a tampered client trying
-            // to assign citizens from another faction.
+
             boolean inRoster = false;
             for (Citizen c : settlement.citizens()) {
                 if (cid.equals(c.entityId())) { inRoster = true; break; }
@@ -2584,9 +2344,7 @@ public final class ServerPayloadHandler {
                         .withStyle(ChatFormatting.RED), true);
                     return;
                 }
-                // Drop the citizen from any prior home so the one-home invariant holds. Wake
-                // them up if they were asleep there — the bed they were lying in belongs to a
-                // home they no longer live in.
+
                 com.bannerbound.core.api.settlement.Home prior = settlement.getHomeFor(cid);
                 if (prior != null && prior != home) {
                     wakeIfSleepingInHome(player.serverLevel(), cid, prior);
@@ -2594,22 +2352,17 @@ public final class ServerPayloadHandler {
                 }
                 home.addResident(cid);
             } else {
-                // Same wake-up reason on a plain unassign — the resident loses access to the
-                // bed they're currently lying in.
                 wakeIfSleepingInHome(player.serverLevel(), cid, home);
                 home.removeResident(cid);
             }
             sd.setDirty();
 
-            // The unassign control lives on two screens. Refresh whichever one the click came
-            // from so it updates in place instead of bouncing the player to the other screen.
             if (payload.fromHousePanel()) {
                 com.bannerbound.core.item.HousingOrdersItem.refreshStatusPanel(
                     player, player.serverLevel(), home);
                 return;
             }
 
-            // Refresh the open picker. Same payload shape as the initial request reply.
             java.util.List<HomeCitizenListPayload.Entry> entries = new java.util.ArrayList<>();
             for (Citizen c : settlement.citizens()) {
                 com.bannerbound.core.api.settlement.Home current =
@@ -2636,10 +2389,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    /** If the citizen is currently sleeping inside the given home's selection union, wake them
-     *  and clear the bed's OCCUPIED state. Called from the assign/unassign handler so a kicked-
-     *  out resident gets out of bed instead of lingering on a bed that no longer belongs to them.
-     *  No-op when the entity isn't loaded, isn't sleeping, or is sleeping somewhere else. */
     private static void wakeIfSleepingInHome(net.minecraft.server.level.ServerLevel sl,
                                               java.util.UUID citizenId,
                                               com.bannerbound.core.api.settlement.Home home) {
@@ -2661,45 +2410,23 @@ public final class ServerPayloadHandler {
         }
     }
 
-    /**
-     * Beauty-debug overlay query: reports how many of the block-at-{@code pos}'s type are
-     * counted in the diminishing-returns queue, so the client can show the marginal appeal of
-     * this specific block.
-     *
-     * <p>Two scopes — if {@code pos} falls inside a home selection of the settlement that
-     * OWNS the block's chunk, we answer from that home's per-type queue (the home is the
-     * citizen's happiness scope, so its math should match what the overlay shows). Otherwise
-     * we fall back to the chunk-scan queue the overlay used before the housing system shipped.
-     *
-     * <p>Scope resolution is by block LOCATION, never by the requester's own settlement, so
-     * the same block reports the same appeal to every viewer. (Previously each player saw the
-     * home value only for their own faction's homes and the chunk value for everyone else's,
-     * which desynced the overlay between clients looking at the same block.)
-     */
     public static void handleRequestBlockAppeal(RequestBlockAppealPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
             MinecraftServer server = player.getServer();
             if (server == null) return;
             BlockPos pos = payload.pos();
-            // Ignore positions absurdly far from the player — debug queries are always close.
+
             if (pos.distSqr(player.blockPosition()) > 128 * 128) return;
 
-            // Multi-block objects (two-tall plants/doors, beds) are tallied at one anchor half
-            // (LOWER / HEAD — see AppealResolver). If the query lands on the other half, resolve to
-            // the anchor so the overlay shows the value the scorer used, not 0.
             net.minecraft.server.level.ServerLevel overworld = server.overworld();
             pos = com.bannerbound.core.api.settlement.AppealResolver
                 .appealAnchor(overworld.getBlockState(pos), pos);
 
-            // Home-scope first, resolved by the block's location: the settlement that owns the
-            // block's chunk is the only one whose homes can contain it (territories don't
-            // overlap). This is viewer-independent — the appeal is a property of the block.
             SettlementData sd = SettlementData.get(overworld);
             net.minecraft.world.level.block.Block block = overworld.getBlockState(pos).getBlock();
             Settlement owner = sd.getByChunk(new net.minecraft.world.level.ChunkPos(pos).toLong());
-            // Appeal is culture-relative; resolve it against the OWNING settlement's styles (not
-            // the requester's) so the value is identical for every viewer of this block.
+
             java.util.List<String> styles =
                 owner != null ? owner.cultureStyles() : java.util.List.of();
             java.util.List<String> palettes =
@@ -2729,8 +2456,7 @@ public final class ServerPayloadHandler {
                 tracked = true;
                 queuePosition = cad.queuePositionOf(pos);
             }
-            // queuePos>0: counted block, apply its diminishing slot. Tracked but slot 0:
-            // underground / not in the surface tally → 0. Untracked chunk: show the raw base.
+
             float chunkAppeal = queuePosition > 0
                 ? (float) (base * Math.pow(0.9, queuePosition - 1))
                 : (tracked ? 0f : base);
@@ -2739,10 +2465,6 @@ public final class ServerPayloadHandler {
         });
     }
 
-    // ─── Heraldry banner editor ────────────────────────────────────────────────────────────
-
-    /** The flag the Heraldry culture research grants; gates the banner editor both here and
-     *  on the TownHallScreen button. */
     public static final String HERALDRY_FLAG = "bannerbound.unlock.heraldry";
 
     public static void handleRequestBannerEditor(RequestBannerEditorPayload payload, IPayloadContext context) {
@@ -2773,11 +2495,6 @@ public final class ServerPayloadHandler {
                 ResearchManager.heraldryPointsEarned(settlement), patterns, colors));
     }
 
-    /** Hands the player a cosmetic copy of the faction banner (base color + Heraldry design),
-     *  paid for from settlement storage: one dye of every color the banner is made of (base
-     *  cloth + each pattern layer). Placed copies are decoration while the main banner stands;
-     *  if it's down, the next one placed is promoted to THE banner by FactionBannerEvents (the
-     *  recovery flow). */
     public static void handleRequestBannerCopy(RequestBannerCopyPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
@@ -2791,9 +2508,7 @@ public final class ServerPayloadHandler {
                     .withStyle(ChatFormatting.RED));
                 return;
             }
-            // The dyes the design is made of: the base cloth color plus every pattern layer's
-            // color, one of each DISTINCT dye. Sourced from settlement storage only (no voters
-            // passed → stockpile + workstation inventories, never the player's own pockets).
+
             java.util.LinkedHashSet<net.minecraft.world.item.DyeColor> colors =
                 new java.util.LinkedHashSet<>();
             colors.add(com.bannerbound.core.api.settlement.FactionBanner.dyeFor(mine.color()));
@@ -2825,7 +2540,7 @@ public final class ServerPayloadHandler {
             net.minecraft.world.item.ItemStack copy =
                 com.bannerbound.core.api.settlement.FactionBanner.designedItem(
                     mine, server.registryAccess(), 1);
-            // Inventory first; drop at the player's feet if it's full so the copy is never lost.
+
             if (!player.getInventory().add(copy)) {
                 player.drop(copy, false);
             }
@@ -2850,10 +2565,7 @@ public final class ServerPayloadHandler {
             }
             java.util.List<String> patterns = payload.patterns();
             java.util.List<Integer> colors = payload.colors();
-            // Hard validation — the client proposal is never authority. Size mismatch or an
-            // unknown pattern id means a buggy/forged packet: drop silently. A point shortfall
-            // can happen legitimately (an era regression un-completing researches while the
-            // editor was open), so that one gets a message.
+
             if (patterns.size() != colors.size() || patterns.size() > 6) return;
             if (patterns.size() > ResearchManager.heraldryPointsEarned(mine)) {
                 player.sendSystemMessage(Component.translatable("bannerbound.banner.editor.no_points")
@@ -2873,8 +2585,7 @@ public final class ServerPayloadHandler {
                 layers.add(new Settlement.BannerLayer(rl.toString(), colorId));
             }
             mine.setBannerDesign(layers);
-            // The banner decides who you are: every dye holding ≥5% of the cloth, ranked —
-            // as many identity colors as the design has. Empty design = founding fallback.
+
             if (layers.isEmpty()) {
                 mine.setIdentityDyes(java.util.List.of());
             } else {
@@ -2888,13 +2599,10 @@ public final class ServerPayloadHandler {
                 mine.setIdentityDyes(dyeIds);
             }
             data.setDirty();
-            // The flag in the plaza updates live (no-op while its chunk is unloaded).
+
             com.bannerbound.core.api.settlement.FactionBanner.applyDesignToBlock(
                 server.overworld(), mine);
-            // The identity change is settlement-WIDE: re-tint scoreboard teams (member name
-            // colors), restyle every loaded citizen's name tag, and push the fresh color
-            // table so the territory overlay, wireframes and HUD recolor everywhere
-            // immediately — the banner IS the settlement's color.
+
             for (java.util.UUID memberId : mine.members()) {
                 ServerPlayer member = server.getPlayerList().getPlayer(memberId);
                 if (member != null) {
@@ -2910,7 +2618,7 @@ public final class ServerPayloadHandler {
             SettlementManager.broadcastIdentity(server);
             player.sendSystemMessage(Component.translatable("bannerbound.banner.editor.saved")
                 .withStyle(mine.identityFormatting()));
-            // Refresh the open editor so the saved state + points line are authoritative.
+
             sendBannerEditor(player, mine);
         });
     }

@@ -15,16 +15,14 @@ import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 
 /**
- * Step 15 — recompute regent state on player presence changes.
- *
- * <p>The Chiefdom regency model says "the regent is the least-resented online member while
- * the chief is offline." Those two states change on every login + logout, so we drive
- * {@link SettlementManager#recomputeRegent} from both events for every Chiefdom in the world
- * (cheap — there's typically one Chiefdom and the recompute is O(citizens + members)).
- *
- * <p>{@link com.bannerbound.core.api.settlement.ImmigrationManager#tickAll} also calls
- * {@code recomputeRegent} periodically as a fallback heartbeat — covers the edge case where
- * the events miss (rare, but happens during server crash recovery).
+ * Recomputes Chiefdom regent state on player login/logout. The regency model: the regent is the
+ * least-resented online member while the chief is offline. That flips on every login and logout, so
+ * this drives SettlementManager.recomputeRegent from both events, for every Chiefdom in the world
+ * (not just ones the logging player belongs to -- the regent depends on every online member's
+ * citizen-resentment totals, and even a non-member login can shift those through prior
+ * interactions). Cheap: a typical world has few settlements and the recompute is O(citizens +
+ * members). ImmigrationManager.tickAll also calls recomputeRegent periodically as a fallback
+ * heartbeat for the rare case these events miss (e.g. server-crash recovery).
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -42,10 +40,6 @@ public final class RegencyEvents {
         recomputeForAllChiefdoms(event.getEntity() instanceof ServerPlayer sp ? sp : null);
     }
 
-    /** Iterate every Chiefdom and recompute its regent. We don't filter to "settlements the
-     *  logging player is a member of" because the regent depends on every online member's
-     *  citizen-resentment totals — even a non-member logging in could shift those totals
-     *  through prior interactions. Cheap: typical world has a small number of settlements. */
     private static void recomputeForAllChiefdoms(ServerPlayer source) {
         if (source == null) return;
         MinecraftServer server = source.getServer();

@@ -29,7 +29,16 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
-/** Pottery Slab: place clay, choose the floating recipe, then spin it on the wheel. */
+/**
+ * Pottery Slab workstation: place clay, choose the floating recipe, then spin it on the wheel.
+ * Right-click with an item inserts one input; empty-hand right-click takes one back; shift-right-click
+ * (with or without an item) starts the wheel-spinning minigame via {@code Pottery.startSession} once
+ * the contents match a recipe and nothing is already in progress. Every mutation checks
+ * {@code WorkBlockLocks} so players cannot interrupt an NPC mid-craft (busy = yellow status message).
+ * Breaking the slab pops the contents and aborts any live session. The half-height SHAPE means
+ * vanilla would classify the cell WALKABLE, so it is un-pathfindable - workers stand adjacent, same
+ * as every other station.
+ */
 public class PotterySlabBlock extends HorizontalDirectionalBlock implements EntityBlock {
     public static final MapCodec<PotterySlabBlock> CODEC = simpleCodec(PotterySlabBlock::new);
     public static final VoxelShape SHAPE = Block.box(0.0, 0.0, 0.0, 16.0, 8.0, 16.0);
@@ -59,11 +68,9 @@ public class PotterySlabBlock extends HorizontalDirectionalBlock implements Enti
         return SHAPE;
     }
 
-    /** Partial-collision workstation: without this, vanilla classifies the half-height slab WALKABLE and
-     *  NPCs path onto (and perch on) the wheel. Workers stand ADJACENT — same as every other station. */
     @Override
     protected boolean isPathfindable(BlockState state, net.minecraft.world.level.pathfinder.PathComputationType type) {
-        return false;
+        return false; // half-height shape: must stay un-pathfindable or NPCs path onto the wheel and snag
     }
 
     @Override

@@ -6,7 +6,21 @@ import java.util.UUID;
 import com.bannerbound.core.api.settlement.Era;
 import com.bannerbound.core.api.settlement.Settlement;
 
-/** Settlement-level language helpers and stable seed derivation. */
+/**
+ * Static entry point for turning a settlement's procedural "Tongue" into concrete words and citizen
+ * names. Every method resolves through a {@link LanguageProfile} keyed on a stable seed: deriveSeed
+ * folds the settlement UUID and name via an FNV-style hash so the same civ always speaks the same
+ * language across saves. Seed-only overloads exist for callers that have no Settlement (barbarian
+ * camps) and must reach the same lexicon.
+ *
+ * Key design decision on names: a citizen's given name is baked into the language ONCE at creation
+ * (the stored name IS the in-language name; see CitizenEntity#initializeCitizen), so it is never
+ * re-styled here. Surnames are EARNED later, so they stay display-time styled - these helpers
+ * resolve just the family-name half on demand. When a job is known the surname borrows that
+ * profession's family/worker-kind so it grows from the SAME stem as the "Work" word the lexicon
+ * shows (a hunter's surname and the "Hunter" entry share a root); with no job it falls back to the
+ * bare profession concept. surname() returns "" when a citizen has no surname yet.
+ */
 public final class SettlementLanguage {
     private SettlementLanguage() {
     }
@@ -38,8 +52,6 @@ public final class SettlementLanguage {
             surnameConcept, surnameJob, salt);
     }
 
-    // â”€â”€â”€ Seed-only overloads (for callers with no Settlement, e.g. barbarian camps) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
     public static LanguageProfile profileForSeed(long seed) {
         return LanguageProfile.of(seed);
     }
@@ -50,8 +62,6 @@ public final class SettlementLanguage {
         return forms.get(register == null ? LanguageRegister.COMMON : register);
     }
 
-    /** Styles a base given name (and optional surname) through the language identified by {@code seed}
-     *  â€” the camp/settlement-agnostic core of {@link #citizenName(Settlement, String, String, String, String)}. */
     public static String citizenName(long seed, Era era, String given, String surnameConcept,
                                      String surnameJob, String salt) {
         Era e = era == null ? Era.ANCIENT : era;
@@ -61,11 +71,6 @@ public final class SettlementLanguage {
         return surname.isBlank() ? displayGiven : displayGiven + " " + surname;
     }
 
-    // â”€â”€â”€ Surname-only styling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Citizen given names are baked into the language ONCE at creation (the stored name IS the
-    // in-language name; see CitizenEntity#initializeCitizen). Surnames are EARNED later, so they
-    // stay display-time styled â€” these helpers resolve just the family-name half on demand.
-
     public static String surname(Settlement settlement, String surnameConcept, String surnameJob,
                                  String salt) {
         Era era = settlement == null ? Era.ANCIENT : settlement.age();
@@ -73,8 +78,6 @@ public final class SettlementLanguage {
         return surname(seed, era, surnameConcept, surnameJob, salt);
     }
 
-    /** Styles an earned profession-root surname through the language {@code seed}. Returns "" when
-     *  the citizen has no surname yet. */
     public static String surname(long seed, Era era, String surnameConcept, String surnameJob,
                                  String salt) {
         if (surnameConcept == null || surnameConcept.isBlank()) {
@@ -88,10 +91,6 @@ public final class SettlementLanguage {
             .defaultName(e);
     }
 
-    /** Builds the family-name concept an earned surname is styled from. When a job is known the
-     *  surname borrows that profession's family (and worker kind) so it grows from the SAME stem as
-     *  the Work word the lexicon shows — a hunter's surname and the "Hunter" entry share a root.
-     *  With no job it falls back to the bare profession concept. */
     private static LanguageConcept surnameConceptFor(String surnameConcept, String surnameJob) {
         if (surnameJob != null && !surnameJob.isBlank()) {
             LanguageConcept job = LanguageConceptResolver.forJob(surnameJob, false);

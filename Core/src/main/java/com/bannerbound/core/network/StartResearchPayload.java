@@ -10,6 +10,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/** C->S: start (or queue) researching a node on the Scientific tree; the server validates and enacts. */
 @ApiStatus.Internal
 public record StartResearchPayload(String researchId) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<StartResearchPayload> TYPE =

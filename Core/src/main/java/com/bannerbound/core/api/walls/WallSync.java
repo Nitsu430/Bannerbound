@@ -15,10 +15,15 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Server-side blueprint push: expands the settlement's frozen {@link WallPlan} (against the
- * default design set — the library plugs in here in Phase 5) and ships it to settlement
- * members as {@code WallBlueprintSyncPayload}. Called on construct/cancel/adapt and on login;
- * a settlement without a plan syncs an empty payload, clearing the client's ghosts.
+ * Server-side blueprint push: expands the settlement's frozen {@link WallPlan} (against the default
+ * design set - the library plugs in here in Phase 5), bakes the wall connections so the ghosts show
+ * the EXACT states that will be built, and ships it to settlement members as
+ * {@code WallBlueprintSyncPayload}. Called on construct/cancel/adapt and on login; a settlement
+ * without a plan syncs an empty payload, clearing the client's ghosts.
+ *
+ * <p>{@link #sendPlanPreview} ships an arbitrary, possibly UNCOMMITTED plan's ghosts to a single
+ * player (the "walk around and inspect before committing" preview); the next committed-state sync
+ * (construct, login, plan change) replaces it.
  */
 public final class WallSync {
 
@@ -39,11 +44,6 @@ public final class WallSync {
         PacketDistributor.sendToPlayer(player, buildPayload(player.serverLevel(), settlement));
     }
 
-    /**
-     * Ships an arbitrary (possibly UNCOMMITTED) plan's ghosts to one player — the preview
-     * screen's "walk around and inspect before committing" flow. The next committed-state
-     * sync (construct, login, plan change) replaces it.
-     */
     public static void sendPlanPreview(ServerPlayer player, Settlement settlement, WallPlan plan) {
         PacketDistributor.sendToPlayer(player,
             payloadFor(player.serverLevel(), plan,
@@ -60,7 +60,6 @@ public final class WallSync {
         if (plan == null) {
             return new WallBlueprintSyncPayload(new long[0], new int[0]);
         }
-        // Baked connections: the ghosts show the EXACT states that will be built.
         Long2ObjectMap<BlockState> blueprint =
             WallConnectivity.bake(plan.buildBlueprint(resolver), level);
         long[] positions = new long[blueprint.size()];

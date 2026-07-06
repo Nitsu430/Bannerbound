@@ -15,15 +15,16 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.SoundType;
 
 /**
- * Salt — a preservative. Hold it in one hand and a perishable food in the other, then hold
- * right-click for ~1.6s to rub it in: the food is marked salted and keeps 25% longer (a one-time
- * bonus). Consumes one salt per food stack. Salting in the cooking pot comes later (COOKING_PLAN.md).
+ * Salt - a preservative. Hold it in one hand and a perishable food in the other, then hold
+ * right-click for ~1.6s (32 ticks, matching Create's sandpaper hold) to rub it in: the food is
+ * marked salted and keeps 25% longer (a one-time bonus). Consumes one salt per food stack.
+ * Salting in the cooking pot comes later (COOKING_PLAN.md).
  *
  * <p>The "rubbing" feel borrows Create's sandpaper: the EAT use-pose plus a gritty sand sound
- * replayed every 7 ticks during the hold (instead of the default eating crunch).
+ * replayed every 7 ticks during the hold (instead of the default eating crunch), played
+ * server-side so everyone nearby hears it.
  */
 public class SaltItem extends Item {
-    /** Hold time before the salt rubs in (matches Create's sandpaper). */
     private static final int USE_TICKS = 32;
 
     public SaltItem(Properties properties) {
@@ -42,8 +43,6 @@ public class SaltItem extends Item {
 
     @Override
     public void onUseTick(Level level, LivingEntity entity, ItemStack stack, int remainingUseDuration) {
-        // Gritty sand-rub audio every 7 ticks while held — like Create's sanding (the EAT pose
-        // already shows the rubbing motion + salt particles). Server-side so everyone nearby hears it.
         int elapsed = USE_TICKS - remainingUseDuration;
         if (!level.isClientSide && elapsed > 0 && (elapsed - 6) % 7 == 0) {
             level.playSound(null, entity.blockPosition(), SoundType.SAND.getHitSound(),

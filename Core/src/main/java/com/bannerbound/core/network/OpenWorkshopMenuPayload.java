@@ -14,34 +14,20 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: open the Workshop menu (rod shift-right-click inside a workshop). Carries the
- * header snapshot plus the worker roster: currently assigned workers and assignable candidates
- * (settlement citizens, unemployed flagged so the menu can list them first). Min-stock rows arrive
- * with Phase 3.
+ * Server -> client: open the Workshop menu (rod shift-right-click inside a workshop). Carries the
+ * header snapshot plus the worker roster - assigned workers and assignable candidates (settlement
+ * citizens, with employed flagged so the menu can list unemployed ones first). Conventions the
+ * client depends on: workshopId is echoed back by C->S edits; customName "" means show the derived
+ * type; statusOrdinal is a Workshop.Status ordinal; capacity is the reachable work-block count; job
+ * icons are item registry ids (0 = none); the worker* and candidate* lists are each parallel.
+ * minStockValues are the settlement-wide minimum per output (0 = off) and minStockCounts sum
+ * stockpiles + workshops. orderCounts are queued player orders (the +/- buttons edit only these);
+ * autoOrderCounts are chain-derived and display-only. workerPositions pin each worker to a station
+ * family type id ("" = Any / auto-pick) and stationTypeIds are the distinct families the chooser
+ * cycles through. appealOrdinal is a ChunkBeauty ordinal (-1 = unscored).
  *
- * @param workshopId        the workshop's id (UUID string; echoed back by C→S edits)
- * @param customName        the player-chosen name ("" = display the derived type)
- * @param derivedTypeId     the derived workshop type id (registered id, "mixed" or "none")
- * @param statusOrdinal     {@code Workshop.Status} ordinal (validity + reason display)
- * @param capacity          max workers (= reachable work block count)
- * @param workerIds         assigned citizen UUIDs (strings), parallel to {@code workerNames}
- * @param workerNames       assigned citizen display names
- * @param workerJobIcons    item registry id of each worker's job icon (0 = none)
- * @param candidateIds      assignable citizen UUIDs (strings), parallel to the lists below
- * @param candidateNames    assignable citizen display names
- * @param candidateEmployed whether each candidate already holds some other job
- * @param candidateJobIcons item registry id of each candidate's current-job icon (0 = none)
- * @param minStockItemIds   item registry ids of every output this workshop can produce
- * @param minStockValues    the configured settlement-wide minimum per output (0 = off)
- * @param minStockCounts    current settlement-wide count per output (stockpiles + workshops)
- * @param appealOrdinal     {@code ChunkBeauty} ordinal of the workplace appeal (−1 = unscored)
- * @param orderCounts       queued-order count per output (parallel to minStockItemIds; 0 = none)
- * @param autoOrderCounts   chain-derived auto-order count per output (parallel; display-only —
- *                          the ± buttons edit only the player orders)
- * @param workerPositions   each worker's pinned station family type id (parallel to workerIds;
- *                          "" = Any / auto-pick) — drives the Workers-tab station chooser
- * @param stationTypeIds    the distinct station family type ids present in this workshop (the
- *                          options the per-worker station chooser cycles through)
+ * <p>Too many fields for StreamCodec.composite, so encode/decode are hand-rolled and MUST stay
+ * symmetric.
  */
 @ApiStatus.Internal
 public record OpenWorkshopMenuPayload(String workshopId, String customName, String derivedTypeId,
@@ -64,7 +50,6 @@ public record OpenWorkshopMenuPayload(String workshopId, String customName, Stri
         new CustomPacketPayload.Type<>(
             ResourceLocation.fromNamespaceAndPath(BannerboundCore.MODID, "open_workshop_menu"));
 
-    // Too many fields for StreamCodec.composite — hand-rolled symmetric encode/decode.
     public static final StreamCodec<ByteBuf, OpenWorkshopMenuPayload> STREAM_CODEC = StreamCodec.of(
         (buf, p) -> {
             ByteBufCodecs.STRING_UTF8.encode(buf, p.workshopId);
@@ -83,7 +68,7 @@ public record OpenWorkshopMenuPayload(String workshopId, String customName, Stri
             writeInts(buf, p.minStockItemIds);
             writeInts(buf, p.minStockValues);
             writeInts(buf, p.minStockCounts);
-            ByteBufCodecs.VAR_INT.encode(buf, p.appealOrdinal + 1); // VAR_INT is unsigned-friendly
+            ByteBufCodecs.VAR_INT.encode(buf, p.appealOrdinal + 1); // +1 so -1 (unscored) survives unsigned VAR_INT; decode subtracts 1
             writeInts(buf, p.orderCounts);
             writeInts(buf, p.autoOrderCounts);
             writeStrings(buf, p.workerPositions);

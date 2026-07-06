@@ -37,79 +37,66 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The Foreman's Rod. Player-held tool that marks rectangular block regions as jobs for a chosen
- * workstation type.
- * <p>
- * Interaction:
- * <ul>
- *   <li>Shift-right-click in air → open the workstation-type picker.</li>
- *   <li>Right-click a block → cycles between point A (first click) and point B (second click).
- *       Once B is set, the box is committed to the {@link BlockSelectionRegistry}: if it overlaps
- *       one or more existing same-type fields it JOINS them into one (the new patch grows the
- *       existing field rather than being rejected), otherwise it becomes a fresh independent entry.
- *       A and B are cleared so the next right-click starts a new selection.</li>
- *   <li>Shift-left-click a block inside any of your settlement's existing selections →
- *       removes that selection. (Handled in {@code ForemansRodLeftClick}.)</li>
- * </ul>
- * A rod can author many selections; each has its own UUID in the registry. The rod stores only
- * the workstation type and the in-progress A/B between clicks.
+ * The Foreman's Rod: a player-held tool that authors block-region "jobs" ({@link BlockSelection})
+ * for a chosen worker type. The ItemStack stores only the current worker type plus the in-progress
+ * A/B corners between clicks; every committed selection gets its own UUID in the
+ * {@link BlockSelectionRegistry}, and one rod can author many. Every rejection sends a red message
+ * and never mutates the registry; every success re-broadcasts via {@link SelectionBroadcaster}.
+ *
+ * Worker types are the rod's selection-type strings, distinct from the citizen job ids (e.g.
+ * "diggers_slab"/"farmers_granary"):
+ *  - A->B box drawers (isBoxType): digger, farmer, forester_farm. Two clicks set corners A then B;
+ *    committing B UNIONS the box into any overlapping same-type box field (the oldest overlapped
+ *    field survives and grows, keeping its id/crop/worker) rather than being rejected; else a fresh
+ *    field. Adjacency-only growth (touching, no overlap) goes through the explicit sneak "expand".
+ *  - Point markers (single click): herder (fenced pen), miner (ore-chunk boulder), guard (post),
+ *    and a digger click inside a stone/clay/sand deposit chunk. Deposit/miner marks pack resource +
+ *    base height into the selection's seed so DiggerWorkGoal/MinerWorkGoal switch to the infinite
+ *    non-destructive cycle. Locating a boulder/deposit may DRESS one into a pre-feature chunk -- the
+ *    one terrain edit, made once, on the player's own claim at the player's request.
+ * Ordered types (isOrderedType = all six) bind a selection to one citizen or "all of that type" via
+ * the rod's target; the shift-in-air "clear bound citizen back to all" path is currently disabled
+ * (TODO block in use()) - shift-in-air always opens the picker. FARMER boxes must contain at least
+ * one farmland or grass block or the commit is rejected ("no_farmland").
+ *
+ * Interaction: use() handles shift-in-air (picker); useOn() handles clicking a
+ * block (A/B cycle, point marks, mid-draw sneak = expand nearest same-type field, sneak inside a
+ * field = adopt its target onto the rod or open the farmer-field GUI). Shift-LEFT-click removal
+ * lives in ForemansRodLeftClick. Shift-right-click on a digger CITIZEN (bind rod to that one) lives
+ * in CitizenEntity.mobInteract, NOT here -- entity.interact() consumes the click before
+ * interactLivingEntity would ever run.
+ *
+ * Commit guards: settlement membership, MAX_SELECTION_VOLUME, and territory (every touched chunk
+ * own-claimed). Extensive Quarries research lets DIGGER boxes reach onto NOBODY's land within
+ * QUARRY_REACH_CHUNKS -- never a rival's. Outpost working-claims are banner-managed, so rod
+ * point-marks bail out there. GUARD_TYPE must equal GuardWorkGoal.SELECTION_TYPE (kept in sync by
+ * referencing it directly).
  */
 public class ForemansRodItem extends Item {
-    /** Hard volume cap on a single selection. */
     public static final int MAX_SELECTION_VOLUME = 32_768;
-    /** Unit name the rod / selections use for the digger (the citizen job id is "diggers_slab"). */
     public static final String DIGGER_TYPE = "digger";
-    /** Unit name the rod / selections use for the farmer (the citizen job id is "farmers_granary"). */
     public static final String FARMER_TYPE = "farmer";
-    /** Unit name the rod / selections use for the herder (the citizen job id is "herders_pen"). The
-     *  herder is marked with a SINGLE click inside a fenced pen (point selection), not an A→B box. */
     public static final String HERDER_TYPE = "herder";
-    /** Unit name the rod / selections use for the miner (the citizen job id is "miners_claim").
-     *  Marked with a SINGLE click in an ore resource chunk (point selection), like the herder —
-     *  the "workplace" is the chunk's boulder, detected from the world, not drawn as a box. */
     public static final String MINER_TYPE = "miner";
-    /** Unit name the rod / selections use for the forester plantation (citizen job "foresters_log").
-     *  An A→B box, like the digger/farmer; bound to one forester. Research-gated (Silviculture) at
-     *  bind time in {@code ServerPayloadHandler.handleBindForemanToCitizen}. */
     public static final String FORESTER_FARM_TYPE = "forester_farm";
-    /** Unit name the rod / selections use for a guard post (citizen job "guards_post"). A SINGLE
-     *  click on any block — a gate, the banner, a wall walk, a tower — marks it as a post
-     *  (point selection); guards hold within a few blocks of it instead of walking the perimeter
-     *  beat. Must equal {@code GuardWorkGoal.SELECTION_TYPE}. */
     public static final String GUARD_TYPE = com.bannerbound.core.entity.GuardWorkGoal.SELECTION_TYPE;
-    /** Animals a pen can raise anywhere (the basic four). Horse is added only on a horse chunk. */
     public static final java.util.List<String> BASIC_PEN_ANIMALS = java.util.List.of(
         "minecraft:cow", "minecraft:pig", "minecraft:sheep", "minecraft:chicken");
-    /** Research flag (Extensive Quarries) that lets DIGGER selections reach onto unclaimed land
-     *  near the settlement — never another settlement's claims (MINER_PLAN.md phase 3). */
     public static final String FLAG_EXTENSIVE_QUARRIES = "bannerbound.unlock.extensive_quarries";
-    /** How far (chunks, Chebyshev) an extensive-quarry selection may stray from the nearest own
-     *  claimed chunk. Keeps commutes sane until Outposts are the real long-range answer. */
     public static final int QUARRY_REACH_CHUNKS = 4;
 
     public ForemansRodItem(Properties properties) {
         super(properties);
     }
 
-    /** Ordered worker types that bind to a specific citizen (or "all of that type") via the rod. */
     private static boolean isOrderedType(String t) {
         return DIGGER_TYPE.equals(t) || FARMER_TYPE.equals(t) || HERDER_TYPE.equals(t)
             || MINER_TYPE.equals(t) || FORESTER_FARM_TYPE.equals(t) || GUARD_TYPE.equals(t);
     }
 
-    /** A→B box-drawing worker types (the ones that select a rectangular region rather than a single
-     *  point marker). Only these support the "expand existing field" union flow. Note a digger box in
-     *  a material-deposit chunk is a point marker, but a plain dig order is a box — the expand path
-     *  guards on finding an actual box field to grow, so a deposit digger simply finds no match. */
     private static boolean isBoxType(String t) {
         return DIGGER_TYPE.equals(t) || FARMER_TYPE.equals(t) || FORESTER_FARM_TYPE.equals(t);
     }
-
-    // NOTE: shift-right-click on a digger citizen (→ bind this rod to that one digger) is handled in
-    // CitizenEntity.mobInteract, not here — entity.interact() consumes the click before the item's
-    // interactLivingEntity would ever run, so the rod logic has to live on the entity side.
-
-    // ─── Shift-right-click in air → open picker ──────────────────────────────────────────────
 
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
@@ -144,8 +131,6 @@ public class ForemansRodItem extends Item {
         return InteractionResultHolder.pass(stack);
     }
 
-    // ─── Right-click on block → cycle A then B; commit on B ──────────────────────────────────
-
     @Override
     public InteractionResult useOn(UseOnContext context) {
         Level level = context.getLevel();
@@ -157,12 +142,6 @@ public class ForemansRodItem extends Item {
         BlockPos clicked = context.getClickedPos();
 
         if (player.isShiftKeyDown()) {
-            // EXPAND an existing field: when a box-type selection is mid-draw (point A already set),
-            // a SNEAK-right-click sets B and UNIONS the new box into the nearest adjacent/overlapping
-            // existing field of the same type + target, instead of committing a brand-new field. Lets
-            // the player grow one big field rather than tiling many small ones. Plain (non-sneak)
-            // B-clicks still make a fresh field. Checked before the adopt-field gesture so a mid-draw
-            // sneak click always means "expand", never "adopt".
             String wsTypeExpand = stack.get(BannerboundCore.FOREMAN_WORKSTATION_TYPE.get());
             BlockPos pendingA = stack.get(BannerboundCore.FOREMAN_POINT_A.get());
             if (pendingA != null && isBoxType(wsTypeExpand)) {
@@ -171,9 +150,6 @@ public class ForemansRodItem extends Item {
                 stack.remove(BannerboundCore.FOREMAN_POINT_B.get());
                 return InteractionResult.CONSUME;
             }
-            // SHIFT-right-click INSIDE an existing digger/farmer field → adopt that field's type + owner
-            // onto the rod (a quick way to re-target the rod to match a field you can see). Shift on any
-            // other block does nothing here (the air-targeted shift cases are handled by use()).
             net.minecraft.server.level.ServerLevel overworld = serverPlayer.serverLevel().getServer().overworld();
             com.bannerbound.core.api.settlement.Settlement settlement =
                 com.bannerbound.core.api.settlement.SettlementData.get(overworld).getByPlayer(serverPlayer.getUUID());
@@ -183,8 +159,6 @@ public class ForemansRodItem extends Item {
                     if (sel.kind() != BlockSelection.Kind.WORKSTATION) continue;
                     String t = sel.workstationType();
                     if (!isOrderedType(t)) continue;
-                    // Farmer field → open the edit GUI (set crop + which farmer works it). Other
-                    // ordered types keep the "adopt this field's target onto the rod" shortcut.
                     if (FARMER_TYPE.equals(t)) {
                         openFieldEditScreen(serverPlayer, overworld, sel, settlement);
                         return InteractionResult.CONSUME;
@@ -206,26 +180,21 @@ public class ForemansRodItem extends Item {
             return InteractionResult.FAIL;
         }
 
-        // Herder: a single click inside a fenced pen marks it (point selection); no A→B box.
         if (HERDER_TYPE.equals(wsType)) {
             tryCommitHerderPen(serverPlayer, stack, clicked);
             return InteractionResult.CONSUME;
         }
 
-        // Miner: a single click in an ore resource chunk marks its boulder (point selection).
         if (MINER_TYPE.equals(wsType)) {
             tryCommitMinerMarker(serverPlayer, stack, clicked);
             return InteractionResult.CONSUME;
         }
 
-        // Guard: a single click on any block in own claims marks a guard post (point selection).
         if (GUARD_TYPE.equals(wsType)) {
             tryCommitGuardPost(serverPlayer, stack, clicked);
             return InteractionResult.CONSUME;
         }
 
-        // Material deposits: in digger mode, a single click on a stone/clay/sand resource chunk
-        // marks the whole deposit. Ordinary A->B dig orders still work in non-deposit chunks.
         if (DIGGER_TYPE.equals(wsType)) {
             com.bannerbound.core.territory.ChunkResource material =
                 com.bannerbound.core.territory.ChunkResources.typeAt(
@@ -239,7 +208,6 @@ public class ForemansRodItem extends Item {
         BlockPos a = stack.get(BannerboundCore.FOREMAN_POINT_A.get());
 
         if (a == null) {
-            // First click of the pair → set A.
             stack.set(BannerboundCore.FOREMAN_POINT_A.get(), clicked);
             serverPlayer.displayClientMessage(
                 Component.translatable("bannerbound.foremans_rod.point_a_set",
@@ -248,16 +216,12 @@ public class ForemansRodItem extends Item {
             return InteractionResult.CONSUME;
         }
 
-        // Second click → B + commit. Either way (success/fail) we clear A/B so the next click
-        // restarts the cycle at A. Other selections in the registry are NEVER touched here.
         tryCommitSelection(serverPlayer, stack, a, clicked, wsType);
         stack.remove(BannerboundCore.FOREMAN_POINT_A.get());
         stack.remove(BannerboundCore.FOREMAN_POINT_B.get());
         return InteractionResult.CONSUME;
     }
 
-    /** Copies an existing field's worker type + owner (a specific citizen, or "all") onto the rod, so
-     *  right-clicking a field re-targets the rod to match it. */
     private static void adoptSelectionOntoRod(ServerPlayer player, ItemStack stack, BlockSelection sel,
                                               com.bannerbound.core.api.settlement.Settlement settlement) {
         String t = sel.workstationType();
@@ -284,9 +248,6 @@ public class ForemansRodItem extends Item {
             .withStyle(ChatFormatting.AQUA), true);
     }
 
-    /** Shift-right-click on a farmer field → open the field-edit GUI on the client. Enumerates the
-     *  settlement's farmers (uuid + display name) so the screen can offer a worker dropdown ("all"
-     *  plus each farmer), and carries the field's current crop + assigned worker for the highlight. */
     private static void openFieldEditScreen(ServerPlayer player, ServerLevel overworld,
                                             BlockSelection sel, Settlement settlement) {
         java.util.List<UUID> farmerIds = new java.util.ArrayList<>();
@@ -306,22 +267,6 @@ public class ForemansRodItem extends Item {
                 overworld, sel.minX(), sel.minZ(), sel.maxX(), sel.maxZ())));
     }
 
-    /**
-     * Commits a freshly drawn {@code a→b} box. Validates settlement + volume + territory, then:
-     * <ul>
-     *   <li>If the box OVERLAPS one or more existing same-type box fields, it JOINS them — the new
-     *       box and every overlapped field are unioned into a single field that keeps the oldest
-     *       overlapped field's identity (its id, crop and assigned worker). The others are removed.
-     *       This is what players expect when they draw a new patch over an existing field: it grows,
-     *       it doesn't get rejected or replaced. (Adjacency-only growth, no overlap, still goes
-     *       through the explicit SNEAK "expand" gesture — see {@link #tryExpandSelection}.)</li>
-     *   <li>If the box overlaps anything that ISN'T a mergeable same-type field (a different worker
-     *       type, a point marker, a home, etc.), that's a genuine conflict → red "overlap" message,
-     *       registry untouched.</li>
-     *   <li>Otherwise it registers a fresh {@link BlockSelection} with a new UUID.</li>
-     * </ul>
-     * On any rejection, sends a red error message and never mutates the registry.
-     */
     private static void tryCommitSelection(ServerPlayer player, ItemStack stack,
                                             BlockPos a, BlockPos b, String wsType) {
         MinecraftServer server = player.getServer();
@@ -339,20 +284,16 @@ public class ForemansRodItem extends Item {
         if (!checkTerritory(player, overworld, settlement, wsType, a, b)) return;
 
         UUID selectionId = UUID.randomUUID();
-        // Stamp the creator (player who set point B) so the farmer pipeline can route the
-        // seed-picker popup to the right person; empty seed assignment by default.
         BlockSelection candidate = BlockSelection.workstation(
             selectionId, settlement.id(), settlement.color().ordinal(),
             a, b, wsType, player.getUUID(), "");
-        // For an ordered-worker rod (digger/farmer), bind the selection to the rod's current target (a
-        // specific citizen, or "all" of that type when the target is cleared).
         if (DIGGER_TYPE.equals(wsType) || FARMER_TYPE.equals(wsType)
                 || FORESTER_FARM_TYPE.equals(wsType)) {
             String targetStr = stack.get(BannerboundCore.FOREMAN_TARGET_CITIZEN.get());
             if (targetStr != null && !targetStr.isEmpty()) {
                 try {
                     candidate = candidate.withAssignedCitizen(UUID.fromString(targetStr));
-                } catch (IllegalArgumentException ignored) { /* malformed → leave open to all */ }
+                } catch (IllegalArgumentException ignored) { }
             }
         }
 
@@ -378,14 +319,13 @@ public class ForemansRodItem extends Item {
 
         BlockSelectionRegistry registry = BlockSelectionRegistry.get(overworld);
 
-        // Split the things this box overlaps into mergeable same-type fields vs hard conflicts.
         java.util.List<BlockSelection> mergeable = new java.util.ArrayList<>();
         boolean hardConflict = false;
         for (BlockSelection s : registry.getForSettlement(settlement.id())) {
-            if (s.completed()) continue;            // finished fields are invisible / non-blocking
+            if (s.completed()) continue;
             if (!s.intersects(candidate)) continue;
             if (isMergeableField(s, wsType)) mergeable.add(s);
-            else hardConflict = true;               // different type / point marker / home → real clash
+            else hardConflict = true;
         }
         if (hardConflict) {
             player.displayClientMessage(
@@ -404,9 +344,6 @@ public class ForemansRodItem extends Item {
                 .withStyle(ChatFormatting.GREEN), true);
         SelectionBroadcaster.broadcast(server);
 
-        // Farmer selections immediately prompt the player for a seed — they have to pick (or
-        // dismiss, which deletes the selection) before any work happens. Other workstation
-        // types are no-op here.
         if ("farmer".equals(wsType)) {
             com.bannerbound.core.api.farmer.AwaitingSeedRegistry.queueAndMaybePush(
                 server, player.getUUID(), selectionId,
@@ -416,23 +353,13 @@ public class ForemansRodItem extends Item {
         }
     }
 
-    /** A field the freshly drawn {@code wsType} box may be JOINED into on overlap: a same-type,
-     *  not-yet-completed WORKSTATION box (point markers — deposit/miner 1×1×1 — are never merged;
-     *  they're a different kind of job that happens to share the digger/miner type). */
     private static boolean isMergeableField(BlockSelection s, String wsType) {
         if (s.kind() != BlockSelection.Kind.WORKSTATION) return false;
         if (!wsType.equals(s.workstationType())) return false;
-        if (s.sizeX() == 1 && s.sizeY() == 1 && s.sizeZ() == 1) return false; // point marker
+        if (s.sizeX() == 1 && s.sizeY() == 1 && s.sizeZ() == 1) return false;
         return true;
     }
 
-    /**
-     * Joins the freshly drawn {@code candidate} box and every field it overlaps into ONE field. The
-     * oldest overlapped field (registry insertion order) is the survivor — it keeps its id, crop and
-     * assigned worker, and merely grows to the union AABB; the rest are removed. The union must still
-     * fit the volume cap, stay in territory, and not collide with any OTHER (non-merged) field. On any
-     * rejection a red message; the registry is never mutated on failure.
-     */
     private static void mergeIntoOverlapping(ServerPlayer player, MinecraftServer server,
             ServerLevel overworld, Settlement settlement, BlockSelectionRegistry registry,
             BlockSelection candidate, java.util.List<BlockSelection> mergeable, String wsType) {
@@ -449,11 +376,9 @@ public class ForemansRodItem extends Item {
         if (!checkVolume(player, unionA, unionB)) return;
         if (!checkTerritory(player, overworld, settlement, wsType, unionA, unionB)) return;
 
-        // Oldest overlapped field survives and grows; it owns the crop + worker assignment.
         BlockSelection primary = mergeable.get(0);
         BlockSelection grown = primary.withBounds(unionA, unionB);
 
-        // The grown union may not collide with any field OTHER than the ones we're folding in.
         java.util.Set<UUID> merged = new java.util.HashSet<>();
         for (BlockSelection s : mergeable) merged.add(s.rodId());
         if (registry.anyOverlapExcludingAll(grown, merged)) {
@@ -466,15 +391,13 @@ public class ForemansRodItem extends Item {
         for (BlockSelection s : mergeable) {
             if (!s.rodId().equals(primary.rodId())) registry.unregister(s.rodId());
         }
-        registry.register(grown); // same rodId key → grows the surviving field in place
+        registry.register(grown); // same rodId key -> upserts the surviving field in place, no duplicate
         player.displayClientMessage(
             Component.translatable("bannerbound.foremans_rod.field_expanded", grown.volume())
                 .withStyle(ChatFormatting.GREEN), true);
         SelectionBroadcaster.broadcast(server);
     }
 
-    /** Volume-cap guard shared by fresh commits and unions. Sends the red "too large" message and
-     *  returns false when the box exceeds {@link #MAX_SELECTION_VOLUME}. */
     private static boolean checkVolume(ServerPlayer player, BlockPos a, BlockPos b) {
         long volume = BlockSelection.volumeOf(a, b);
         if (volume > MAX_SELECTION_VOLUME) {
@@ -486,12 +409,6 @@ public class ForemansRodItem extends Item {
         return true;
     }
 
-    /**
-     * Territory guard shared by fresh commits and unions. Every chunk the box touches must be claimed
-     * by this player's settlement. Exception (Extensive Quarries research, DIGGER only): unclaimed
-     * chunks within {@link #QUARRY_REACH_CHUNKS} of own territory are also valid — another
-     * settlement's claims never are. Sends the matching red message and returns false on failure.
-     */
     private static boolean checkTerritory(ServerPlayer player, ServerLevel overworld,
             Settlement settlement, String wsType, BlockPos a, BlockPos b) {
         boolean extensive = DIGGER_TYPE.equals(wsType)
@@ -512,15 +429,6 @@ public class ForemansRodItem extends Item {
         return true;
     }
 
-    /**
-     * Expand-field commit: instead of registering a fresh selection, grow an EXISTING same-type field
-     * to the union of its box and the newly drawn {@code a→b} box. The target field is the nearest
-     * (by min-corner distance) non-completed WORKSTATION box field of the same {@code wsType} and same
-     * assigned-citizen target that either overlaps or sits adjacent to the new box. The union must
-     * still fit the volume cap, stay fully in territory, and not collide with any OTHER field. On any
-     * rejection a red message; the registry is never mutated on failure. If no field to expand is
-     * found, falls back to a normal fresh commit so a sneak-click is never wasted.
-     */
     private void tryExpandSelection(ServerPlayer player, ItemStack stack,
                                     BlockPos a, BlockPos b, String wsType) {
         MinecraftServer server = player.getServer();
@@ -533,7 +441,6 @@ public class ForemansRodItem extends Item {
                     .withStyle(ChatFormatting.RED), true);
             return;
         }
-        // The rod's current target (a bound citizen, or "all"), to match the field we grow.
         UUID rodTarget = BlockSelection.NO_CITIZEN;
         String targetStr = stack.get(BannerboundCore.FOREMAN_TARGET_CITIZEN.get());
         if (targetStr != null && !targetStr.isEmpty()) {
@@ -541,7 +448,6 @@ public class ForemansRodItem extends Item {
         }
 
         BlockSelectionRegistry registry = BlockSelectionRegistry.get(overworld);
-        // Build the new box as a probe selection (1-block inflated for the adjacency test).
         BlockSelection probe = BlockSelection.workstation(
             UUID.randomUUID(), settlement.id(), settlement.color().ordinal(), a, b, wsType,
             player.getUUID(), "");
@@ -556,9 +462,7 @@ public class ForemansRodItem extends Item {
             if (s.completed()) continue;
             if (!wsType.equals(s.workstationType())) continue;
             if (!s.assignedCitizenId().equals(rodTarget)) continue;
-            // Skip point markers (deposit/miner) — only true boxes are expandable.
             if (s.sizeX() == 1 && s.sizeY() == 1 && s.sizeZ() == 1) continue;
-            // Adjacency/overlap: the existing box must touch the 1-inflated new box.
             boolean touches = s.minX() <= newMaxX && s.maxX() >= newMinX
                 && s.minY() <= newMaxY && s.maxY() >= newMinY
                 && s.minZ() <= newMaxZ && s.maxZ() >= newMinZ;
@@ -569,12 +473,10 @@ public class ForemansRodItem extends Item {
         }
 
         if (best == null) {
-            // Nothing adjacent to grow → behave like a normal commit so the click isn't wasted.
             tryCommitSelection(player, stack, a, b, wsType);
             return;
         }
 
-        // Union AABB of the existing field and the new box.
         BlockPos unionA = new BlockPos(
             Math.min(best.minX(), Math.min(a.getX(), b.getX())),
             Math.min(best.minY(), Math.min(a.getY(), b.getY())),
@@ -591,7 +493,6 @@ public class ForemansRodItem extends Item {
                     volume, MAX_SELECTION_VOLUME).withStyle(ChatFormatting.RED), true);
             return;
         }
-        // Territory rule — same as a fresh commit (extensive quarries honoured for diggers).
         boolean extensive = DIGGER_TYPE.equals(wsType)
             && com.bannerbound.core.api.research.ResearchManager.hasFlag(settlement, FLAG_EXTENSIVE_QUARRIES);
         if (extensive) {
@@ -607,7 +508,6 @@ public class ForemansRodItem extends Item {
                     .withStyle(ChatFormatting.RED), true);
             return;
         }
-        // The grown field may not collide with any OTHER field (its own id is excluded).
         BlockSelection grown = best.withBounds(unionA, unionB);
         if (registry.anyOverlapExcluding(grown, best.rodId())) {
             player.displayClientMessage(
@@ -615,19 +515,13 @@ public class ForemansRodItem extends Item {
                     .withStyle(ChatFormatting.RED), true);
             return;
         }
-        registry.register(grown); // same rodId key → updates the existing field in place
+        registry.register(grown);
         player.displayClientMessage(
             Component.translatable("bannerbound.foremans_rod.field_expanded", volume)
                 .withStyle(ChatFormatting.GREEN), true);
         SelectionBroadcaster.broadcast(server);
     }
 
-    /**
-     * Herder pen marking: detect the fenced enclosure around {@code clicked} ({@link PenEnclosure}),
-     * verify it's on a livestock chunk and in this settlement's territory, then commit a point
-     * selection (a==b==clicked) of type {@code herder} bound to the rod's current target citizen. On
-     * any rejection, a red message; the registry is never mutated on failure.
-     */
     private static void tryCommitHerderPen(ServerPlayer player, ItemStack stack, BlockPos clicked) {
         MinecraftServer server = player.getServer();
         if (server == null) return;
@@ -639,7 +533,6 @@ public class ForemansRodItem extends Item {
                 .withStyle(ChatFormatting.RED), true);
             return;
         }
-        // Clicking INSIDE an existing pen → show its info (animal / capacity / kills), don't re-mark.
         for (BlockSelection sel : BlockSelectionRegistry.get(overworld).getForSettlement(settlement.id())) {
             if (sel.kind() != BlockSelection.Kind.WORKSTATION || !HERDER_TYPE.equals(sel.workstationType())) {
                 continue;
@@ -649,8 +542,6 @@ public class ForemansRodItem extends Item {
             com.bannerbound.core.building.PenEnclosure.Result r =
                 com.bannerbound.core.building.PenEnclosure.scan(level, marker);
             if (r.valid() && (r.interior().contains(clicked) || r.interior().contains(clicked.below()))) {
-                // Shift-right-click → (re)assign the pen's worker from the rod's selection (a citizen, or
-                // "all" if cleared). Plain right-click → open the "keep how many adults" harvest config.
                 if (player.isShiftKeyDown()) reassignPen(player, stack, overworld, sel);
                 else openPenKeepScreen(player, level, sel, r);
                 return;
@@ -661,7 +552,6 @@ public class ForemansRodItem extends Item {
                 .withStyle(ChatFormatting.RED), true);
             return;
         }
-        // Pens can be built anywhere now (basic livestock isn't chunk-gated) — just need a valid enclosure.
         com.bannerbound.core.building.PenEnclosure.Result pen =
             com.bannerbound.core.building.PenEnclosure.scan(level, clicked);
         if (!pen.valid()) {
@@ -669,19 +559,15 @@ public class ForemansRodItem extends Item {
                 .withStyle(ChatFormatting.RED), true);
             return;
         }
-        // Which animals may this pen raise? The basic four anywhere; horse only on a horse chunk.
         java.util.List<String> animals = new java.util.ArrayList<>(BASIC_PEN_ANIMALS);
         if (com.bannerbound.core.territory.ChunkResources.typeAt(level,
                 new net.minecraft.world.level.ChunkPos(clicked)) == com.bannerbound.core.territory.ChunkResource.HORSES) {
             animals.add("minecraft:horse");
         }
-        // Open the animal picker; the pen is committed in ServerPayloadHandler#handlePickPenAnimal.
         PacketDistributor.sendToPlayer(player,
             new com.bannerbound.core.network.OpenPenAnimalPickerPayload(clicked, animals));
     }
 
-    /** Plain right-click on an existing pen → open the "keep how many adults" harvest config screen, carrying
-     *  the pen's animal / mature count / capacity / kills / current keep threshold for display. */
     private static void openPenKeepScreen(ServerPlayer player, ServerLevel level,
             BlockSelection sel, com.bannerbound.core.building.PenEnclosure.Result r) {
         String packed = sel.seedItemId();
@@ -701,11 +587,9 @@ public class ForemansRodItem extends Item {
             new com.bannerbound.core.network.OpenPenKeepPayload(marker, animalId, mature, cap, kills, keep));
     }
 
-    /** Same interior-column membership the herder uses for counting its herd (1-block margin), so the keep
-     *  screen's mature count matches what the herder actually sees — never a raw bounding box, which on an
-     *  L-shaped pen covers ground outside the rope and over-counts wild stock as inside. */
     private static boolean inPenColumn(com.bannerbound.core.building.PenEnclosure.Result r,
             net.minecraft.world.entity.Entity a) {
+        // 1-block margin, not r.bounds(): a raw bbox over-counts wild stock on an L-shaped pen.
         int feetY = a.blockPosition().getY();
         int cx0 = (int) Math.floor(a.getX() - 1.0), cx1 = (int) Math.floor(a.getX() + 1.0);
         int cz0 = (int) Math.floor(a.getZ() - 1.0), cz1 = (int) Math.floor(a.getZ() + 1.0);
@@ -720,8 +604,6 @@ public class ForemansRodItem extends Item {
         return false;
     }
 
-    /** Shift-right-click on an existing pen → set its worker to the rod's current selection: a specific
-     *  citizen ({@code FOREMAN_TARGET_CITIZEN}), or all herders if the rod's target is cleared. */
     private static void reassignPen(ServerPlayer player, ItemStack stack, ServerLevel overworld, BlockSelection sel) {
         String targetStr = stack.get(BannerboundCore.FOREMAN_TARGET_CITIZEN.get());
         java.util.UUID who = BlockSelection.NO_CITIZEN;
@@ -740,12 +622,6 @@ public class ForemansRodItem extends Item {
         player.displayClientMessage(msg.withStyle(ChatFormatting.GREEN), true);
     }
 
-    /**
-     * Generic material deposit marking: a single click in a STONE/CLAY/SAND resource chunk commits
-     * a point marker of type {@code digger}. The packed seed carries resource + deposit base height;
-     * {@link com.bannerbound.core.entity.DiggerWorkGoal} sees that seed and switches from finite
-     * A->B excavation to the infinite non-destructive deposit cycle.
-     */
     private static void tryCommitMaterialDepositMarker(ServerPlayer player, ItemStack stack,
                                                        BlockPos clicked,
                                                        com.bannerbound.core.territory.ChunkResource type) {
@@ -816,7 +692,7 @@ public class ForemansRodItem extends Item {
         if (targetStr != null && !targetStr.isEmpty()) {
             try {
                 candidate = candidate.withAssignedCitizen(UUID.fromString(targetStr));
-            } catch (IllegalArgumentException ignored) { /* malformed -> leave open to all diggers */ }
+            } catch (IllegalArgumentException ignored) { }
         }
         BlockSelectionRegistry registry = BlockSelectionRegistry.get(overworld);
         if (registry.anyOverlapExcluding(candidate, selectionId)) {
@@ -850,15 +726,6 @@ public class ForemansRodItem extends Item {
         player.displayClientMessage(msg.withStyle(ChatFormatting.GREEN), true);
     }
 
-    /**
-     * Miner marking: a single click in an ore resource chunk ({@link ChunkResources}) commits a
-     * point selection of type {@code miner} whose packed {@code seedItemId} carries the chunk's
-     * resource + the boulder's base height. The boulder is located by scoring the deterministic
-     * {@link com.bannerbound.core.territory.BoulderLayout} against the world; a chunk typed as ore
-     * but generated before the populator feature gets its boulder DRESSED here (the one terrain
-     * edit, once, at the player's request, on the player's own claim). On any rejection a red
-     * message; the registry is never mutated on failure.
-     */
     private static void tryCommitMinerMarker(ServerPlayer player, ItemStack stack, BlockPos clicked) {
         MinecraftServer server = player.getServer();
         if (server == null) return;
@@ -871,15 +738,11 @@ public class ForemansRodItem extends Item {
             return;
         }
         net.minecraft.world.level.ChunkPos cp = new net.minecraft.world.level.ChunkPos(clicked);
-        // OUTPOST chunks are banner-managed: the Outpost Banner owns the deposit marker and the
-        // player appoints the miner in ITS screen — the rod stays out entirely.
         if (settlement.workingClaims().contains(cp.toLong())) {
             player.displayClientMessage(Component.translatable("bannerbound.foremans_rod.mine_outpost_managed")
                 .withStyle(ChatFormatting.YELLOW), true);
             return;
         }
-        // Clicking in an already-marked chunk: shift → re-assign its worker from the rod's target,
-        // plain → status message. Mirrors the pen behaviour; never re-marks.
         for (BlockSelection sel : BlockSelectionRegistry.get(overworld).getForSettlement(settlement.id())) {
             if (sel.kind() != BlockSelection.Kind.WORKSTATION || !MINER_TYPE.equals(sel.workstationType())) {
                 continue;
@@ -889,7 +752,7 @@ public class ForemansRodItem extends Item {
                 continue;
             }
             if (player.isShiftKeyDown()) {
-                reassignMine(player, stack, overworld, sel);   // same bind-or-all semantics as pens
+                reassignMine(player, stack, overworld, sel);
             } else {
                 player.displayClientMessage(
                     Component.translatable("bannerbound.foremans_rod.mine_already_marked",
@@ -911,12 +774,10 @@ public class ForemansRodItem extends Item {
             return;
         }
         if (com.bannerbound.core.territory.BoulderLayout.dropFor(type).isEmpty()) {
-            // The resource's yield item isn't in this install (raw tin lives in Antiquity).
             player.displayClientMessage(Component.translatable("bannerbound.foremans_rod.mine_unworkable")
                 .withStyle(ChatFormatting.RED), true);
             return;
         }
-        // Locate the chunk's boulder; pre-feature chunks get dressed (built fresh) right here.
         int baseY = com.bannerbound.core.territory.BoulderLayout.locateBaseY(level, cp, type)
             .orElseGet(() -> com.bannerbound.core.territory.BoulderLayout.dress(level, cp));
 
@@ -929,7 +790,7 @@ public class ForemansRodItem extends Item {
         if (targetStr != null && !targetStr.isEmpty()) {
             try {
                 candidate = candidate.withAssignedCitizen(UUID.fromString(targetStr));
-            } catch (IllegalArgumentException ignored) { /* malformed → leave open to all */ }
+            } catch (IllegalArgumentException ignored) { }
         }
         BlockSelectionRegistry registry = BlockSelectionRegistry.get(overworld);
         if (registry.anyOverlapExcluding(candidate, selectionId)) {
@@ -944,14 +805,6 @@ public class ForemansRodItem extends Item {
                 .withStyle(ChatFormatting.GREEN), true);
     }
 
-    /**
-     * Guard-post marking: a single click on any block inside the settlement's own claims commits a
-     * point selection of type {@code guard}. Guards ({@code GuardWorkGoal}) man marked posts —
-     * bound-to-one-guard via the rod's target, or open (one guard each via {@code GuardPostClaims})
-     * — and hold nearby instead of walking the perimeter beat. Clicking near an existing post:
-     * shift → re-assign its guard from the rod's target, plain → status message (remove with the
-     * usual shift-LEFT-click). On any rejection a red message; the registry is never mutated.
-     */
     private static void tryCommitGuardPost(ServerPlayer player, ItemStack stack, BlockPos clicked) {
         MinecraftServer server = player.getServer();
         if (server == null) return;
@@ -962,9 +815,6 @@ public class ForemansRodItem extends Item {
                 .withStyle(ChatFormatting.RED), true);
             return;
         }
-        // Clicking on/near an existing post: shift → re-assign its guard, plain → status. Mirrors
-        // the mine-marker behaviour; never re-marks. "Near" = within 2 blocks, so a fat-fingered
-        // second click on the gate doesn't stack a twin post.
         for (BlockSelection sel : BlockSelectionRegistry.get(overworld).getForSettlement(settlement.id())) {
             if (sel.kind() != BlockSelection.Kind.WORKSTATION || !GUARD_TYPE.equals(sel.workstationType())) {
                 continue;
@@ -980,8 +830,6 @@ public class ForemansRodItem extends Item {
             }
             return;
         }
-        // Posts live on the settlement's own claimed ground — the leash and patrol both anchor
-        // there, and a post outside the defense band would just strand its guard.
         if (!settlement.claimedChunks().contains(
                 new net.minecraft.world.level.ChunkPos(clicked).toLong())) {
             player.displayClientMessage(Component.translatable("bannerbound.foremans_rod.outside_territory")
@@ -996,7 +844,7 @@ public class ForemansRodItem extends Item {
         if (targetStr != null && !targetStr.isEmpty()) {
             try {
                 candidate = candidate.withAssignedCitizen(UUID.fromString(targetStr));
-            } catch (IllegalArgumentException ignored) { /* malformed → leave open to all */ }
+            } catch (IllegalArgumentException ignored) { }
         }
         BlockSelectionRegistry registry = BlockSelectionRegistry.get(overworld);
         if (registry.anyOverlapExcluding(candidate, selectionId)) {
@@ -1011,9 +859,6 @@ public class ForemansRodItem extends Item {
                 .withStyle(ChatFormatting.GREEN), true);
     }
 
-    /** Shift-right-click on an existing guard post → set its guard to the rod's current selection:
-     *  a specific citizen, or all guards if the rod's target is cleared. (The mine twin:
-     *  {@link #reassignMine}.) */
     private static void reassignGuardPost(ServerPlayer player, ItemStack stack, ServerLevel overworld,
                                           BlockSelection sel) {
         String targetStr = stack.get(BannerboundCore.FOREMAN_TARGET_CITIZEN.get());
@@ -1033,13 +878,10 @@ public class ForemansRodItem extends Item {
         player.displayClientMessage(msg.withStyle(ChatFormatting.GREEN), true);
     }
 
-    /** Player-facing name of an ore chunk's resource, via lang key {@code bannerbound.resource.<name>}. */
     private static Component resourceLabel(com.bannerbound.core.territory.ChunkResource type) {
         return Component.translatable("bannerbound.resource." + type.name().toLowerCase(java.util.Locale.ROOT));
     }
 
-    /** Shift-right-click on an existing mine marker → set its worker to the rod's current selection: a
-     *  specific citizen, or all miners if the rod's target is cleared. (The pen twin: {@link #reassignPen}.) */
     private static void reassignMine(ServerPlayer player, ItemStack stack, ServerLevel overworld, BlockSelection sel) {
         String targetStr = stack.get(BannerboundCore.FOREMAN_TARGET_CITIZEN.get());
         java.util.UUID who = BlockSelection.NO_CITIZEN;
@@ -1067,13 +909,6 @@ public class ForemansRodItem extends Item {
         };
     }
 
-    /**
-     * Extensive-Quarries territory rule for a digger selection: every chunk the box touches must
-     * be (1) claimed by this settlement, or (2) claimed by NOBODY and within
-     * {@link #QUARRY_REACH_CHUNKS} (Chebyshev) of one of this settlement's claimed chunks.
-     * Returns {@code null} when valid, else the lang key of the failure reason — another
-     * settlement's land ({@code foreign_territory}) or too far out ({@code quarry_too_far}).
-     */
     private static String quarryReachFailKey(ServerLevel overworld, Settlement settlement,
                                              BlockPos a, BlockPos b) {
         SettlementData data = SettlementData.get(overworld);
@@ -1094,7 +929,6 @@ public class ForemansRodItem extends Item {
         return null;
     }
 
-    /** Whether (cx,cz) lies within {@link #QUARRY_REACH_CHUNKS} (Chebyshev) of any claimed chunk. */
     private static boolean withinReachOfClaim(java.util.Set<Long> claimed, int cx, int cz) {
         for (int dx = -QUARRY_REACH_CHUNKS; dx <= QUARRY_REACH_CHUNKS; dx++) {
             for (int dz = -QUARRY_REACH_CHUNKS; dz <= QUARRY_REACH_CHUNKS; dz++) {
@@ -1106,19 +940,12 @@ public class ForemansRodItem extends Item {
         return false;
     }
 
-    /** Single-chunk territory test for the point markers (miner pens / herder pens): the chunk is
-     *  workable when it's fully claimed OR held by one of this settlement's outpost working claims
-     *  — that's the whole point of an outpost (MINER_PLAN.md phase 4). */
     private static boolean isWorkableChunk(Settlement settlement, BlockPos pos) {
         long packed = new net.minecraft.world.level.ChunkPos(pos).toLong();
         return settlement.claimedChunks().contains(packed)
             || settlement.workingClaims().contains(packed);
     }
 
-    /** True if every chunk the bounding box from {@code a} to {@code b} overlaps is in
-     *  {@code settlement.claimedChunks()}. Selections are AABBs so we only need to scan the
-     *  chunk grid between the min and max corners (cheap — at most ~64 chunks for the largest
-     *  allowed selection). */
     public static boolean isFullyWithinTerritory(Settlement settlement, BlockPos a, BlockPos b) {
         int minBlockX = Math.min(a.getX(), b.getX());
         int maxBlockX = Math.max(a.getX(), b.getX());
@@ -1139,8 +966,6 @@ public class ForemansRodItem extends Item {
         return true;
     }
 
-    // ─── Hotbar name reflects chosen workstation type ────────────────────────────────────────
-
     @Override
     public Component getName(ItemStack stack) {
         String wsType = stack.get(BannerboundCore.FOREMAN_WORKSTATION_TYPE.get());
@@ -1150,7 +975,6 @@ public class ForemansRodItem extends Item {
         return Component.translatable("item.bannerbound.foremans_rod.named", targetLabel(stack, wsType));
     }
 
-    /** "Digger — Cedric" when bound to one digger, else just the worker type ("Digger"/"Quarryworker"). */
     private static Component targetLabel(ItemStack stack, String wsType) {
         Component type = clientWorkerTypeName(wsType);
         String targetName = stack.get(BannerboundCore.FOREMAN_TARGET_NAME.get());
@@ -1160,10 +984,8 @@ public class ForemansRodItem extends Item {
         return type;
     }
 
-    /** Client-side worker-type label: "digger" upgrades to "Quarryworker" once the local settlement has
-     *  the Quarry research. Guarded so the client-only {@code ClientResearchState} is never touched on a
-     *  dedicated server (where this falls back to the base name). */
     private static Component clientWorkerTypeName(String wsType) {
+        // client-only ClientResearchState: guard so a dedicated server never touches it.
         if (DIGGER_TYPE.equals(wsType) && net.neoforged.fml.loading.FMLEnvironment.dist.isClient()
                 && com.bannerbound.core.client.ClientResearchState.hasFlag(
                     com.bannerbound.core.social.WorkstationNames.FLAG_QUARRY)) {
@@ -1171,8 +993,6 @@ public class ForemansRodItem extends Item {
         }
         return Component.translatable("bannerbound.workstation_type." + wsType);
     }
-
-    // ─── Tooltip: workstation type + in-progress point ───────────────────────────────────────
 
     @Override
     public void appendHoverText(ItemStack stack, TooltipContext context, List<Component> tooltip, TooltipFlag flag) {
@@ -1191,7 +1011,6 @@ public class ForemansRodItem extends Item {
         if (a != null) {
             tooltip.add(Component.translatable("bannerbound.foremans_rod.tooltip.a_only",
                 a.getX(), a.getY(), a.getZ()).withStyle(ChatFormatting.DARK_GRAY));
-            // Hint the expand gesture for box-drawing types while mid-selection.
             if (isBoxType(wsType)) {
                 tooltip.add(Component.translatable("bannerbound.foremans_rod.tooltip.expand_hint")
                     .withStyle(ChatFormatting.DARK_GRAY));

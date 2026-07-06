@@ -34,25 +34,30 @@ import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * A Drying Rack — a primitive line, carved from a log with a bone blade (one block class per wood;
- * see {@code BannerboundAntiquity.DRYING_RACK_*}). Right-click with a dryable item to hang it on a
- * free spot, right-click empty-handed to take the most-recent spot back. Each rack has four spots
- * (see {@link DryingRackBlockEntity}); the {@link com.bannerbound.antiquity.client.DryingRackRenderer}
- * draws the hung items and their drying cross-fade.
+ * A Drying Rack -- a primitive drying line, carved from a log with a bone blade (one block class per
+ * wood; see {@code BannerboundAntiquity.DRYING_RACK_*}). Right-click with a dryable item to hang it
+ * on a free spot, right-click empty-handed to take the most-recent spot back. Each rack has four
+ * spots (see {@link DryingRackBlockEntity}); the
+ * {@link com.bannerbound.antiquity.client.DryingRackRenderer} draws the hung items and their drying
+ * cross-fade. The line runs along the facing's clockwise axis; the outline shape hugs the frame at
+ * any rotation (full along the line, shallow across it) and the collision shape is deliberately
+ * empty -- it is a frame, entities walk through it.
  *
  * <p>Two adjacent racks of the same wood + facing render as one connected "double" (chest-style:
- * {@link ChestType} {@code LEFT}/{@code RIGHT}); this is purely cosmetic — each block keeps its own
- * four spots and block entity. The line runs along the facing's clockwise axis.
+ * {@link ChestType} {@code LEFT}/{@code RIGHT}); this is purely cosmetic -- each block keeps its own
+ * four spots and block entity. Pairing is deterministic from the run's counter-clockwise end:
+ * (0,1),(2,3),... -- an even index with a clockwise partner is LEFT, the next is RIGHT, a leftover
+ * stays SINGLE; only width-axis neighbour updates recompute it. A just placed/carved rack refreshes
+ * its neighbours via the UPDATE_ALL set-block but never itself, so carving code must call
+ * {@link #refreshSelf}.
  */
 public class DryingRackBlock extends HorizontalDirectionalBlock implements EntityBlock {
     public static final MapCodec<DryingRackBlock> CODEC = simpleCodec(DryingRackBlock::new);
     public static final net.minecraft.world.level.block.state.properties.EnumProperty<ChestType> TYPE =
         BlockStateProperties.CHEST_TYPE;
 
-    // A single narrow box around the frame, oriented along the line (the facing's clockwise axis):
-    // full along the line, shallow across it. Picked per-facing so it hugs the rack at any rotation.
-    private static final VoxelShape OUTLINE_X = Block.box(0, 0, 4, 16, 16, 12); // line runs E–W
-    private static final VoxelShape OUTLINE_Z = Block.box(4, 0, 0, 12, 16, 16); // line runs N–S
+    private static final VoxelShape OUTLINE_X = Block.box(0, 0, 4, 16, 16, 12);
+    private static final VoxelShape OUTLINE_Z = Block.box(4, 0, 0, 12, 16, 16);
 
     public DryingRackBlock(BlockBehaviour.Properties properties) {
         super(properties);
@@ -76,18 +81,14 @@ public class DryingRackBlock extends HorizontalDirectionalBlock implements Entit
 
     @Override
     protected VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext ctx) {
-        return Shapes.empty(); // a frame — walk through it
+        return Shapes.empty();
     }
-
-    // ─── Chest-style connection (cosmetic double) ──────────────────────────────────────────────────
 
     private boolean isPartner(LevelAccessor level, BlockPos pos, Direction facing) {
         BlockState s = level.getBlockState(pos);
         return s.getBlock() == this && s.getValue(FACING) == facing;
     }
 
-    /** Pair adjacent racks deterministically from the run's counter-clockwise end: (0,1),(2,3),…
-     *  Even index with a clockwise partner = LEFT, the next = RIGHT; a leftover stays SINGLE. */
     private ChestType connectionType(LevelAccessor level, BlockPos pos, Direction facing) {
         Direction cw = facing.getClockWise();
         Direction ccw = facing.getCounterClockWise();
@@ -97,7 +98,7 @@ public class DryingRackBlock extends HorizontalDirectionalBlock implements Entit
             p = p.relative(ccw);
             offset++;
         }
-        if (offset % 2 == 1) return ChestType.RIGHT; // second half of a pair started to the CCW
+        if (offset % 2 == 1) return ChestType.RIGHT;
         return isPartner(level, pos.relative(cw), facing) ? ChestType.LEFT : ChestType.SINGLE;
     }
 
@@ -113,15 +114,12 @@ public class DryingRackBlock extends HorizontalDirectionalBlock implements Entit
     protected BlockState updateShape(BlockState state, Direction direction, BlockState neighborState,
                                      LevelAccessor level, BlockPos pos, BlockPos neighborPos) {
         Direction facing = state.getValue(FACING);
-        // Only the width-axis neighbours (the line direction) affect the connection.
         if (direction.getAxis() == facing.getClockWise().getAxis()) {
             return state.setValue(TYPE, connectionType(level, pos, facing));
         }
         return super.updateShape(state, direction, neighborState, level, pos, neighborPos);
     }
 
-    /** Recompute the connection for the rack just placed/carved at {@code pos} (its neighbours are
-     *  refreshed by the UPDATE_ALL set-block, but it never updates itself). */
     public static void refreshSelf(Level level, BlockPos pos) {
         BlockState state = level.getBlockState(pos);
         if (state.getBlock() instanceof DryingRackBlock rack) {
@@ -132,8 +130,6 @@ public class DryingRackBlock extends HorizontalDirectionalBlock implements Entit
             }
         }
     }
-
-    // ─── Block entity ──────────────────────────────────────────────────────────────────────────────
 
     @Override
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
@@ -152,8 +148,6 @@ public class DryingRackBlock extends HorizontalDirectionalBlock implements Entit
     private static DryingRackBlockEntity rack(Level level, BlockPos pos) {
         return level.getBlockEntity(pos) instanceof DryingRackBlockEntity be ? be : null;
     }
-
-    // ─── Interaction ─────────────────────────────────────────────────────────────────────────────
 
     @Override
     protected ItemInteractionResult useItemOn(ItemStack stack, BlockState state, Level level, BlockPos pos,
@@ -181,9 +175,7 @@ public class DryingRackBlock extends HorizontalDirectionalBlock implements Entit
         return InteractionResult.sidedSuccess(level.isClientSide);
     }
 
-    /** Return a removed item to the player WITHOUT filling the held hotbar slot — otherwise the
-     *  item lands in hand and the next right-click just re-hangs it (the "last item won't leave" bug).
-     *  Prefers merging, then any empty non-selected slot, then falls back to a normal add / drop. */
+    // Never fill the selected hotbar slot: an item landing in hand re-hangs on the next click ("last item won't leave" bug).
     private static void returnToPlayer(Player player, ItemStack out) {
         if (out.isEmpty()) return;
         net.minecraft.world.entity.player.Inventory inv = player.getInventory();

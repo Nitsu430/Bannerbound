@@ -1,6 +1,11 @@
 package com.bannerbound.core.codex;
 
-/** Live event context used while testing Chronicle unlock conditions. */
+/**
+ * Immutable snapshot of a single gameplay event, matched against Chronicle unlock conditions.
+ * The typed factories (research/item/block/era/flag/advancement/custom) each fill only the
+ * relevant field and blank the rest; the canonical constructor trims every field to "" so
+ * condition comparisons never see null or stray whitespace.
+ */
 public record CodexTriggerContext(
     String type,
     String id,

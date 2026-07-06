@@ -12,35 +12,28 @@ import com.bannerbound.core.Config;
  * Core config. Standalone Core simply reads {@link Config#VANILLA_CONTENT} (default {@code true},
  * i.e. vanilla untouched).
  *
- * <p>All runtime gates ({@code HostileSpawnGate}, {@code VanillaPortalGate}, Antiquity's
- * {@code VanillaStorageGate}) call {@link #isEnabled()} and behave as vanilla when it returns
+ * <p>All runtime gates ({@code VanillaGates}, {@code VanillaGates}, Antiquity's
+ * {@code VanillaGates}) call {@link #isEnabled()} and behave as vanilla when it returns
  * {@code true}. Static worldgen/loot changes are shipped as datapacks by the expansion instead,
- * since those can't be toggled at runtime.
+ * since those can't be toggled at runtime. {@link #isEnabled()} returns the documented default
+ * ({@code true}, vanilla untouched) if read before the config spec has loaded, so it only guards
+ * unusually early reads; all real gates run well after config load.
  */
 public final class VanillaContentState {
-    /** {@code null} = no override; fall through to the Core config. Written once at setup,
-     *  read from spawn/portal events that may fire off the main thread, so {@code volatile}. */
+    // volatile: written once at setup, read from spawn/portal events that may fire off the main thread.
     private static volatile Boolean override = null;
 
     private VanillaContentState() {
     }
 
-    /** Force the effective value (used by expansions like Antiquity during common setup). */
     public static void setOverride(boolean value) {
         override = value;
     }
 
-    /** Drop any override and fall back to the Core config. */
     public static void clearOverride() {
         override = null;
     }
 
-    /**
-     * The effective flag: an active override wins, otherwise the Core config value.
-     * Returns the documented default ({@code true}, vanilla untouched) if the config spec
-     * hasn't loaded yet — all real gates run well after config load, so this only guards
-     * unusually early reads.
-     */
     public static boolean isEnabled() {
         Boolean o = override;
         if (o != null) return o;

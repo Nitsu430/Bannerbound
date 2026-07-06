@@ -11,8 +11,8 @@ import net.minecraft.nbt.CompoundTag;
  * Star ids are the stable identities from {@code SkyField} (commons = vanilla
  * accepted-order index, typed = TYPED_ID_BASE + generation index); the line path is the
  * id ORDER (consecutive ids connect). Domain profile per the hybrid rules: primary =
- * dominant typed star type, secondary = second type with ≥2 stars ({@code null} = pure
- * god → purity bonus when passives land).
+ * dominant typed star type, secondary = second type with >=2 stars ({@code null} = pure
+ * god -> purity bonus when passives land).
  */
 public final class Constellation {
     private final UUID id;

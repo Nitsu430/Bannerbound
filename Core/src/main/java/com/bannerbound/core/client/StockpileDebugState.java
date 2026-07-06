@@ -14,7 +14,7 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Client-side TTL holder for the Stockpile enclosure debug wireframe — mirrors {@link DetectPreviewState}.
+ * Client-side TTL holder for the Stockpile enclosure debug wireframe - mirrors {@link DetectPreviewState}.
  * Holds the scan's detected interior tiles, the connected container blocks, and the failure position
  * so {@link SelectionRenderer} can draw them (green / blue / red) while the flash is active. A debug
  * aid until the storage terminal exists.
@@ -31,7 +31,6 @@ public final class StockpileDebugState {
     private StockpileDebugState() {
     }
 
-    /** Arm the flash for {@code durationTicks} from the current client game-time. */
     public static void show(List<BlockPos> newInterior, List<BlockPos> newContainers,
                             Optional<BlockPos> newFailPos, int durationTicks) {
         Minecraft mc = Minecraft.getInstance();

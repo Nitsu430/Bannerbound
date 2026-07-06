@@ -10,9 +10,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * C→S: the player shift-right-clicked to reel in their rope-tethered spear / speared-fish catch
+ * C -> S: the player shift-right-clicked to reel in their rope-tethered spear / speared-fish catch
  * with <b>empty hands</b> (the held-rope case is handled directly by {@code FiberRopeItem.use}; this
- * exists because vanilla doesn't forward an empty-hand right-click to the server). No fields — the
+ * exists because vanilla doesn't forward an empty-hand right-click to the server). No fields - the
  * actor is the context's player; the server resolves their tethered entity (see {@code SpearFishing}).
  */
 @ApiStatus.Internal

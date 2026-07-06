@@ -12,11 +12,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client. Opens the {@code PenKeepScreen} ("keep how many adults?") when the player
- * plain-right-clicks an existing pen with the Foreman's Rod. Carries the pen's marker pos (round-tripped
- * back so the server edits the right pen) plus what the screen needs to display: the contained animal id,
- * the current mature count, the pen's capacity, the kill counter, and the current adult keep threshold
- * (0 = auto/full capacity).
+ * S->C: opens the PenKeepScreen ("keep how many adults?") when the player plain-right-clicks an
+ * existing pen with the Foreman's Rod. Carries the pen's marker pos (round-tripped back so the server
+ * edits the right pen) plus what the screen displays: the contained animal id, the current mature
+ * count, the pen's capacity, the kill counter, and the current adult keep threshold (0 = auto/full
+ * capacity).
  */
 @ApiStatus.Internal
 public record OpenPenKeepPayload(BlockPos penPos, String animalId, int mature, int capacity, int kills, int keep)

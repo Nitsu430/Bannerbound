@@ -16,18 +16,20 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * Sub-screen opened from the town hall's "Choose Government" button after the Code of Laws
- * prompt fires. Two stages:
- * <ol>
- *   <li>The player toggles between {@code COUNCIL} and {@code CHIEFDOM} as often as they want
- *       — these buttons just update the local selection, nothing leaves the client.</li>
- *   <li>Pressing <b>Cast Vote</b> (greyed until a selection exists) fires the
- *       {@link CastGovernmentVotePayload}. Once sent, the option buttons + Cast Vote button
- *       all lock; the player cannot change their pick.</li>
- * </ol>
- *
- * <p>The screen does NOT auto-refresh tallies — the values shown are a snapshot from the
- * payload that opened the town hall. Re-opening the town hall after a vote will show the
- * updated numbers; closing and re-opening this screen is the intended "refresh" gesture.
+ * prompt fires. Two stages: the player toggles {@code selected} between COUNCIL (1) and
+ * CHIEFDOM (2) as often as they like (0 = none; local-only, initialised from the server
+ * snapshot so an existing vote shows highlighted, nothing leaves the client); then Cast Vote
+ * (greyed until a selection exists) fires {@link CastGovernmentVotePayload} and flips
+ * {@code hasCast}, locking every button -- no take-backsies.
+ * <p>
+ * On cast, the caster's own tally is bumped locally so their +1 shows instantly; the other
+ * member's vote still needs a server-pushed snapshot to appear. The screen never auto-refreshes
+ * tallies -- values are the snapshot from when the town hall opened, so after voting the
+ * subtitle switches to a "locked" hint; re-opening the town hall is the intended refresh.
+ * <p>
+ * Solo settlements (onlineMembers &lt;= 1) must pick Chiefdom: a council of one has no meaning
+ * and its vote thresholds assume multiple members. The client greys the council button and the
+ * server enforces the same rule.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -39,19 +41,11 @@ public class ChooseGovernmentScreen extends PolishedScreen {
     private static final int BTN_PITCH = 36;
 
     @Nullable private final Screen parent;
-    /** Mutable so the casting player's own +1 can be reflected locally the instant they
-     *  press Cast Vote — without waiting for the server to push a fresh snapshot. The other
-     *  player's vote still requires a server-side refresh. */
     private int councilVotes;
     private int chiefdomVotes;
     private final int onlineMembers;
 
-    /** Local-only: what the player has currently *selected* (0 = none, 1 = council, 2 = chiefdom).
-     *  Initialised from the server snapshot so a player whose vote is already in shows their
-     *  previous pick highlighted. Toggling between 1 and 2 is free until {@link #hasCast} flips. */
     private int selected;
-    /** True once this player has cast their vote (either initially or via this screen).
-     *  Locks every button — no take-backsies. */
     private boolean hasCast;
 
     private Button councilBtn;
@@ -86,8 +80,6 @@ public class ChooseGovernmentScreen extends PolishedScreen {
             }
         ).bounds(btnX, firstY, BTN_W, BTN_H).accent(primaryAccent()).build();
         if (onlineMembers <= 1) {
-            // A council of one is just a chief with extra steps — and its vote thresholds assume
-            // multiple members. Solo settlements must pick Chiefdom (server enforces this too).
             councilBtn.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
                 Component.translatable("bannerbound.government.council.solo_tooltip")));
         }
@@ -108,8 +100,6 @@ public class ChooseGovernmentScreen extends PolishedScreen {
             b -> {
                 if (hasCast || selected <= 0) return;
                 PacketDistributor.sendToServer(new CastGovernmentVotePayload(selected));
-                // Bump the local tally so the caster's own button immediately shows their +1.
-                // Other members still need a server refresh to see this vote.
                 if (selected == 1) councilVotes++;
                 else if (selected == 2) chiefdomVotes++;
                 hasCast = true;
@@ -127,11 +117,10 @@ public class ChooseGovernmentScreen extends PolishedScreen {
         refreshButtons();
     }
 
-    /** Re-syncs button labels + enabled state with {@link #selected} and {@link #hasCast}. */
     private void refreshButtons() {
         if (councilBtn != null) {
             councilBtn.setMessage(buildOptionLabel("bannerbound.government.council", councilVotes, 1));
-            councilBtn.active = !hasCast && onlineMembers > 1;   // solo settlements can't pick council
+            councilBtn.active = !hasCast && onlineMembers > 1;
         }
         if (chiefdomBtn != null) {
             chiefdomBtn.setMessage(buildOptionLabel("bannerbound.government.chiefdom", chiefdomVotes, 2));
@@ -157,8 +146,7 @@ public class ChooseGovernmentScreen extends PolishedScreen {
 
     @Override
     protected void renderPolishedBackdrop(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        // Panel chrome must be drawn BEFORE the widgets — drawIdentityPanel's fill is opaque and
-        // would hide the vote buttons if it stayed in renderPolishedExtras.
+        // Draw panel chrome in the backdrop, not renderPolishedExtras: its fill is opaque and would hide the buttons.
         int panelX = (this.width - PANEL_W) / 2;
         int panelY = (this.height - PANEL_H) / 2;
         drawIdentityPanel(g, panelX, panelY, PANEL_W, PANEL_H, identityAccents);
@@ -174,9 +162,6 @@ public class ChooseGovernmentScreen extends PolishedScreen {
                 .withStyle(ChatFormatting.GOLD),
             panelX + PANEL_W / 2, panelY + 14, GuiPalette.TITLE);
 
-        // Subtitle shifts to a "locked" hint once the player has voted, since the live tallies
-        // shown are still the snapshot from when the screen opened — they won't reflect this
-        // player's own newly-cast vote until the town hall is re-opened.
         Component subtitle = hasCast
             ? Component.translatable("bannerbound.vote.locked.subtitle").withStyle(ChatFormatting.GRAY)
             : Component.translatable("bannerbound.government.choose.subtitle").withStyle(ChatFormatting.GRAY);

@@ -11,13 +11,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: propose a policy change — drop {@code addPolicyId} into slot
- * {@code slotIndex} and/or remove {@code removePolicyId}. Empty strings mean "no add" /
- * "no remove" respectively.
- *
- * <p>In a Council this opens a confirm vote (all online members must vote, &gt;50% Agree
- * enacts). For a Chiefdom chief it enacts immediately. A Chiefdom non-chief should send
- * {@link SuggestPolicyPayload} instead — the server rejects a propose from a non-chief.
+ * Client -> server: propose a policy change - drop addPolicyId into slot slotIndex and/or remove
+ * removePolicyId. Empty strings mean "no add" / "no remove" respectively. In a Council this opens a
+ * confirm vote (all online members must vote, >50% Agree enacts). For a Chiefdom chief it enacts
+ * immediately. A Chiefdom non-chief should send SuggestPolicyPayload instead - the server rejects a
+ * propose from a non-chief.
  */
 @ApiStatus.Internal
 public record ProposePolicyChangePayload(int slotIndex, String addPolicyId, String removePolicyId)

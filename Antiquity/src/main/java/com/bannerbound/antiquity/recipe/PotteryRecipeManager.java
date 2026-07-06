@@ -23,7 +23,16 @@ import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
-/** Datapack loader for Pottery Slab recipes. */
+/**
+ * Datapack loader for Pottery Slab recipes ({@code data/<namespace>/pottery_recipes/*.json}),
+ * registered as a server data reload listener. applyEntries is public because
+ * {@code ClientDatapackRecipes} reuses it on remote clients, where server datapacks never
+ * arrive. Match queries: exactMatches() returns every recipe whose required multiset equals
+ * the placed pile, candidates() returns recipes the pile could still grow into (required
+ * covers placed but is not yet equal); both sort by result registry id so recipe selection
+ * and browse order are stable across reloads. idOf()/byId() give the stable ResourceLocation
+ * handle used when a recipe reference must cross the network or be persisted.
+ */
 @ApiStatus.Internal
 public class PotteryRecipeManager extends SimpleJsonResourceReloadListener {
     private static final Gson GSON = new Gson();
@@ -40,8 +49,6 @@ public class PotteryRecipeManager extends SimpleJsonResourceReloadListener {
         applyEntries(entries);
     }
 
-    /** Parse + store the loaded entries. Public so the client-side jar loader can reuse it on remote
-     *  clients, where server datapacks don't reach (see {@code ClientDatapackRecipes}). */
     public static void applyEntries(Map<ResourceLocation, JsonElement> entries) {
         List<PotteryRecipe> loaded = new ArrayList<>();
         Map<ResourceLocation, PotteryRecipe> ids = new HashMap<>();
@@ -64,7 +71,6 @@ public class PotteryRecipeManager extends SimpleJsonResourceReloadListener {
         return recipes;
     }
 
-    /** Every exact recipe matching the pile, sorted by result id for stable recipe selection. */
     public static List<PotteryRecipe> exactMatches(List<ItemStack> contents) {
         Map<Item, Integer> placed = placedCounts(contents);
         if (placed.isEmpty()) return List.of();
@@ -84,7 +90,6 @@ public class PotteryRecipeManager extends SimpleJsonResourceReloadListener {
         return matches.isEmpty() ? null : matches.get(0);
     }
 
-    /** Recipes the pile could still become. Exact matches are handled as selectable outputs. */
     public static List<PotteryRecipe> candidates(List<ItemStack> contents) {
         Map<Item, Integer> placed = placedCounts(contents);
         if (placed.isEmpty()) return List.of();

@@ -15,8 +15,10 @@ import net.minecraft.server.level.ServerLevel;
  * claimed by a still-living herder, so it naturally picks a different pen. A claim whose owner no longer
  * exists (died / unloaded without cleanup) is treated as stale and cleared on access, freeing the pen.
  *
- * <p>Bound pens (assigned to one citizen) don't go through here — they're private to that citizen and need
- * no race. Server-thread only in practice; the map is concurrent for safety.</p>
+ * <p>Bound pens (assigned to one citizen) don't go through here -- they're private to that citizen and need
+ * no race. Server-thread only in practice; the map is concurrent for safety. isClaimedByOther clears a
+ * claim whose owner has vanished and reports the pen free; ownedBy lets a herder prefer its current pen;
+ * claim reserves/refreshes; releaseAll drops every reservation when the herder stops or changes pens.
  */
 @ApiStatus.Internal
 final class PenClaims {
@@ -24,28 +26,23 @@ final class PenClaims {
 
     private PenClaims() {}
 
-    /** True if this pen is reserved by a herder other than {@code selfId} that still exists; a claim held by
-     *  a vanished herder is cleared here and reported as free. */
     static boolean isClaimedByOther(ServerLevel level, BlockPos anchor, int selfId) {
         Integer owner = CLAIMS.get(anchor);
         if (owner == null || owner == selfId) return false;
         if (level.getEntity(owner) instanceof CitizenEntity c && c.isAlive()) return true;
-        CLAIMS.remove(anchor, owner);   // stale: owner gone
+        CLAIMS.remove(anchor, owner);
         return false;
     }
 
-    /** Whether {@code selfId} currently holds this pen (used to prefer staying on the same pen). */
     static boolean ownedBy(BlockPos anchor, int selfId) {
         Integer owner = CLAIMS.get(anchor);
         return owner != null && owner == selfId;
     }
 
-    /** Reserve (or refresh) this pen for {@code selfId}. */
     static void claim(BlockPos anchor, int selfId) {
         CLAIMS.put(anchor.immutable(), selfId);
     }
 
-    /** Drop every reservation held by {@code selfId} — called when the herder stops/changes pens. */
     static void releaseAll(int selfId) {
         CLAIMS.values().removeIf(owner -> owner == selfId);
     }

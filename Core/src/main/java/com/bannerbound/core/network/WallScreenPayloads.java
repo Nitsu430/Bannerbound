@@ -13,10 +13,23 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * The wall-preview screen's payload family (WALLS_PLAN.md Phase 3). The open payload composes
- * the territory screen's base payload (camera/slabs/claims reuse) with a compact piece list
- * for the border polyline + gate slots. All client-bound payloads MUST be registered in both
- * dist branches of {@link BannerboundNetwork} (standing rule).
+ * The wall-preview screen's payload family (WALLS_PLAN.md Phase 3). OpenWallPreview composes the
+ * territory screen's base payload (camera/slabs/claims reuse) with a compact PieceLite list for
+ * the border polyline + gate slots; OpenWallDesigner carries the active design set, the
+ * researched placeable block-item ids with parallel owned counts, and any autosaved drafts that
+ * override the active set in the editor; WallStatus is the in-screen status line that replaces
+ * chat feedback (chat bloat, playtest 2026-06-12).
+ *
+ * <p>All client-bound payloads MUST be registered in both dist branches of
+ * {@link BannerboundNetwork} (standing rule). Designs travel on the wire as global block-state
+ * ids (Block.getId / Block.stateById) so no registry lookups are needed - see writeDesign /
+ * readDesign.
+ *
+ * <p>PieceLite has two anchor keys: anchor() is the gate-slot identity (x, 0, z) - gates replace
+ * segments at the same slot on purpose; refineAnchor() is KIND-AWARE (x, kind+1, z) because a
+ * corner and a segment can share a start column and a position-only key raised both (playtest
+ * 2026-06-12). PieceLite.designIndex is an index into OpenWallPreview.designs() (-1 =
+ * unresolved) and noFoundation is the per-piece continuation-suppression refinement.
  */
 @ApiStatus.Internal
 public final class WallScreenPayloads {
@@ -28,11 +41,6 @@ public final class WallScreenPayloads {
         return ResourceLocation.fromNamespaceAndPath(BannerboundCore.MODID, path);
     }
 
-    /** One wall piece: flat-preview geometry plus the vertical data the 3D refinement view
-     *  needs (design bottom Y, design height, ground extremes under the footprint).
-     *  {@code designIndex} = index into {@code OpenWallPreview.designs()} (-1 = unresolved),
-     *  so per-piece variant overrides render their REAL design;
-     *  {@code noFoundation} = the per-piece continuation suppression refinement. */
     public record PieceLite(int startX, int startZ, int length, int depth,
                             int outward2d, int kindOrdinal, boolean waterGap,
                             int baseY, int designHeight, int minGround, int maxGround,
@@ -41,20 +49,15 @@ public final class WallScreenPayloads {
             return baseY + designHeight - 1;
         }
 
-        /** Gate-slot identity (y = 0) — gates replace segments at the same slot on purpose. */
         public long anchor() {
             return net.minecraft.core.BlockPos.asLong(startX, 0, startZ);
         }
 
-        /** Refinement identity: KIND-AWARE (y = kind + 1) — a corner and a segment can share
-         *  a start column in some orientations, and a position-only key raised them BOTH
-         *  (playtest 2026-06-12). */
         public long refineAnchor() {
             return net.minecraft.core.BlockPos.asLong(startX, kindOrdinal + 1, startZ);
         }
     }
 
-    /** C→S: move one slot's wall top by {@code delta} courses (0 = reset to auto). */
     public record RefineWallTop(long anchor, int delta) implements CustomPacketPayload {
         public static final Type<RefineWallTop> TYPE = new Type<>(id("refine_wall_top"));
         public static final StreamCodec<RegistryFriendlyByteBuf, RefineWallTop> STREAM_CODEC =
@@ -69,7 +72,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    /** C→S: open (or refresh) the wall preview for the sender's settlement. */
     public record RequestWallPreview() implements CustomPacketPayload {
         public static final Type<RequestWallPreview> TYPE = new Type<>(id("request_wall_preview"));
         public static final StreamCodec<RegistryFriendlyByteBuf, RequestWallPreview> STREAM_CODEC =
@@ -81,8 +83,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    /** C→S: cycle the selected piece's design variant (refine anchor; Default → Steps ▲ →
-     *  Steps ▼). Segments and corners only. */
     public record CycleWallVariant(long anchor) implements CustomPacketPayload {
         public static final Type<CycleWallVariant> TYPE = new Type<>(id("cycle_wall_variant"));
         public static final StreamCodec<RegistryFriendlyByteBuf, CycleWallVariant> STREAM_CODEC =
@@ -95,7 +95,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    /** C→S: toggle the selected piece's bottom-course continuation (refine anchor). */
     public record ToggleWallFoundation(long anchor) implements CustomPacketPayload {
         public static final Type<ToggleWallFoundation> TYPE = new Type<>(id("toggle_wall_foundation"));
         public static final StreamCodec<RegistryFriendlyByteBuf, ToggleWallFoundation> STREAM_CODEC =
@@ -108,7 +107,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    /** C→S: toggle a gate at a segment-slot start (packed (x, 0, z)). */
     public record ToggleWallGate(long anchor) implements CustomPacketPayload {
         public static final Type<ToggleWallGate> TYPE = new Type<>(id("toggle_wall_gate"));
         public static final StreamCodec<RegistryFriendlyByteBuf, ToggleWallGate> STREAM_CODEC =
@@ -121,9 +119,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    /** C→S: show ({@code true}) or hide the sender-only ghost preview of the CURRENT
-     *  uncommitted layout — walk-around inspection of gates/towers before committing. Hide
-     *  re-syncs the committed state. */
     public record PreviewWallGhosts(boolean show) implements CustomPacketPayload {
         public static final Type<PreviewWallGhosts> TYPE = new Type<>(id("preview_wall_ghosts"));
         public static final StreamCodec<RegistryFriendlyByteBuf, PreviewWallGhosts> STREAM_CODEC =
@@ -136,7 +131,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    /** C→S: commit the previewed layout as the settlement's wall plan. */
     public record ConstructWalls() implements CustomPacketPayload {
         public static final Type<ConstructWalls> TYPE = new Type<>(id("construct_walls"));
         public static final StreamCodec<RegistryFriendlyByteBuf, ConstructWalls> STREAM_CODEC =
@@ -148,7 +142,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    /** C→S: cancel the committed wall plan (standing blocks retire into the demolition queue). */
     public record CancelWallPlan() implements CustomPacketPayload {
         public static final Type<CancelWallPlan> TYPE = new Type<>(id("cancel_wall_plan"));
         public static final StreamCodec<RegistryFriendlyByteBuf, CancelWallPlan> STREAM_CODEC =
@@ -160,10 +153,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    // ─── Wall Designer (Phase 5) ────────────────────────────────────────────────────────────
-
-    /** Wire format for a {@link com.bannerbound.core.api.walls.WallDesign}: palette as global
-     *  block-state ids ({@code Block.getId}/{@code stateById}) — no registry lookups needed. */
     public static void writeDesign(RegistryFriendlyByteBuf buf,
                                    com.bannerbound.core.api.walls.WallDesign design) {
         buf.writeUtf(design.id());
@@ -202,7 +191,6 @@ public final class WallScreenPayloads {
             id, name, kind, length, depth, height, palette, voxels, foundation);
     }
 
-    /** C→S: open the wall designer (server replies with {@link OpenWallDesigner}). */
     public record RequestWallDesigner() implements CustomPacketPayload {
         public static final Type<RequestWallDesigner> TYPE = new Type<>(id("request_wall_designer"));
         public static final StreamCodec<RegistryFriendlyByteBuf, RequestWallDesigner> STREAM_CODEC =
@@ -214,11 +202,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    /** S→C: the settlement's ACTIVE design set (wall, corner, gate — defaults when unedited)
-     *  plus the RESEARCHED placeable blocks (item ids) for the picker, with parallel
-     *  OWNED counts (stockpiles + requester's inventory) backing the "Owned only" filter.
-     *  {@code drafts} = unsaved working copies persisted in world data (designer autosave on
-     *  close) — they override the active set in the editor so Escape never loses work. */
     public record OpenWallDesigner(List<com.bannerbound.core.api.walls.WallDesign> activeSet,
                                    int[] knownBlockItemIds,
                                    int[] ownedCounts,
@@ -269,8 +252,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    /** C→S: delete a saved design from the settlement library (the Designer's library list,
-     *  Shift+click). Deleting the active design falls back to the built-in default. */
     public record DeleteWallDesign(String designId) implements CustomPacketPayload {
         public static final Type<DeleteWallDesign> TYPE = new Type<>(id("delete_wall_design"));
         public static final StreamCodec<RegistryFriendlyByteBuf, DeleteWallDesign> STREAM_CODEC =
@@ -283,9 +264,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    /** C→S: save an edited design. {@code draft} = silent autosave of the working copy
-     *  (persisted in world data, no validation/activation — closing the designer never loses
-     *  work); otherwise the server re-validates everything and makes it active. */
     public record SaveWallDesign(com.bannerbound.core.api.walls.WallDesign design, boolean draft)
         implements CustomPacketPayload {
         public static final Type<SaveWallDesign> TYPE = new Type<>(id("save_wall_design"));
@@ -301,9 +279,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    /** S→C: transient status line rendered INSIDE the open wall screen — gate errors, save
-     *  confirmations, construct results. Replaces chat messages (chat bloat, playtest
-     *  2026-06-12); falls back to the vanilla action bar when no wall screen is open. */
     public record WallStatus(String message, boolean error) implements CustomPacketPayload {
         public static final Type<WallStatus> TYPE = new Type<>(id("wall_status"));
         public static final StreamCodec<RegistryFriendlyByteBuf, WallStatus> STREAM_CODEC =
@@ -318,12 +293,6 @@ public final class WallScreenPayloads {
         }
     }
 
-    /** S→C: open/refresh the wall preview screen. {@code gateLength} = the active gate
-     *  design's length, so hover can show the true span a gate would occupy before clicking.
-     *  {@code planCurrent} = the committed plan still matches the layout being previewed —
-     *  false means the BUILT wall is an older design and Construct would replace it.
-     *  {@code designs} = the ACTIVE design set (wall, corner, gate) so the refine view can
-     *  render the real blocks instead of placeholder boxes. */
     public record OpenWallPreview(OpenExpandTerritoryScreenPayload base, List<PieceLite> pieces,
                                   boolean hasPlan, int completenessPercent,
                                   int gateLength, boolean openRefine, boolean planCurrent,
@@ -346,7 +315,7 @@ public final class WallScreenPayloads {
                     buf.writeVarInt(piece.designHeight());
                     buf.writeVarInt(piece.minGround());
                     buf.writeVarInt(piece.maxGround());
-                    buf.writeVarInt(piece.designIndex() + 1); // -1 → 0 (varint-safe)
+                    buf.writeVarInt(piece.designIndex() + 1); // -1 -> 0 (varint-safe)
                     buf.writeBoolean(piece.noFoundation());
                 }
                 buf.writeBoolean(p.hasPlan());

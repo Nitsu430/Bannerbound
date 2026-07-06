@@ -6,7 +6,7 @@ package com.bannerbound.core.api.faith;
  * Adding a new lever = one enum constant + one read-site that consumes it; the
  * domain/combo tables in {@link FaithEffects} then reference it by name.
  *
- * <p>Append-only is not required (these aren't persisted — bundles are recomputed from the
+ * <p>Append-only is not required (these aren't persisted - bundles are recomputed from the
  * pantheon every second), but keep ids stable since the data tables key on them.
  */
 public enum FaithEffectType {

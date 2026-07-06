@@ -11,17 +11,14 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.world.effect.MobEffectInstance;
 
 /**
- * The stew identity cooked in a stone cooking pot — a snapshot of the {@code StewRecipe} (or the
- * generic fallback) it was made from. Carried by the pot's block entity while a stew is held, and
- * forward-compatible as a {@code DataComponentType} for the future bowl item (woodworking): same
- * record can ride on a portable serving once bowls exist.
- *
- * @param name           lang key for the stew's display name (e.g. {@code stew.generic})
- * @param tint           packed 0xRRGGBB liquid colour (tints the pot's stew layer)
- * @param foodPerServing food value restored by one serving (haunch scale)
- * @param servings       how many servings the full pot yields
- * @param effects        per-serving mob effects, snapshotted from the recipe
- * @param poisoned       true if any ingredient was poisoned — the whole stew is tainted
+ * The stew identity cooked in a stone cooking pot - a snapshot of the {@code StewRecipe} (or the
+ * generic fallback) it was made from: the display-name lang key (e.g. {@code stew.generic}), the
+ * packed 0xRRGGBB liquid colour tinting the pot's stew layer, the food value one serving restores
+ * (haunch scale), how many servings the full pot yields, the per-serving mob effects snapshotted
+ * from the recipe, and a poisoned flag (any poisoned ingredient taints the whole stew). Carried
+ * by the pot's block entity while a stew is held, and forward-compatible as a
+ * {@code DataComponentType} for the future bowl item (woodworking): the same record can ride on
+ * a portable serving once bowls exist.
  */
 public record StewContents(String name, int tint, double foodPerServing, int servings,
                            List<MobEffectInstance> effects, boolean poisoned) {
@@ -45,7 +42,6 @@ public record StewContents(String name, int tint, double foodPerServing, int ser
             ByteBufCodecs.BOOL, StewContents::poisoned,
             StewContents::new);
 
-    /** Total food value of a full pot of this stew. */
     public double totalFoodValue() {
         return foodPerServing * servings;
     }

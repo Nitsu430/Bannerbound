@@ -14,8 +14,8 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 
 /**
- * A rock that can be both PLACED (right-click a block face — vanilla BlockItem behaviour via
- * {@link #useOn}) and THROWN like a snowball (right-click air/entity → {@link #use} spawns a
+ * A rock that can be both PLACED (right-click a block face - vanilla BlockItem behaviour via
+ * {@link #useOn}) and THROWN like a snowball (right-click air/entity -> {@link #use} spawns a
  * {@link ThrownRock} for minimal damage and a brief stun).
  */
 public class ThrownRockBlockItem extends BlockItem {

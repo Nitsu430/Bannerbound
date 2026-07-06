@@ -13,9 +13,9 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Draws a picked-up basket's contents as a slot grid in its tooltip — the same look as a bundle,
+ * Draws a picked-up basket's contents as a slot grid in its tooltip -- the same look as a bundle,
  * reusing vanilla's bundle slot/background sprites (so no new textures). The grid is sized to the
- * number of occupied slots (a basket holds at most nine, so up to 3×3). Mirrors vanilla's
+ * number of occupied slots (a basket holds at most nine, so up to 3x3). Mirrors vanilla's
  * {@code ClientBundleTooltip}, minus the bundle's weight/"add-item" empty slot.
  */
 @OnlyIn(Dist.CLIENT)

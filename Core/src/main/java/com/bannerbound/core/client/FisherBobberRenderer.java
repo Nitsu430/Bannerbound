@@ -22,11 +22,23 @@ import net.neoforged.api.distmarker.OnlyIn;
 import org.joml.Matrix4f;
 
 /**
- * Renders the {@link FisherBobber} entity — a small camera-facing quad textured with vanilla's
- * fishing_hook sprite, plus a fishing line strip back to the owning citizen's hand. The line
- * math is a simplified copy of vanilla's {@code FishingHookRenderer}: hand-position offset is
- * derived from the citizen's body rotation + main arm, line stretched as a single segment
- * (vanilla draws 16 sub-segments for a slight curve; we keep it straight for v1).
+ * Renders the {@link FisherBobber}: a camera-facing quad textured with vanilla's fishing_hook
+ * sprite plus a fishing line back to the owning citizen's hand. The line math is a simplified
+ * port of vanilla FishingHookRenderer -- one straight segment rather than vanilla's 16 sub-
+ * segment curve.
+ *
+ * <p>Quad: billboard scale only, NO extra Y rotation; a 180-degree spin flips it backwards so
+ * face-culling hides it entirely. Line: drawn with RenderType.lines() (GL_LINES) not lineStrip,
+ * because every fisher shares one batched line buffer and a strip would connect one fisher's
+ * line-end to the next's line-start (visible especially under Iris, which flushes differently).
+ *
+ * <p>Hand anchor (approximateHandPosition, ported from FishingHookRenderer.getPlayerHandPos):
+ * forward offset 0.8 (0.2 put the anchor inside the torso, so the line emerged through the
+ * chest), lateral 0.35 in the body's right direction (negated for left-handed), Y at chest
+ * height (eye height - 0.6) where the rod is held out. Reads BODY yaw not head yaw so the tip
+ * tracks the body; the fisher goal locks body yaw to the outward cardinal during the cast to
+ * keep the anchor stable. A seated fisher (sailing on a vessel) sits lower with the rod over
+ * the gunwale, so the anchor is pulled down and in.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -49,10 +61,7 @@ public class FisherBobberRenderer extends EntityRenderer<FisherBobber> {
                        MultiBufferSource buffer, int packedLight) {
         CitizenEntity owner = bobber.getOwnerCitizen(bobber.level());
 
-        // ─── Bobber quad ───────────────────────────────────────────────────────────────────────
         pose.pushPose();
-        // Match vanilla FishingHookRenderer: scale + billboard, NO extra Y rotation. The errant
-        // 180° spin previously here flipped the quad backwards so face-culling hid it entirely.
         pose.scale(0.5f, 0.5f, 0.5f);
         pose.mulPose(this.entityRenderDispatcher.cameraOrientation());
         PoseStack.Pose entry = pose.last();
@@ -64,27 +73,18 @@ public class FisherBobberRenderer extends EntityRenderer<FisherBobber> {
         vertex(consumer, matrix, entry, packedLight, 0.0f, 1, 0, 0);
         pose.popPose();
 
-        // ─── Fishing line back to the citizen's hand ──────────────────────────────────────────
         if (owner != null) {
             Vec3 handWorld = approximateHandPosition(owner, partialTicks);
             Vec3 bobberWorld = new Vec3(
                 Mth.lerp(partialTicks, bobber.xo, bobber.getX()),
                 Mth.lerp(partialTicks, bobber.yo, bobber.getY()) + 0.25,
                 Mth.lerp(partialTicks, bobber.zo, bobber.getZ()));
-            // Vector from bobber → hand, in the bobber's local frame (pose stack is already
-            // translated to the bobber's position by the caller before render()).
             float dx = (float) (handWorld.x - bobberWorld.x);
             float dy = (float) (handWorld.y - bobberWorld.y);
             float dz = (float) (handWorld.z - bobberWorld.z);
-            // RenderType.lines() (GL_LINES, vertex pairs), NOT lineStrip(): all fishers'
-            // line vertices share one batched buffer, and a line STRIP would connect the end
-            // of one fisher's line to the start of the next's, drawing spurious lines between
-            // citizens (visible especially under Iris, which flushes the buffer differently).
-            // GL_LINES treats each 2-vertex pair as an independent segment, so they stay separate.
+            // GL_LINES not lineStrip: fishers share one batched buffer; a strip would join separate lines.
             VertexConsumer line = buffer.getBuffer(RenderType.lines());
             Matrix4f m = pose.last().pose();
-            // Bobber end: 0.25 blocks above the entity origin so the line attaches above the
-            // bobber sprite, not through it. Hand end: exact hand position (no extra offset).
             line.addVertex(m, 0, 0.25f, 0).setColor(0, 0, 0, 255).setNormal(entry, 0f, 1f, 0f);
             line.addVertex(m, dx, dy, dz).setColor(0, 0, 0, 255).setNormal(entry, 0f, 1f, 0f);
         }
@@ -92,15 +92,6 @@ public class FisherBobberRenderer extends EntityRenderer<FisherBobber> {
         super.render(bobber, entityYaw, partialTicks, pose, buffer, packedLight);
     }
 
-    /** World position of the citizen's rod tip — where the fishing line should attach. Ports
-     *  vanilla {@code FishingHookRenderer.getPlayerHandPos}: forward offset is 0.8 (not 0.2 —
-     *  that put the anchor at the hand inside the citizen's body, so the line emerged through
-     *  the torso instead of from the rod tip), lateral offset is 0.35 in the body's right
-     *  direction (negated for left-handed), and Y sits at eye-height-minus-0.6 (chest height,
-     *  where the rod is held out — keeps the line off the shoulder).
-     *  <p>Reads body yaw (not head yaw) so the rod tip moves with the body. The fisher goal
-     *  locks body yaw to the cardinal outward direction during the cast, which keeps this
-     *  anchor stable and prevents the "line clipping through torso" symptom. */
     private static Vec3 approximateHandPosition(CitizenEntity citizen, float partialTicks) {
         double cx = Mth.lerp(partialTicks, citizen.xo, citizen.getX());
         double cy = Mth.lerp(partialTicks, citizen.yo, citizen.getY());
@@ -110,16 +101,9 @@ public class FisherBobberRenderer extends EntityRenderer<FisherBobber> {
         double sinY = Math.sin(rad);
         double cosY = Math.cos(rad);
         int armOffset = (citizen.getMainArm() == HumanoidArm.RIGHT) ? 1 : -1;
-        // Anchor the line at the rod tip, which the citizen holds out around chest height — lower
-        // than the eye-height-minus-0.2 vanilla uses, so the line emerges from the rod rather than
-        // up by the shoulder. Seated on a vessel (the sailing fisher) the body sits lower and the
-        // rod is held over the gunwale: pull the anchor down and in so the line doesn't appear to
-        // start out past the bow or up at standing height.
         boolean seated = citizen.isPassenger();
         double forward = seated ? 0.55 : 0.8;
         double handY = cy + citizen.getEyeHeight() - (seated ? 0.85 : 0.6);
-        // Vanilla formula: x' = x - cos(yaw) * arm * 0.35 - sin(yaw) * forward
-        //                  z' = z - sin(yaw) * arm * 0.35 + cos(yaw) * forward
         double handX = cx - cosY * armOffset * 0.35 - sinY * forward;
         double handZ = cz - sinY * armOffset * 0.35 + cosY * forward;
         return new Vec3(handX, handY, handZ);

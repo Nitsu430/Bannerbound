@@ -35,13 +35,27 @@ import net.minecraft.world.level.saveddata.maps.MapId;
 import net.minecraft.world.level.saveddata.maps.MapItemSavedData;
 import net.minecraft.core.Holder;
 
+/**
+ * Draws the settlement-claim overlay (coloured chunk fills, per-settlement edges, and centred labels)
+ * on top of a rendered map, at the TAIL of MapRenderer.render. Claims come from ClientClaimState.
+ *
+ * The hard part is locating the map on the world grid: MapItemSavedData.centerX/centerZ are NOT
+ * synced to the client (they stay at the constructor default 0). The server places the PLAYER
+ * decoration in marker units (1 unit = 0.5 px = 0.5 * blocksPerPixel blocks) relative to the real
+ * center, so we invert that formula against the local player's known world position to recover the
+ * center. Map centers are immutable once crafted, so BANNERBOUND$CENTER_CACHE stores the inferred
+ * center per mapId forever - this both avoids recomputation and prevents per-frame jitter from stale
+ * decoration updates. If no player marker is present yet the overlay simply skips that frame.
+ *
+ * Everything draws on the map's local 0..128 pixel plane with clipped quads. The Z constants layer
+ * fill under edges under labels; labels use a 4-direction black outline plus main text nudged
+ * fractionally forward so the LEQUAL depth test keeps it above its own outline.
+ */
 @Mixin(MapRenderer.class)
 @ApiStatus.Internal
 public class MapRendererMixin {
     private static final Logger BANNERBOUND$LOG = LogUtils.getLogger();
 
-    // mapId -> [centerX, centerZ] inferred once when the PLAYER marker is on this map.
-    // Map centers are immutable after crafting, so once inferred we keep it forever.
     private static final Map<Integer, int[]> BANNERBOUND$CENTER_CACHE = new HashMap<>();
 
     private static final float BANNERBOUND$FILL_Z = -0.030f;
@@ -68,12 +82,7 @@ public class MapRendererMixin {
         int blocksPerPixel = 1 << data.scale;
         net.minecraft.client.player.LocalPlayer mcPlayer = net.minecraft.client.Minecraft.getInstance().player;
 
-        // data.centerX / centerZ are NOT synced to the client — they stay at the
-        // constructor default (0). The server places the PLAYER decoration in marker
-        // units (1 unit = 0.5 px = 0.5 * bpp blocks) relative to the real center, so
-        // we invert that formula against the player's known world position. Cached per
-        // mapId since centers are immutable and to avoid per-frame jitter from stale
-        // decoration updates.
+        // data.centerX/centerZ are never synced (stay 0); infer center by inverting the PLAYER marker offset against player world pos.
         int[] cached = BANNERBOUND$CENTER_CACHE.get(mapId.id());
         int centerX;
         int centerZ;
@@ -208,13 +217,12 @@ public class MapRendererMixin {
             int black = 0xFF000000;
             int textColor = 0xFF000000 | bannerbound$lightShade(color.rgb());
 
-            // 4-direction outline at the outline Z.
             font.drawInBatch(textComponent, tx - 1, ty, black, false, outlineMatrix, buffer, Font.DisplayMode.NORMAL, 0, packedLight);
             font.drawInBatch(textComponent, tx + 1, ty, black, false, outlineMatrix, buffer, Font.DisplayMode.NORMAL, 0, packedLight);
             font.drawInBatch(textComponent, tx, ty - 1, black, false, outlineMatrix, buffer, Font.DisplayMode.NORMAL, 0, packedLight);
             font.drawInBatch(textComponent, tx, ty + 1, black, false, outlineMatrix, buffer, Font.DisplayMode.NORMAL, 0, packedLight);
 
-            // Main text slightly forward so LEQUAL test definitively passes over the outline.
+            // Nudge main text forward so the LEQUAL depth test keeps it above its own outline.
             pose.pushPose();
             pose.translate(0.0f, 0.0f, -0.005f);
             font.drawInBatch(textComponent, tx, ty, textColor, false, pose.last().pose(), buffer, Font.DisplayMode.NORMAL, 0, packedLight);

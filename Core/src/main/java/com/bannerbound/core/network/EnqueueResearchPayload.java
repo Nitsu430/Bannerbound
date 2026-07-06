@@ -10,6 +10,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/** C->S: queue (or toggle off) a science-tree node - right-click on the RESEARCH tab. */
 @ApiStatus.Internal
 public record EnqueueResearchPayload(String researchId) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<EnqueueResearchPayload> TYPE =

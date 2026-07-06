@@ -19,9 +19,9 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The pantheon roster (FAITH_PLAN Part 6): every drawn god — deity, constellation,
- * domain — with a governance-gated Forget action per row (the server re-validates;
- * non-leaders get the leader-only message). Forgetting frees the stars; no refund.
+ * The pantheon roster (FAITH_PLAN Part 6): every drawn god -- deity, constellation, domain -- with
+ * a governance-gated Forget action per row (the server re-validates; non-leaders get the
+ * leader-only message). Forgetting frees the stars; no refund.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -40,8 +40,6 @@ public class PantheonScreen extends PolishedScreen {
         return 64 + Math.max(1, ClientConstellationState.count()) * ROW_H;
     }
 
-    /** "+0.19 food/s · +0.10 science/s" for a god's domain profile (client-computed from
-     *  the shared effect table). */
     private static Component effectText(int primaryOrdinal, int secondaryOrdinal) {
         com.bannerbound.core.api.faith.DeityDomain primary =
             com.bannerbound.core.api.faith.DeityDomain.fromOrdinal(primaryOrdinal);

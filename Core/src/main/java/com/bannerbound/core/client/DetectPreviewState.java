@@ -24,7 +24,6 @@ public final class DetectPreviewState {
     private DetectPreviewState() {
     }
 
-    /** Arm the flash for {@code durationTicks} from the current client game-time. */
     public static void show(BlockPos pos, int durationTicks) {
         Minecraft mc = Minecraft.getInstance();
         long now = mc.level != null ? mc.level.getGameTime() : 0L;
@@ -32,7 +31,6 @@ public final class DetectPreviewState {
         expiryGameTime = now + Math.max(0, durationTicks);
     }
 
-    /** The home pos to highlight if the flash is still active at {@code now}, else null. */
     @Nullable
     public static BlockPos activeHousePos(long now) {
         return (housePos != null && now < expiryGameTime) ? housePos : null;

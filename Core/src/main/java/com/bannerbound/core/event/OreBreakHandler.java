@@ -29,10 +29,25 @@ import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.level.BlockDropsEvent;
 
 /**
- * Server-side enforcement for disguised ores: when a player breaks an ore their settlement
- * hasn't unlocked, the drop is swapped to the disguise block (stone/deepslate) with zero XP,
- * and the break speed is adjusted to match the disguise. Together with the client-side
- * BlockModelShaper mixin, the ore is indistinguishable from regular rock until research.
+ * Server-side enforcement for disguised ores: an ore a player's settlement hasn't researched looks
+ * and behaves like plain rock until unlocked. Three hooks, all keyed on OreDisguiseLoader (server)
+ * / ClientOreState (client):
+ *
+ * - onBlockDrops (server): when a still-hidden ore is broken, clear its real drops/XP and run the
+ *   DISGUISE block's loot table instead (stone -> cobblestone, deepslate -> cobbled_deepslate, silk
+ *   touch still yields the smooth variant). Running the real loot table with the player's held tool
+ *   keeps every vanilla rule (silk touch, fortune) intact.
+ * - onHarvestCheck (both sides): report the block as harvestable by whatever tool can mine its
+ *   disguise (e.g. wooden pickaxe for stone). CRITICAL -- without this, breaking a disguised ore
+ *   with the "wrong" tool silently destroys the block AND skips the whole drop path
+ *   (BlockDropsEvent never fires, player gets nothing).
+ * - onBreakSpeed (both sides): rescale mining speed to the disguise block by the hardness/divisor
+ *   ratio -- this preserves Efficiency, Haste, water/onGround penalties, since digSpeed is
+ *   identical for stone and the ore under the same #mineable/pickaxe rule -- then cut to 1/3 speed
+ *   so a disguised ore reads as "a slightly tougher rock" rather than suspiciously snappy stone.
+ *
+ * Together with the client BlockModelShaper mixin, a hidden ore is indistinguishable from regular
+ * rock until the settlement researches its reveal flag.
  */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
@@ -40,12 +55,6 @@ public final class OreBreakHandler {
     private OreBreakHandler() {
     }
 
-    /**
-     * Server-side: when a hidden ore is broken, run the DISGUISE block's loot table instead of
-     * the real ore's. Stone drops cobblestone, deepslate drops cobbled_deepslate, silk touch
-     * still gives the smooth variant — all the vanilla rules apply because we're literally
-     * asking "what would mining stone here drop?".
-     */
     @SubscribeEvent
     public static void onBlockDrops(BlockDropsEvent event) {
         if (event.getLevel() == null || event.getLevel().isClientSide()) {
@@ -73,8 +82,6 @@ public final class OreBreakHandler {
         }
         BlockState disguiseState = disguiseBlock.defaultBlockState();
 
-        // Public static helper that builds the LootParams and runs the disguise's loot table.
-        // Honors the player's tool (silk touch / fortune flow through correctly).
         List<ItemStack> disguiseDrops;
         try {
             disguiseDrops = Block.getDrops(disguiseState, level, pos, null, sp, sp.getMainHandItem());
@@ -90,12 +97,6 @@ public final class OreBreakHandler {
         }
     }
 
-    /**
-     * Override vanilla's "can this tool harvest this block?" check so a disguised iron ore is
-     * harvestable by whatever tool can mine its disguise (e.g. wooden pickaxe for stone).
-     * Without this, breaking with the wrong tool would silently destroy the block AND skip the
-     * entire drop path — BlockDropsEvent never fires, the player gets nothing.
-     */
     @SubscribeEvent
     public static void onHarvestCheck(PlayerEvent.HarvestCheck event) {
         Player player = event.getEntity();
@@ -115,17 +116,12 @@ public final class OreBreakHandler {
             return;
         }
         BlockState disguiseState = disguiseBlock.defaultBlockState();
-        // Check the actual held tool directly (avoids re-entering canHarvestBlock and re-firing this event).
+        // Check the held tool directly -- do NOT call canHarvestBlock (would re-fire this event).
         boolean canHarvestDisguise = !disguiseState.requiresCorrectToolForDrops()
             || player.getMainHandItem().isCorrectToolForDrops(disguiseState);
         event.setCanHarvest(canHarvestDisguise);
     }
 
-    /**
-     * Both sides: override the break speed so a disguised iron ore feels like stone, not like
-     * iron ore. The HarvestCheck override above fixes whether drops happen; this one fixes how
-     * long mining takes (otherwise the player can tell something's off from the slow animation).
-     */
     @SubscribeEvent
     public static void onBreakSpeed(PlayerEvent.BreakSpeed event) {
         Player player = event.getEntity();
@@ -145,12 +141,6 @@ public final class OreBreakHandler {
         BlockState disguiseState = disguiseBlock.defaultBlockState();
         BlockPos pos = event.getPosition().orElse(player.blockPosition());
 
-        // Vanilla already computed the original speed as: digSpeed(oreState) / oreHardness / oreDivisor.
-        // We want: digSpeed(disguiseState) / disguiseHardness / disguiseDivisor.
-        // Since digSpeed depends on the tool's mining rules — and stone + iron_ore are both
-        // covered by the same #mineable/pickaxe rule, so digSpeed is the same for both — we can
-        // just rescale the original speed by the hardness/divisor ratio. This automatically
-        // preserves Efficiency, Haste, water/onGround penalties, anything else baked in.
         float oreHardness = state.getDestroySpeed(player.level(), pos);
         float disguiseHardness = disguiseState.getDestroySpeed(player.level(), pos);
         if (oreHardness <= 0.0f || disguiseHardness <= 0.0f) return;
@@ -160,14 +150,11 @@ public final class OreBreakHandler {
             || tool.isCorrectToolForDrops(disguiseState)) ? 30 : 100;
 
         float scale = (oreHardness / disguiseHardness) * ((float) oreDivisor / (float) disguiseDivisor);
-        // Feel adjustment: disguised ores mine 1.5x slower than the real disguise block. Pure
-        // stone-speed makes them feel suspiciously snappy under the radar; a touch slower reads
-        // as "this rock is a little tougher" without ever pointing at the disguise.
+        // Feel: cut to 1/3 of raw disguise-block speed so it reads as a tougher rock, not stone.
         scale /= 3f;
         event.setNewSpeed(event.getOriginalSpeed() * scale);
     }
 
-    /** Returns the disguise entry that applies to {@code block}, server- or client-side. */
     private static OreDisguise resolveDisguiseForBoth(Player player, Block block) {
         if (player.level().isClientSide()) {
             return com.bannerbound.core.client.ClientOreState.getDisguiseFor(block);
@@ -175,7 +162,6 @@ public final class OreBreakHandler {
         return OreDisguiseLoader.getDisguiseFor(block);
     }
 
-    /** True if {@code block} is currently disguised for {@code player} (server- or client-side). */
     private static boolean isDisguisedForPlayer(Player player, Block block, OreDisguise disguise) {
         if (player.level().isClientSide()) {
             return com.bannerbound.core.client.ClientOreState.isCurrentlyDisguised(block);

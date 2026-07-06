@@ -27,20 +27,30 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Renders the Crafting Stone's contents: each DISTINCT item kind gets one cell of a 3×3 grid on the
- * stone's top, and multiples of the same kind pile up vertically in that cell (Create-depot style —
- * three planks read as a stack of three, not three copies side by side). When the pile matches a
- * recipe the result floats and spins above it. The most-recently-placed item (the touched stack's
- * top layer) slides in from the side the player placed it from. The stone block itself renders from
- * its blockstate model; this only draws the items.
+ * Renders the Crafting Stone's contents; the stone block itself renders from its blockstate model,
+ * this only draws the items. Each DISTINCT item kind gets one cell of a 3x3 grid on the stone's top
+ * (TOP_Y, ~7px up), and multiples of the same kind pile up vertically in that cell, Create-depot
+ * style - three planks read as a stack of three, not three copies side by side. Blocks render small
+ * (BLOCK_SCALE - a full block would dwarf the stone) and stack by their scaled height; flat items
+ * render larger (ITEM_SCALE), laid flat via a 90-degree X rotation, and stack by sprite thickness.
+ * Each layer gets a small deterministic scatter rotation so a pile reads as a pile instead of
+ * z-fighting copies. The most-recently-placed item (the touched stack's top layer) slides in from
+ * the side the player placed it from. When the pile matches a recipe the result floats and spins
+ * above the stone at full brightness. Ghost preview: while the pile is partway to a recipe, the
+ * still-missing ingredients render as low-alpha silhouettes - piling onto a partially-placed
+ * stack's cell or claiming the next free cells - with amber "still needed" counts, and the
+ * candidate's result floats ghosted in the exact spot and motion of the real preview so completing
+ * the pile reads as the ghost "solidifying" in place. A solid result can coexist with a locked
+ * ghost (the pile incidentally matches a different recipe); the solid result then floats ABOVE the
+ * ghost (y 1.5 vs 1.05) so the player's chosen recipe keeps its spot. Stack counts are vanilla-style
+ * billboarded digits, skipped for count 1, with a dark shadow copy offset ~1px behind the glyphs so
+ * they stay legible at this tiny world scale.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public class CraftingStoneRenderer implements BlockEntityRenderer<CraftingStoneBlockEntity> {
-    /** Items sit on the stone's top (~7px) and are small so up to 9 fit in the 3×3 grid. */
     private static final double TOP_Y = 0.5;
     private static final double CELL = 0.2;
-    /** Block items render small (a full block would dwarf the stone); flat items render larger. */
     private static final float BLOCK_SCALE = 0.2F;
     private static final float ITEM_SCALE = 0.3F;
 
@@ -65,8 +75,6 @@ public class CraftingStoneRenderer implements BlockEntityRenderer<CraftingStoneB
             slide = f * f * 0.6F;
         }
 
-        // One cell per stack; multiples pile up in that cell. Each layer gets a small deterministic
-        // scatter rotation so a pile reads as a pile instead of z-fighting copies.
         for (int cell = 0; cell < contents.size() && cell < 9; cell++) {
             ItemStack s = contents.get(cell);
             if (s.isEmpty()) continue;
@@ -74,7 +82,6 @@ public class CraftingStoneRenderer implements BlockEntityRenderer<CraftingStoneB
             double oz = ((cell / 3) - 1) * CELL;
             boolean isBlock = s.getItem() instanceof BlockItem;
             float scale = isBlock ? BLOCK_SCALE : ITEM_SCALE;
-            // Blocks stack by their scaled height; flat items by their sprite thickness.
             double layerH = isBlock ? scale + 0.005 : 0.022;
             int topLayer = Math.min(s.getCount(), 9) - 1;
             for (int layer = 0; layer < s.getCount() && layer < 9; layer++) {
@@ -86,22 +93,16 @@ public class CraftingStoneRenderer implements BlockEntityRenderer<CraftingStoneB
                 pose.scale(scale, scale, scale);
                 pose.mulPose(Axis.YP.rotationDegrees(((cell * 61 + layer * 97) % 41) - 20));
                 if (!isBlock) {
-                    pose.mulPose(Axis.XP.rotationDegrees(90.0F)); // lay flat items down
+                    pose.mulPose(Axis.XP.rotationDegrees(90.0F));
                 }
                 itemRenderer.renderStatic(s, ItemDisplayContext.NONE, light, OverlayTexture.NO_OVERLAY,
                     pose, buffers, be.getLevel(), 0);
                 pose.popPose();
             }
-            // Vanilla-style stack count, billboarded over the top of the pile.
             drawCount(pose, buffers, s.getCount(), 0xFFFFFFFF,
                 0.5 + ox, TOP_Y + topLayer * layerH + 0.12, 0.5 + oz);
         }
 
-        // Ghost preview: when the pile is partway to a recipe, the still-missing ingredients render
-        // as low-alpha silhouettes — piling on top of a partially-placed stack's cell, or claiming
-        // the next free cells — and the candidate's result floats ghosted where the real preview
-        // will appear once the pile is complete. Can coexist with a solid result (locked recipe +
-        // incidental exact match — the solid one floats higher, see below).
         ItemStack ghostResult = be.getGhostResult();
         ItemStack result = be.getResult();
         if (!ghostResult.isEmpty()) {
@@ -140,12 +141,9 @@ public class CraftingStoneRenderer implements BlockEntityRenderer<CraftingStoneB
                     pose.popPose();
                     ghostTop = layer;
                 }
-                // "Still needed" count over the ghost pile, tinted amber so it reads as a requirement.
                 drawCount(pose, buffers, g.getCount(), 0xFFFFD27F,
                     0.5 + ox, TOP_Y + ghostTop * layerH + 0.12, 0.5 + oz);
             }
-            // Ghosted result — same spot and motion as the real preview, so completing the pile
-            // reads as the ghost "solidifying" in place.
             long time = be.getLevel() != null ? be.getLevel().getGameTime() : 0L;
             float t = time + partialTick;
             pose.pushPose();
@@ -158,9 +156,6 @@ public class CraftingStoneRenderer implements BlockEntityRenderer<CraftingStoneB
             GhostArrowRenderer.render(be, pose, buffers);
         }
 
-        // Result preview: float + spin above the stone at full brightness when a recipe matches.
-        // When a locked ghost is also showing (the pile incidentally matches a different recipe),
-        // the solid result floats ABOVE the ghost so the player's chosen recipe keeps its spot.
         if (!result.isEmpty()) {
             double resultY = ghostResult.isEmpty() ? 1.05 : 1.5;
             long time = be.getLevel() != null ? be.getLevel().getGameTime() : 0L;
@@ -177,21 +172,18 @@ public class CraftingStoneRenderer implements BlockEntityRenderer<CraftingStoneB
         }
     }
 
-    /** A small vanilla-style count, billboarded to face the camera, drawn at the block-local point
-     *  {@code (lx, ly, lz)}. Skipped for counts of 1 (matches inventory behaviour). The shadow is a
-     *  dark copy offset 1px behind the white glyphs so it reads at this tiny world scale. */
     private void drawCount(PoseStack pose, MultiBufferSource buffers, int count, int color,
                            double lx, double ly, double lz) {
         if (count <= 1 || font == null) return;
         Camera camera = Minecraft.getInstance().gameRenderer.getMainCamera();
         String s = Integer.toString(count);
-        float fs = 0.0125F; // 1 font px → ~inventory-digit proportion on the stone
+        float fs = 0.0125F; // 1 font px ~= inventory-digit proportion at this world scale
         float x = -font.width(s) / 2.0F;
         float y = -font.lineHeight / 2.0F;
         pose.pushPose();
         pose.translate(lx, ly, lz);
         pose.mulPose(camera.rotation());
-        pose.scale(fs, -fs, fs); // font space: +Y is down → flip Y
+        pose.scale(fs, -fs, fs); // font space: +Y is down -> Y must stay flipped
         Matrix4f mat = pose.last().pose();
         font.drawInBatch(s, x + 0.6F, y + 0.6F, 0xD0000000, false,
             mat, buffers, Font.DisplayMode.NORMAL, 0, LightTexture.FULL_BRIGHT);

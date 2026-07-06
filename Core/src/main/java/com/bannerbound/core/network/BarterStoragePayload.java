@@ -13,7 +13,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: a fresh snapshot of the player's town inventory (and the camp's current goods) for an open
+ * S->C: a fresh snapshot of the player's town inventory (and the camp's current goods) for an open
  * barter screen, in reply to {@link RequestBarterStoragePayload}. The screen swaps these in and
  * re-validates the live offer so Accept and the item-add buttons grey out the moment storage runs short.
  */

@@ -27,18 +27,34 @@ import net.minecraft.world.level.block.state.BlockState;
 
 /**
  * Block entity for the Bloomery multiblock (lives on the lower segment). Tracks the door's
- * open/closed state, an item held inside, a burn timer, and smelting progress. Burn + smelt
- * timers run server-side; the door/slide animations and the burn timer mirror to the client.
+ * open/closed state, an item held inside, a burn timer (litTicks), smelting progress, and a
+ * fire-driven temperature with a decaying bellows boost. Burn + smelt logic run server-side; door
+ * and item-slide animations plus the burn timer mirror to the client, and setChanged always
+ * re-syncs (sendBlockUpdated) so the looked-at temperature readout stays live.
+ *
+ * Temperature is fire-driven and independent of the contents: it climbs toward baseCeiling +
+ * bellowsBoost only while lit AND the door is shut (an open door bleeds heat to 0 regardless), and
+ * decays when the fire is out; bellowsBoost bleeds off every tick. pumpBellows (a jump on the
+ * Bellows Block, or the held bellows) and refuel both reset the burn timer but feed a LIT fire
+ * only -> air on a dead fire does nothing, you must re-light first (flint and steel / fire
+ * sticks). While hot, server temperature sync is throttled to every 5th tick to keep the
+ * looked-at readout live without per-tick packet spam.
+ *
+ * Smelting accrues only while the temperature sits in the active recipe's band with the door shut;
+ * off-band merely stalls or slows and the batch is never consumed, and when the fire dies progress
+ * drains slowly. A crucible inside is special-cased (band derived from the metal being melted; its
+ * charge resolves to one molten metal, e.g. copper + tin -> bronze; pull it out before it melts and
+ * the raw items are still inside, no loss). Research gating is applied in tickSmelting (not at
+ * completion) so an unresearched output leaves the ore unconsumed and the bloomery simply idle.
+ * completeSmelt rolls recipe.chance() per item (all-miss yields nothing); totalTicks gives a bulk
+ * discount of half a base time per extra item. Constants: ANIM_TICKS 10 = 0.5s door anim,
+ * SLIDE_TICKS 6 item slide-in, MAX_LIT_TICKS 600 = 30s burn, CRUCIBLE_MELT_TICKS 160.
  */
 @ApiStatus.Internal
 public class BloomeryBlockEntity extends BlockEntity {
-    /** Ticks the door open/close animation runs — matches the 0.5-second exported animations. */
     public static final int ANIM_TICKS = 10;
-    /** Ticks the inserted item's slide-in animation runs. */
     public static final int SLIDE_TICKS = 6;
-    /** Burn duration once ignited — 30 seconds. */
     public static final int MAX_LIT_TICKS = 600;
-    /** Full-rate ticks for a crucible charge to melt. */
     public static final int CRUCIBLE_MELT_TICKS = 160;
 
     private boolean open = false;
@@ -48,15 +64,12 @@ public class BloomeryBlockEntity extends BlockEntity {
     private int litTicks = 0;
     private float smeltProgress = 0;
     private boolean smeltingActive = false;
-    /** Fire-driven temperature (°C) and the decaying bellows boost over the base ceiling. */
     private float temperatureC = 0;
     private float bellowsBoost = 0;
 
     public BloomeryBlockEntity(BlockPos pos, BlockState state) {
         super(BannerboundAntiquity.BLOOMERY_BE.get(), pos, state);
     }
-
-    // ─── Door ──────────────────────────────────────────────────────────────────────────────────
 
     public boolean isOpen() {
         return open;
@@ -66,7 +79,6 @@ public class BloomeryBlockEntity extends BlockEntity {
         return animTicks;
     }
 
-    /** Flips the door open/closed and starts the transition. Ignored while one is already playing. */
     public void toggle() {
         if (animTicks > 0) {
             return;
@@ -80,8 +92,6 @@ public class BloomeryBlockEntity extends BlockEntity {
         }
         setChanged();
     }
-
-    // ─── Held item ─────────────────────────────────────────────────────────────────────────────
 
     public ItemStack getHeldItem() {
         return heldItem;
@@ -109,8 +119,6 @@ public class BloomeryBlockEntity extends BlockEntity {
         return out;
     }
 
-    // ─── Fire ──────────────────────────────────────────────────────────────────────────────────
-
     public boolean isLit() {
         return litTicks > 0;
     }
@@ -119,7 +127,6 @@ public class BloomeryBlockEntity extends BlockEntity {
         return litTicks;
     }
 
-    /** Lights the bloomery (fire sticks / flint & steel). Plays the ignite sound if it was unlit. */
     public void ignite() {
         boolean wasLit = litTicks > 0;
         litTicks = MAX_LIT_TICKS;
@@ -130,7 +137,6 @@ public class BloomeryBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    /** Stokes an already-lit bloomery (held bellows item): refuels the burn timer AND pumps heat. */
     public void refuel() {
         if (litTicks > 0) {
             litTicks = MAX_LIT_TICKS;
@@ -140,12 +146,9 @@ public class BloomeryBlockEntity extends BlockEntity {
         }
     }
 
-    /** A bellows pump (a jump on the Bellows Block, or the held bellows): feeds air to a LIT fire —
-     *  refuels the burn timer (keeps it alive) AND adds a burst of heat that decays. Air on a dead
-     *  fire does nothing (you must re-light it first with flint &amp; steel / fire sticks). */
     public void pumpBellows() {
         if (litTicks <= 0) return;
-        litTicks = MAX_LIT_TICKS; // keep the fire going while you stoke
+        litTicks = MAX_LIT_TICKS;
         bellowsBoost = Math.min(BloomeryHeat.bellowsMax(), bellowsBoost + BloomeryHeat.bellowsPerPump());
         spawnIgniteBurst();
         setChanged();
@@ -159,7 +162,6 @@ public class BloomeryBlockEntity extends BlockEntity {
         return smeltProgress;
     }
 
-    /** A splash of flame particles when the bloomery is ignited or stoked by a bellows. */
     private void spawnIgniteBurst() {
         if (level instanceof ServerLevel server) {
             server.sendParticles(ParticleTypes.FLAME,
@@ -168,9 +170,6 @@ public class BloomeryBlockEntity extends BlockEntity {
         }
     }
 
-    // ─── Ticking ───────────────────────────────────────────────────────────────────────────────
-
-    /** Ticker — runs on both sides; drives the animations, burn timer and smelting. */
     public static void tick(Level level, BlockPos pos, BlockState state, BloomeryBlockEntity be) {
         if (be.animTicks > 0) {
             be.animTicks--;
@@ -191,10 +190,7 @@ public class BloomeryBlockEntity extends BlockEntity {
             }
         }
 
-        // Temperature is fire-driven and independent of the contents: climb toward (base + bellows)
-        // while lit, decay to 0 when the fire is out. The bellows boost bleeds off each tick.
         if (!level.isClientSide) {
-            // Heat only builds with the door shut; an open door bleeds it off no matter what.
             float target = (be.litTicks > 0 && !be.open) ? BloomeryHeat.baseCeiling() + be.bellowsBoost : 0f;
             if (be.bellowsBoost > 0f) {
                 be.bellowsBoost = Math.max(0f, be.bellowsBoost - BloomeryHeat.bellowsDecay());
@@ -202,7 +198,6 @@ public class BloomeryBlockEntity extends BlockEntity {
             float k = target > be.temperatureC ? BloomeryHeat.climb() : BloomeryHeat.fall();
             be.temperatureC += (target - be.temperatureC) * k;
             if (be.temperatureC < 0.5f) be.temperatureC = 0f;
-            // Keep the looked-at temperature readout live on the client without per-tick spam.
             if ((be.litTicks > 0 || be.temperatureC > 0.5f) && level.getGameTime() % 5 == 0) {
                 be.setChanged();
             }
@@ -217,18 +212,12 @@ public class BloomeryBlockEntity extends BlockEntity {
         }
     }
 
-    /** Server-side processing: progress accrues only while the (fire-driven) temperature sits in the
-     *  active recipe's band, door shut. A crucible inside is special-cased — its band comes from the
-     *  metal being melted; everything else matches a {@link BloomeryRecipe}. Off-band only stalls or
-     *  slows; the batch is never consumed. */
     private void tickSmelting(Level level) {
         if (heldItem.is(BannerboundAntiquity.CRUCIBLE.get())) {
             tickCrucibleMelt(level);
             return;
         }
         BloomeryRecipe recipe = heldItem.isEmpty() ? null : BloomeryRecipeManager.find(heldItem);
-        // Won't smelt toward an output the owning civ hasn't researched yet. Gating here (rather
-        // than at completion) means the ore is never consumed — the bloomery just sits idle.
         if (recipe != null && !com.bannerbound.core.api.research.CraftGating.canProduceAt(
                 level, getBlockPos(), recipe.result().getItem())) {
             recipe = null;
@@ -249,7 +238,6 @@ public class BloomeryBlockEntity extends BlockEntity {
                 setChanged();
             }
         } else if (litTicks <= 0 && smeltProgress > 0) {
-            // Fire's out — progress slowly drains away. (Door open / off-band while lit just freezes it.)
             smeltProgress = Math.max(0, smeltProgress - 1);
             if ((int) smeltProgress % 20 == 0) {
                 setChanged();
@@ -257,9 +245,6 @@ public class BloomeryBlockEntity extends BlockEntity {
         }
     }
 
-    /** Melt a crucible's charge to liquid when the temperature holds the metal's band (door shut). The
-     *  charge resolves to one molten metal (copper + tin → bronze); pulled out before it melts, the
-     *  raw items are still inside (no loss). */
     private void tickCrucibleMelt(Level level) {
         com.bannerbound.antiquity.item.CrucibleContents contents =
             heldItem.get(BannerboundAntiquity.CRUCIBLE_CONTENTS.get());
@@ -300,7 +285,6 @@ public class BloomeryBlockEntity extends BlockEntity {
         }
     }
 
-    /** Total smelt time for a stack — discounted bulk: each extra item costs only half a base time. */
     private static int totalTicks(BloomeryRecipe recipe, int count) {
         return Math.round(recipe.ticks() * (1.0F + (count - 1) * 0.5F));
     }
@@ -313,12 +297,12 @@ public class BloomeryBlockEntity extends BlockEntity {
             }
         }
         if (produced <= 0) {
-            heldItem = ItemStack.EMPTY; // every roll missed — the batch yielded nothing
+            heldItem = ItemStack.EMPTY;
         } else {
             ItemStack output = recipe.result().copy();
             output.setCount(Math.min(produced, output.getMaxStackSize()));
             heldItem = output;
-            insertAnimTicks = SLIDE_TICKS; // the result settles in with a little slide
+            insertAnimTicks = SLIDE_TICKS;
         }
         smeltProgress = 0;
         smeltingActive = false;
@@ -327,12 +311,8 @@ public class BloomeryBlockEntity extends BlockEntity {
         setChanged();
     }
 
-    /** Flame inside + smoke from the chimney; fewer particles the closer the fire is to dying. The
-     *  hotter the bloomery runs (bellows-stoked), the more intense the fire — bigger flames, rising
-     *  embers (lava sparks), and a faster, taller smoke plume — so you can read the heat at a glance. */
     private void spawnFireParticles(Level level, BlockPos pos) {
         float intensity = litTicks / (float) MAX_LIT_TICKS;
-        // 0..1 how hot it's running, relative to a fully bellows-stoked ceiling.
         float hotMax = BloomeryHeat.baseCeiling() + BloomeryHeat.bellowsMax();
         float heat = hotMax > 1f ? Math.min(1f, temperatureC / hotMax) : 0f;
         RandomSource rand = level.random;
@@ -344,13 +324,11 @@ public class BloomeryBlockEntity extends BlockEntity {
                 pos.getZ() + 0.3 + rand.nextDouble() * 0.4,
                 0.0, 0.01 + heat * 0.02, 0.0);
         }
-        // Rising embers off the fire-bed once it's genuinely hot.
         if (rand.nextFloat() < heat * 0.6f) {
             level.addParticle(ParticleTypes.LAVA,
                 pos.getX() + 0.35 + rand.nextDouble() * 0.3, pos.getY() + 0.45,
                 pos.getZ() + 0.35 + rand.nextDouble() * 0.3, 0.0, 0.0, 0.0);
         }
-        // Chimney smoke — a hotter fire pushes it faster and switches to large puffs.
         if (rand.nextFloat() < 0.3f + intensity * 0.4f) {
             level.addParticle(heat > 0.55f ? ParticleTypes.LARGE_SMOKE : ParticleTypes.SMOKE,
                 pos.getX() + 0.5 + (rand.nextDouble() - 0.5) * 0.2, pos.getY() + 1.9,
@@ -358,7 +336,6 @@ public class BloomeryBlockEntity extends BlockEntity {
         }
     }
 
-    /** Smoke puffing out of the (shut) door while a recipe is cooking. */
     private void spawnDoorSmoke(Level level, BlockPos pos, BlockState state) {
         if (level.random.nextInt(4) != 0) {
             return;
@@ -377,8 +354,6 @@ public class BloomeryBlockEntity extends BlockEntity {
             level.sendBlockUpdated(getBlockPos(), getBlockState(), getBlockState(), Block.UPDATE_CLIENTS);
         }
     }
-
-    // ─── NBT + client sync ─────────────────────────────────────────────────────────────────────
 
     @Override
     protected void saveAdditional(CompoundTag tag, HolderLookup.Provider provider) {

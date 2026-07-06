@@ -27,23 +27,30 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 
 /**
- * The WALKING TRADER bridge between {@link TradeManager}'s deals and {@link TraderSimManager}'s
- * journeys: picks a Trading-toggled stocker, adopts it for the trip (its own AI suspends via
- * {@code CitizenEntity.isOnTradeJourney()}), musters it to the trading stockpile, walks it to the
- * partner settlement carrying the leg's escrowed manifest (a chest in hand for readability), lands
- * the delivery through TradeManager's normal deposit path, and walks it home to resume stocking.
+ * The WALKING TRADER bridge between TradeManager's deals and TraderSimManager's journeys: picks the
+ * giver's nearest available Trading-toggled stocker, adopts it for the trip (its own AI suspends via
+ * CitizenEntity.isOnTradeJourney()), walks it from the trading stockpile to the partner settlement
+ * carrying the leg's escrowed manifest (a chest is put in its main hand purely for readability),
+ * lands the delivery through TradeManager's normal deposit path, then walks it home empty to resume
+ * stocking. Interrupting a live haul to draft a courier is safe -- StockerWorkGoal.stop() returns the
+ * load. Journey-completion callbacks (LISTENER) fire on the main server thread.
  *
- * <p>Every failure degrades to the abstract CLOCK (never bricks a trade): no courier found, route
- * unplannable, courier stuck/lost/killed → the leg continues on the distance timer and the deal
- * proceeds. Journey→leg wiring is transient (rebuilt each dispatch); a server restart drops live
- * sessions, and {@code TradeManager}'s sweep detects the dead {@code journeyId} and clocks the leg.
+ * <p>Every failure degrades to the abstract CLOCK and never bricks a trade: no courier found, route
+ * unplannable, or courier stuck/lost -> the leg continues on the distance timer and the deal
+ * proceeds. If the courier is KILLED mid-delivery its cargo SPILLS as loot at the death site (no
+ * refund -- it is on the ground for whoever killed it), that leg FAILS, and the other leg still
+ * delivers so the deal resolves PARTIAL; a death on the empty walk home costs nothing.
+ *
+ * <p>Journey->leg wiring is transient (the JOURNEYS map is rebuilt each dispatch, never persisted).
+ * A server restart drops live sessions; isJourneyLive/isStaleJourney then read false, which is
+ * exactly how TradeManager's sweep and TradeCourierGoal.canUse notice a courier is gone -- the sweep
+ * clocks the leg and canUse (a cheap map lookup per AI poll) hands the stranded citizen back to its
+ * own AI. LegRef.returning marks the empty walk home (nothing carried, no leg state to touch).
  */
 @ApiStatus.Internal
 public final class TradeCourierManager {
-    /** How long a leg keeps hunting for an available courier before falling back to the clock. */
     static final long COURIER_WAIT_TICKS = 6000L;
 
-    /** Which deal leg a live journey is carrying ({@code returning} = the empty walk home). */
     private record LegRef(UUID dealId, boolean proposerLeg, boolean returning) {}
 
     private static final Map<UUID, LegRef> JOURNEYS = new HashMap<>();
@@ -51,17 +58,10 @@ public final class TradeCourierManager {
     private TradeCourierManager() {
     }
 
-    /** True while {@code journeyId} is a live courier journey (post-restart this is false, which is
-     *  exactly how the sweep notices the courier is gone and clocks the leg). */
     public static boolean isJourneyLive(@Nullable UUID journeyId) {
         return journeyId != null && TraderSimManager.hasSession(journeyId);
     }
 
-    /**
-     * Tries to put a walking courier on {@code leg} (giver → receiver). On success the courier is
-     * adopted and the leg carries its ids; arrival/failure flow back through the journey listener.
-     * Returns false when no courier is available right now (caller keeps waiting or clocks the leg).
-     */
     static boolean tryDispatch(ServerLevel level, TradeDeal deal, TradeDeal.Leg leg,
                                Settlement giver, Settlement receiver, boolean proposerLeg) {
         BlockPos loadPos = tradingStockpilePos(giver);
@@ -74,7 +74,7 @@ public final class TradeCourierManager {
         UUID journeyId = TraderSimManager.startAdopted(level.getServer(), courier, loadPos, dest,
             true, LISTENER);
         courier.setTradeJourneyId(journeyId);
-        courier.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(Items.CHEST)); // visible cargo
+        courier.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(Items.CHEST));
         leg.courierId = courier.getUUID();
         leg.journeyId = journeyId;
         JOURNEYS.put(journeyId, new LegRef(deal.id, proposerLeg, false));
@@ -85,7 +85,6 @@ public final class TradeCourierManager {
         return true;
     }
 
-    /** The rack position of the giver's best show-for-trading stockpile (any valid one). */
     @Nullable
     private static BlockPos tradingStockpilePos(Settlement s) {
         for (Stockpile sp : s.stockpiles().values()) {
@@ -94,8 +93,6 @@ public final class TradeCourierManager {
         return null;
     }
 
-    /** The giver's nearest available Trading-toggled stocker: loaded, alive, adult, idle of any
-     *  other journey. Interrupting a live haul is safe — StockerWorkGoal.stop() returns the load. */
     @Nullable
     private static CitizenEntity findCourier(ServerLevel level, Settlement giver, BlockPos near) {
         CitizenEntity best = null;
@@ -114,8 +111,6 @@ public final class TradeCourierManager {
         }
         return best;
     }
-
-    // ─── Journey completion (main thread, fired by TraderSimManager.finish) ────────────────────────
 
     private static final TraderSimManager.JourneyListener LISTENER = new TraderSimManager.JourneyListener() {
         @Override
@@ -144,7 +139,6 @@ public final class TradeCourierManager {
             : resolveCourierByJourney(level, journeyId);
 
         if (ref.returning()) {
-            // The empty walk home — however it ended, hand the citizen back to its own AI.
             if (courier != null) endAdoption(courier);
             return;
         }
@@ -156,14 +150,11 @@ public final class TradeCourierManager {
             : sd.getById(ref.proposerLeg() ? deal.recipient : deal.proposer);
 
         if (arrived && leg != null) {
-            // Goods land through the normal deposit path (retry + town-hall overflow all reused).
             leg.state = TradeDeal.Leg.LegState.ARRIVED_PENDING;
             leg.arriveAt = level.getGameTime();
             leg.journeyId = null;
             trades.setDirty();
         } else if (leg != null && deal != null && deal.state.active()) {
-            // Journey failed (stuck / lost / no route) — the goods continue by the abstract clock
-            // from here so the trade never bricks; the courier is released to walk itself home.
             leg.journeyId = null;
             leg.courierId = null;
             if (leg.state == TradeDeal.Leg.LegState.IN_TRANSIT && giver != null && receiver != null) {
@@ -176,10 +167,9 @@ public final class TradeCourierManager {
 
         if (courier != null) {
             if (arrived && giver != null) {
-                // Walk home empty; failures here just end adoption wherever the courier stands.
                 BlockPos home = giver.hasTownHall() ? giver.townHallPos() : giver.bannerPos();
                 if (home != null) {
-                    courier.setItemSlot(EquipmentSlot.MAINHAND, ItemStack.EMPTY); // cargo delivered
+                    courier.setItemSlot(EquipmentSlot.MAINHAND, ItemStack.EMPTY);
                     UUID back = TraderSimManager.startAdopted(server, courier,
                         courier.blockPosition(), home, true, LISTENER);
                     courier.setTradeJourneyId(back);
@@ -193,13 +183,10 @@ public final class TradeCourierManager {
 
     @Nullable
     private static CitizenEntity resolveCourierByJourney(ServerLevel level, UUID journeyId) {
-        // Fallback lookup when the leg is already gone: scan nothing — the courier keeps its
-        // journey id and is cleaned up by the stale-flag sweep when next seen (P2). Null here.
+        // Intentionally null: a courier whose leg is gone keeps its journey id and is reclaimed by the stale-flag sweep.
         return null;
     }
 
-    /** Returns the citizen to its own life: journey flag off (the blocker goal stops), cargo prop
-     *  cleared, stocker AI resumes on the next goal poll. */
     static void endAdoption(CitizenEntity courier) {
         courier.setTradeJourneyId(null);
         ItemStack hand = courier.getItemBySlot(EquipmentSlot.MAINHAND);
@@ -208,11 +195,6 @@ public final class TradeCourierManager {
         }
     }
 
-    // ─── Death, aborts, and stale-flag recovery ─────────────────────────────────────────────────────
-
-    /** A courier died mid-journey: the cargo it carried SPILLS as loot at the death site (no refund —
-     *  the goods are on the ground for whoever killed it), the leg FAILS, and the other leg still
-     *  delivers (the deal resolves PARTIAL). A death on the empty walk home costs nothing. */
     public static void onCourierDied(ServerLevel level, CitizenEntity courier) {
         UUID journeyId = courier.getTradeJourneyId();
         if (journeyId == null) return;
@@ -220,7 +202,7 @@ public final class TradeCourierManager {
         // Detach the listener path FIRST so the session teardown below can't double-handle it.
         TraderSimManager.stopSession(level.getServer(), journeyId, "lost");
         courier.setTradeJourneyId(null);
-        if (ref == null || ref.returning()) return; // empty walk home — nothing carried
+        if (ref == null || ref.returning()) return;
 
         TradeData trades = TradeData.get(level);
         TradeDeal deal = trades.getById(ref.dealId());
@@ -262,9 +244,6 @@ public final class TradeCourierManager {
         }
     }
 
-    /** Deal died mid-journey (cancel / war / a settlement disbanded): end every live courier journey
-     *  it owns. The escrowed goods refund through the deal's abstract refund sweep; the courier is
-     *  simply released where it stands and walks itself home under its own AI. */
     public static void abortJourneysFor(ServerLevel level, TradeDeal deal) {
         abortLeg(level, deal.proposerLeg);
         abortLeg(level, deal.recipientLeg);
@@ -281,9 +260,6 @@ public final class TradeCourierManager {
         leg.courierId = null;
     }
 
-    /** Recovery for a courier whose journey no longer exists (server restart, or its deal resolved
-     *  while it was unloaded): drop the stale flag and hand it back to its own AI. Called cheaply
-     *  from {@code TradeCourierGoal.canUse} — a map lookup per AI poll. */
     public static boolean isStaleJourney(CitizenEntity courier) {
         UUID id = courier.getTradeJourneyId();
         return id != null && !TraderSimManager.hasSession(id);

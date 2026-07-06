@@ -14,58 +14,29 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C: the full state the citizen Job tab needs. Sent once right after {@link OpenCitizenScreenPayload}
+ * S->C: the full state the citizen Job tab needs. Sent once right after {@link OpenCitizenScreenPayload}
  * (so the tab has data on open) and again on each live-state poll (so it stays fresh while another
- * player edits the same citizen).
+ * player edits the same citizen). Most fields are self-describing; the load-bearing semantics:
  *
- * @param canManageJobs        whether the viewing player may edit jobs (chief / council / Workload Share)
- * @param jobTypeId            current job type id ({@code ""} = unemployed)
- * @param jobIconItemId        registry id of the icon for the current job (the settlement's current
- *                             tool-age tool for the job's role; {@code 0} = none)
- * @param hasTool              whether a job tool is installed
- * @param toolItemId           registry id of the installed tool item ({@code 0} = none) for the slot icon
- * @param preferredLogId       block id of the forester's preferred log ({@code ""} = none)
- * @param dropOffSet           whether a drop-off has been marked
- * @param unlockedJobTypeIds   research-unlocked job type ids the assign dropdown may offer
- * @param unlockedJobIconItemIds parallel to {@code unlockedJobTypeIds}: each job's icon item id
- * @param allowedToolItemIds   item ids of tools the primary tool slot accepts (current age or lower)
- * @param pickaxeUnlocked      whether the quarryworker's pickaxe slot is available (Quarry researched)
- * @param hasPickaxe           whether a pickaxe is installed in the second slot
- * @param pickaxeItemId        registry id of the installed pickaxe ({@code 0} = none)
- * @param allowedPickaxeItemIds item ids the pickaxe slot accepts (current age or lower)
- * @param seedSourceSet        whether the farmer's seed source has been marked
- * @param forageEnabledBits    forager only: bitmask of categories the player has switched on
- * @param forageUnlockedBits   forager only: bitmask of categories the settlement has researched (the
- *                             rest render LOCKED in the picker)
- * @param hunterPreyOffIds     hunter only: entity-type ids the player has switched OFF in the prey
- *                             picker (the full species list is the {@code #bannerbound:huntable}
- *                             tag, which the client reads locally — only the exclusions travel)
- * @param anarchy              whether the settlement is in anarchy (no government): the Job tab then
- *                             shows the auto-assigned job with a "request switch" control instead of
- *                             free assign/unassign, and offers only gatherer jobs
- * @param switchRefused        whether the citizen recently refused a switch request (an active
- *                             NO_WORK_AS_JOB thought): the "request switch" button stays greyed until
- *                             it lapses so the player can't spam re-requests
- * @param workshopId           crafter only: bound workshop's id (UUID string; {@code ""} = none)
- * @param workshopName         crafter only: bound workshop's custom name ({@code ""} = client shows
- *                             the derived type)
- * @param workshopTypeId       crafter only: bound workshop's derived type id ({@code ""} = none)
- * @param jobXp                whole-number experience for the current profession bucket
- *                             (workshop profession for crafters, job id for other workers)
- * @param stockerTaskItemIds   stocker only: item registry id per board task (queue order)
- * @param stockerTaskCounts    stocker only: haul count per board task
- * @param stockerTaskDests     stocker only: destination display name per task ({@code ""} =
- *                             the stockpile — client renders the translatable label)
- * @param stockerTaskStates    stocker only: 0 = open, 1 = claimed by another stocker, 2 = THIS
- *                             citizen's current haul
- * @param outpostManaged       the citizen's current work site is an OUTPOST working claim: storage
- *                             is decided by the outpost (nearest chest in its chunk, auto-assigned)
- *                             so the Job tab greys its "Set drop location" button
- * @param workStatus           {@link com.bannerbound.core.entity.CitizenWorkStatus} ordinal — the
- *                             glanceable live verdict shown as the Job-tab headline (derived
- *                             server-side, or the goal-published plantation sub-state)
- * @param foresterPlantationUnlocked forester only: whether the Silviculture research is done, so the
- *                             Job tab offers "Select plantation area" (mirrors {@code pickaxeUnlocked})
+ * <p>Icons ride as item registry ids (0 = none) so the client renders the settlement's current
+ * tool-age tool without knowing the age. jobIconItemId / unlockedJobIconItemIds run parallel to the
+ * job-id lists; allowedToolItemIds / allowedPickaxeItemIds are the items each slot accepts (current
+ * age or lower). pickaxeUnlocked / foresterPlantationUnlocked mirror research gates (Quarry,
+ * Silviculture) that add a second slot or an area-select button.
+ *
+ * <p>Forager: forageEnabledBits is the player's on switches, forageUnlockedBits the researched
+ * categories (the rest render LOCKED). Hunter: only hunterPreyOffIds (the exclusions) travel - the
+ * full species list is the {@code #bannerbound:huntable} tag the client reads locally. Anarchy: with
+ * no government the tab shows the auto-assigned gatherer job with a "request switch" control instead
+ * of free assign/unassign; switchRefused greys that control while a NO_WORK_AS_JOB thought is active
+ * so requests can't be spammed. Crafter: workshopId/Name/TypeId bind a workshop ("" = none). jobXp is
+ * the whole-number XP for the current profession bucket (workshop profession for crafters, else the
+ * job id). Stocker: the four stockerTask* lists are parallel rows in queue order; stockerTaskStates
+ * is 0 = open, 1 = claimed by another stocker, 2 = this citizen's current haul; a "" dest = the
+ * stockpile (client renders the translatable label). outpostManaged means the work site is an outpost
+ * claim whose storage is auto-decided (nearest chest in its chunk), so "Set drop location" is greyed.
+ * workStatus is a {@link com.bannerbound.core.entity.CitizenWorkStatus} ordinal - the glanceable live
+ * verdict headline.
  */
 @ApiStatus.Internal
 public record CitizenJobStatePayload(

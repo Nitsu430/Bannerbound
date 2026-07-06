@@ -17,12 +17,17 @@ import net.minecraft.sounds.SoundEvents;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
-/** Client mirror of the current player's merged journal snapshot. */
+/**
+ * Client mirror of the current player's merged journal snapshot (fed by {@code JournalSyncPayload}).
+ * Entries sort CRISIS -> QUEST -> TUTORIAL -> other, then priority desc, then creation tick.
+ * {@link #hudEntries()} filters to on-HUD entries, keeping resolved ones for a linger window
+ * ({@code JournalEntry.HUD_RESOLVED_LINGER_TICKS}) before they drop off. A content change while
+ * minimized plays a page-turn cue and flags unread; the panel tracks its own minimize animation.
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientJournalState {
-    // Unbound by default: the old K default collided with Iris Shaders' shader-pack selector
-    // (and was unintuitive). Players bind their own key under Controls → Bannerbound.
+    // Unbound by default: the old K default collided with Iris' shader-pack selector.
     public static final KeyMapping TOGGLE_KEY = new KeyMapping(
         "key.bannerbound.journal", GLFW.GLFW_KEY_UNKNOWN, "key.categories.bannerbound");
 

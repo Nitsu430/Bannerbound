@@ -10,7 +10,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** C→S: remove a citizen's job tool from the Job tab — returned to the player's inventory if there's
+/** C->S remove a citizen's job tool from the Job tab - returned to the player's inventory if there's
  *  room, otherwise into the drop-off / at the citizen's feet. */
 @ApiStatus.Internal
 public record ClearCitizenToolPayload(int entityId, boolean pickaxe) implements CustomPacketPayload {

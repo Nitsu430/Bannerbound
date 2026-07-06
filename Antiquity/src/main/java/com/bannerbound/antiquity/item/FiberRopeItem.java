@@ -10,11 +10,13 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 
 /**
- * Fiber Rope — the crafting/utility cordage that, held in your off hand while you throw a spear,
+ * Fiber Rope - the crafting/utility cordage that, held in your off hand while you throw a spear,
  * tethers the spear with a rope (see {@code SpearItem} + {@code SpearProjectile}). Its only active
- * behaviour is the reel-in: <b>shift + right-click</b> with rope in hand pulls your tethered spear /
- * speared-fish catch back to you (the held rope is not consumed — the spent rope is the one already
- * thrown). The empty-handed reel is handled separately via {@code ReelTetherPayload}.
+ * behaviour is the reel-in: shift + right-click with rope in hand pulls your tethered spear /
+ * speared-fish catch back to you (the held rope is not consumed - the spent rope is the one
+ * already thrown; a plain right-click passes through as ordinary cordage). The client leg only
+ * predicts the pull swing, the server is authoritative for the actual reel; the empty-handed reel
+ * is handled separately via {@code ReelTetherPayload}.
  */
 public class FiberRopeItem extends Item {
     public FiberRopeItem(Properties properties) {
@@ -25,7 +27,7 @@ public class FiberRopeItem extends Item {
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack held = player.getItemInHand(hand);
         if (!player.isShiftKeyDown()) {
-            return InteractionResultHolder.pass(held); // plain cordage otherwise
+            return InteractionResultHolder.pass(held);
         }
         if (!level.isClientSide) {
             boolean reeled = SpearFishing.startReel(player);
@@ -35,7 +37,6 @@ public class FiberRopeItem extends Item {
             }
             return InteractionResultHolder.pass(held);
         }
-        // Client: predict the pull swing (server is authoritative for the actual reel).
         return InteractionResultHolder.success(held);
     }
 }

@@ -19,11 +19,15 @@ import net.minecraft.util.profiling.ProfilerFiller;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Datapack loader for carpentry <b>assembly</b> recipes (fixed-result, multi-ingredient — wooden
- * tools etc.) — reads every JSON under {@code data/<namespace>/carpentry_assembly/}. Server-side
- * only (registered as a reload listener in {@code AntiquityEvents}); the resolved, affordable offers
- * are synced to clients on the block entity itself. Sorted by {@code name} so the picker's browse
- * order is stable. Mirrors {@link CarpentryOutputManager}.
+ * Datapack loader for carpentry "assembly" recipes (fixed-result, multi-ingredient: wooden tools
+ * etc.) that reads every JSON under {@code data/<namespace>/carpentry_assembly/}. Registered as a
+ * server reload listener in AntiquityEvents; the resolved, affordable offers are synced to clients on
+ * the block entity itself, but applyEntries() is public so the client-side jar loader
+ * (ClientDatapackRecipes) can reuse it on remote clients, where server datapacks don't reach.
+ * Recipes are sorted by name so the picker's browse order is stable. isIngredient() answers whether a
+ * stack is depositable budget material by testing it against every loaded recipe's ingredients, so
+ * adding a recipe that uses a new item automatically makes that item valid. Mirrors
+ * {@link CarpentryOutputManager}.
  */
 @ApiStatus.Internal
 public class CarpentryAssemblyManager extends SimpleJsonResourceReloadListener {
@@ -40,8 +44,6 @@ public class CarpentryAssemblyManager extends SimpleJsonResourceReloadListener {
         applyEntries(entries);
     }
 
-    /** Parse + store the loaded entries. Public so the client-side jar loader can reuse it on remote
-     *  clients, where server datapacks don't reach (see {@code ClientDatapackRecipes}). */
     public static void applyEntries(Map<ResourceLocation, JsonElement> entries) {
         List<CarpentryAssembly> loaded = new ArrayList<>();
         for (Map.Entry<ResourceLocation, JsonElement> entry : entries.entrySet()) {
@@ -55,13 +57,10 @@ public class CarpentryAssemblyManager extends SimpleJsonResourceReloadListener {
         BannerboundAntiquity.LOGGER.info("Loaded {} carpentry assembly recipe(s).", recipes.size());
     }
 
-    /** Every loaded assembly recipe, sorted by name. */
     public static List<CarpentryAssembly> all() {
         return recipes;
     }
 
-    /** True if {@code stack} can satisfy ANY ingredient of ANY loaded recipe — i.e. it's depositable
-     *  as budget material (auto-extensible: add a recipe that uses an item and it becomes valid). */
     public static boolean isIngredient(ItemStack stack) {
         if (stack.isEmpty()) return false;
         for (CarpentryAssembly recipe : recipes) {

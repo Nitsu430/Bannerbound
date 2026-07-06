@@ -13,12 +13,15 @@ import net.minecraft.world.entity.animal.Wolf;
 /**
  * Makes a citizen-bonded {@link Wolf} follow its owning {@link CitizenEntity}. Mirrors vanilla's
  * follow-owner goal, but the owner is a citizen (not a player), so vanilla's player-keyed lookup
- * never fires for these pets — this fills that gap.
+ * never fires for these pets -- this fills that gap.
  *
  * <p>The owner is resolved by UUID each time the goal starts (not held as a hard reference) so
  * the goal survives a reload: {@code PetEvents} re-attaches it to bonded wolves on entity-join,
  * and the lookup just re-finds the (loaded) citizen. If the owner is offline/unloaded or dead,
- * the goal idles.
+ * the goal idles. When the pet falls past TELEPORT_DIST_SQ (24 blocks) the navigation budget
+ * cannot cross the gap, so it teleports and marks the jump deliberate so the citizen system does
+ * not treat the sudden move as a glitch; otherwise it repaths toward the owner every
+ * REPATH_INTERVAL ticks.
  */
 @ApiStatus.Internal
 public class PetFollowCitizenGoal extends Goal {
@@ -80,7 +83,6 @@ public class PetFollowCitizenGoal extends Goal {
         pet.getLookControl().setLookAt(owner, 10.0F, (float) pet.getMaxHeadXRot());
         if (--repath > 0) return;
         repath = REPATH_INTERVAL;
-        // Teleport if hopelessly far (path budget can't keep up across long gaps).
         if (pet.distanceToSqr(owner) >= TELEPORT_DIST_SQ) {
             pet.moveTo(owner.getX(), owner.getY(), owner.getZ(), pet.getYRot(), pet.getXRot());
             CitizenEntity.tagDeliberateTeleport(pet);

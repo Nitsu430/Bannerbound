@@ -18,9 +18,15 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * The naming prompt at Pantheon-mode confirm (FAITH_PLAN Part 3): constellation name →
- * deity name → submit. Cancel returns to the mode with the draft intact. Shows the
- * domain preview (Star Charts gated — without it the heavens keep their secret).
+ * Naming prompt shown when the player confirms a Pantheon-mode constellation (FAITH_PLAN Part 3):
+ * type a constellation name -> a deity name -> submit, which fires {@link SubmitConstellationPayload}
+ * to the server with the typed-star chain and exits the mode. Cancel closes back to the sky with the
+ * draft intact ({@link PantheonMode} is not exited). Extends {@link PolishedScreen}; client-only.
+ *
+ * <p>The panel previews the deity's domain(s) derived from the draft's typed stars: the most common
+ * {@link DeityDomain} is primary, and a different domain becomes secondary only if it has >= 2 stars
+ * (pure vs hybrid label). The preview is gated on the Star Charts research node
+ * ({@link #STAR_CHARTS_NODE}) -- without it the heavens keep their secret and it renders "?".
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -73,7 +79,7 @@ public class NameConstellationScreen extends PolishedScreen {
 
         addRenderableWidget(PolishButton.polished(
             Component.translatable("gui.cancel"),
-            b -> this.onClose() // draft survives — back to the sky
+            b -> this.onClose()
         ).bounds(boxX, panelY + PANEL_H - 28, 200, 20).build());
 
         refresh();
@@ -100,7 +106,6 @@ public class NameConstellationScreen extends PolishedScreen {
             panelX + PANEL_W / 2, panelY + 96, 0xFFE8D9A0);
     }
 
-    /** Primary (+secondary) domain from the draft's typed stars — "?" without Star Charts. */
     private Component domainPreview() {
         SkyField sky = ClientSkyState.field();
         if (sky == null || !ClientFaithTreeState.isCompleted(STAR_CHARTS_NODE)) {

@@ -10,11 +10,13 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * The herd half of fear propagation: an animal that's been alarmed (its {@code SCARED_UNTIL} set by
- * a fleeing/hurt herd-mate) but has NO line of sight to the player bolts to a random away-spot —
- * so the whole herd scatters when one panics, not just the ones that can see you. Runs at the same
- * priority as {@link FleeFromPlayerGoal}; that goal (registered first) wins MOVE when a player is
- * actually visible, and this one covers the spooked-but-blind herd-mates.
+ * The herd half of fear propagation: an animal that has been alarmed (its SCARED_UNTIL stamped by a
+ * fleeing or hurt herd-mate via {@link HuntingFear#alarmHerd}) but has NO line of sight to the player
+ * bolts anyway - away from the nearest player within 32 blocks if one is around (even without LoS),
+ * otherwise to a random land spot - so the whole herd scatters when one member panics, not just the
+ * animals that can see you. Registered at the same priority as {@link FleeFromPlayerGoal}; that goal
+ * is registered first so it wins MOVE when a player is actually visible, leaving this one to cover
+ * the spooked-but-blind herd-mates. Tamed/domesticated animals never herd-flee.
  */
 public class HerdFleeGoal extends Goal {
     private final PathfinderMob mob;
@@ -32,7 +34,6 @@ public class HerdFleeGoal extends Goal {
         if (HuntingFear.isTamed(mob) || !HuntingFear.isScared(mob)) {
             return false;
         }
-        // Flee away from the nearest player if one's around (even without LoS), else just scatter.
         Player p = mob.level().getNearestPlayer(mob, 32.0);
         Vec3 away = p != null
             ? DefaultRandomPos.getPosAway(mob, 16, 7, p.position())

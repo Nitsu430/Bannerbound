@@ -12,16 +12,17 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * S→C, in response to {@link RequestFaithScreenPayload}: opens the Choose-Faith screen
- * with the current vote tallies plus every adoptable faith on the server (the
- * "bigger than factions" list — see FAITH_PLAN.md Part 1).
+ * S->C, in response to RequestFaithScreenPayload: opens the Choose-Faith screen with the current
+ * vote tallies plus every adoptable faith on the server (the "bigger than factions" list, see
+ * FAITH_PLAN.md Part 1). playerVote is the option key the player already cast (or ""); the parallel
+ * faith* lists carry one entry per adoptable faith.
  */
 public record OpenChooseFaithScreenPayload(
         int astrologyVotes,
         int totemicVotes,
         int onlineMembers,
-        String playerVote,        // option key the player already cast, or ""
-        List<String> faithIds,    // parallel lists: one entry per adoptable faith
+        String playerVote,
+        List<String> faithIds,
         List<String> faithNames,
         List<Integer> faithPaths,
         List<Integer> faithMemberCounts,

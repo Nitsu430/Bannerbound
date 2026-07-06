@@ -22,7 +22,8 @@ import net.neoforged.api.distmarker.OnlyIn;
  * Baked model for the Bellows Block, drawn by {@link BellowsRenderer}. Geometry is the Blockbench
  * export ({@code bellows.bbmodel}) cleaned up for 1.21.1; extends {@link HierarchicalModel} so the
  * "Push" animation ({@link BellowsAnimations#PUSH}) can drive the {@code Bellows_Top}/{@code Spine}
- * bones by name when the player jumps on it.
+ * bones by name when the player jumps on it. {@code setupAnim} is a deliberate no-op: the block
+ * entity renderer drives the animation from the jump-push timer, not entity state.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -73,6 +74,5 @@ public final class BellowsModel extends HierarchicalModel<Entity> {
     @Override
     public void setupAnim(Entity entity, float limbSwing, float limbSwingAmount, float ageInTicks,
                           float netHeadYaw, float headPitch) {
-        // Animation is driven by the block entity renderer (the jump-push timer), not entity state.
     }
 }

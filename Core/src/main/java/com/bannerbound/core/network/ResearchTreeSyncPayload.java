@@ -13,6 +13,10 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/**
+ * S->C sync of the full research tree definition list, so the client can render nodes the server
+ * loaded from datapacks. Wire form is just {@link ResearchDefinition}'s codec wrapped in a list.
+ */
 @ApiStatus.Internal
 public record ResearchTreeSyncPayload(List<ResearchDefinition> definitions) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<ResearchTreeSyncPayload> TYPE =

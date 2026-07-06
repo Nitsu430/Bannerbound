@@ -13,9 +13,9 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * A cross-model ground plant that also takes root in SAND (plus the usual dirt/grass) — for desert
- * herbs like oleander, which the base {@link ForageFlowerBlock}'s {@link BushBlock} support (dirt/
- * farmland only) would never let grow. Otherwise identical: no collision, slim outline, cutout cross.
+ * A cross-model ground plant that also takes root in SAND (plus the usual dirt/grass), for desert
+ * herbs like oleander which the base ForageFlowerBlock's BushBlock support (dirt/farmland only) would
+ * never let grow. Otherwise identical: no collision, slim outline, cutout cross.
  */
 public class SandForagePlantBlock extends BushBlock {
     public static final MapCodec<SandForagePlantBlock> CODEC = simpleCodec(SandForagePlantBlock::new);

@@ -20,44 +20,32 @@ import net.minecraft.util.GsonHelper;
 import net.minecraft.util.profiling.ProfilerFiller;
 
 /**
- * Loads the global drop-override list from {@code data/<namespace>/drop_overrides/*.json}. These
- * are the explicit exceptions to the automatic "don't drop unknown items" filter — the hybrid
- * half of the gating system. Two modes:
- * <ul>
- *   <li>{@code always_drop}: this item drops even when the civ doesn't know it yet (force-allow).
- *       Used for bootstrap drops like bones, which must reach a fresh settlement before any
- *       research exists.</li>
- *   <li>{@code never_drop}: this item never drops, even when the civ does know it (force-block).
- *       Optionally scoped to a {@code sources} list of block- or entity-type ids; absent =
- *       applies to every source.</li>
- * </ul>
- * Example file:
- * <pre>
- * { "overrides": [
- *     { "item": "minecraft:bone", "mode": "always_drop" },
- *     { "item": "minecraft:wheat_seeds", "mode": "never_drop", "sources": ["minecraft:short_grass"] }
- * ] }
- * </pre>
- * Datapacks may drop additional files into the folder; all entries are merged. An {@code item}
- * with conflicting entries resolves {@code never_drop} (a global block) over {@code always_drop},
- * since an explicit block is the more restrictive intent.
+ * Loads the global drop-override list from {@code data/<namespace>/drop_overrides/*.json}: the
+ * explicit exceptions to the automatic "don't drop unknown items" filter - the hybrid half of
+ * the drop-gating system. Two modes per entry: {@code always_drop} forces the item to drop even
+ * when the civ doesn't know it yet (bootstrap drops like bones, which must reach a fresh
+ * settlement before any research exists); {@code never_drop} blocks the item even when known,
+ * optionally scoped by a {@code sources} list of block/entity-type ids. An entry with no
+ * {@code sources} blocks everywhere, recorded internally as the "*" sentinel so a later scoped
+ * entry from another file cannot accidentally narrow it. All files in the folder are merged;
+ * when the same item has conflicting entries, never_drop wins over always_drop (the explicit
+ * block is the more restrictive intent). {@code decide()} takes the broken block's or killed
+ * entity's id as sourceId, which may be null when the source is unknown (e.g. a felling-tree
+ * drop); DEFAULT means "no override - fall back to the automatic known-set check".
+ * Example entry: {@code {"item": "minecraft:wheat_seeds", "mode": "never_drop",
+ * "sources": ["minecraft:short_grass"]}}.
  */
 public class DropOverrideLoader extends SimpleJsonResourceReloadListener {
     public static final String FOLDER = "drop_overrides";
     private static final Gson GSON = new Gson();
 
     public enum Decision {
-        /** No override; fall back to the automatic known-set check. */
         DEFAULT,
-        /** Drop regardless of whether the item is known. */
         ALWAYS_DROP,
-        /** Never drop, regardless of whether the item is known. */
         NEVER_DROP
     }
 
-    /** item id -> always-drop. */
     private static volatile Set<String> ALWAYS_DROP = Set.of();
-    /** item id -> set of source ids it's blocked from; an empty set means "blocked everywhere". */
     private static volatile Map<String, Set<String>> NEVER_DROP = Map.of();
 
     public DropOverrideLoader() {
@@ -85,8 +73,6 @@ public class DropOverrideLoader extends SimpleJsonResourceReloadListener {
                                 sources.add(s.getAsString());
                             }
                         }
-                        // An entry with no "sources" means "block everywhere"; we record that as a
-                        // sentinel so a later scoped entry can't accidentally narrow it.
                         else {
                             sources.add(BLOCK_EVERYWHERE);
                         }
@@ -106,11 +92,6 @@ public class DropOverrideLoader extends SimpleJsonResourceReloadListener {
 
     private static final String BLOCK_EVERYWHERE = "*";
 
-    /**
-     * Resolves the override decision for {@code itemId} dropping from {@code sourceId} (the broken
-     * block's or killed entity's id; may be null when the source is unknown, e.g. a felling-tree
-     * drop). {@code never_drop} wins over {@code always_drop} when both name the same item.
-     */
     public static Decision decide(String itemId, @Nullable String sourceId) {
         Set<String> blockedSources = NEVER_DROP.get(itemId);
         if (blockedSources != null) {

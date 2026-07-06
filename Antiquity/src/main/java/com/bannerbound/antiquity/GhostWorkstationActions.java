@@ -22,8 +22,17 @@ import net.minecraft.world.level.block.Block;
 /**
  * Server side of the ghost-preview clicks ({@link GhostActionPayload}): browse arrows cycle the
  * candidate recipe, clicking the ghost result pulls the missing ingredients straight from the
- * player's inventory. On the crafting stone a completed pull also crafts immediately (mirroring
- * {@code CraftingStoneBlock.tryCraft}); the fletching station only fills — the stretch minigame
+ * player's inventory. Only trust the block-entity state here, not the click - the pile may have
+ * changed since the client ray-tested, so we act on either a live ghost preview or a solid
+ * exact-match result floating above the crafting stone. A citizen mid-craft owns the station
+ * (WorkBlockLocks), same rule as the block's own interactions.
+ *
+ * FILL is overloaded per station: the woodworking table and mason's bench queue one unit into their
+ * build list, the pottery slab locks its ghost, and other stations pull the missing ingredients. On
+ * the crafting stone a completed pull also crafts immediately (mirroring CraftingStoneBlock.tryCraft),
+ * but ONLY when the finished result still matches the recipe the player clicked - a partial pull can
+ * accidentally complete a different, smaller recipe (2 sticks = fire sticks while building a bone
+ * axe), which must never be auto-crafted. The fletching station only fills; its stretch minigame
  * stays mandatory, so the player still shift-clicks to start it.
  */
 @ApiStatus.Internal
@@ -35,26 +44,21 @@ public final class GhostWorkstationActions {
         if (!level.isLoaded(pos)) return;
         if (player.distanceToSqr(pos.getX() + 0.5, pos.getY() + 0.5, pos.getZ() + 0.5) > 64.0) return;
         if (!(level.getBlockEntity(pos) instanceof GhostRecipeWorkstation ws)) return;
-        // A citizen mid-craft owns the station (same rule as the block's own interactions).
         if (com.bannerbound.core.api.workshop.WorkBlockLocks.isLockedByOther(pos, player.getUUID())) {
             player.displayClientMessage(Component.translatable("bannerbound.workshop.station_busy")
                 .withStyle(ChatFormatting.YELLOW), true);
             return;
         }
-        // The pile may have changed since the client ray-tested. Act on either a live ghost preview
-        // OR a solid exact-match result floating above the crafting stone (clicking it crafts).
         boolean hasGhost = !ws.getGhostResult().isEmpty();
         boolean hasResult = !ws.getResult().isEmpty();
         if (!hasGhost && !hasResult) return;
         switch (action) {
             case GhostActionPayload.CYCLE_LEFT, GhostActionPayload.CYCLE_RIGHT -> {
-                if (!hasGhost) break;   // browse arrows only exist while a ghost preview is showing
+                if (!hasGhost) break;
                 ws.cycleGhost(action == GhostActionPayload.CYCLE_LEFT ? -1 : 1);
                 level.playSound(null, pos, SoundEvents.BOOK_PAGE_TURN, SoundSource.BLOCKS, 0.7F, 1.0F);
             }
             case GhostActionPayload.FILL -> {
-                // The carpenter's table reuses the ghost picker but FILL means "queue one unit of the
-                // selection into the build list" (it has no missing-ingredient pull).
                 if (ws instanceof com.bannerbound.antiquity.block.entity.WoodworkingTableBlockEntity table) {
                     if (table.addSelected()) {
                         level.playSound(null, pos, SoundEvents.UI_BUTTON_CLICK.value(),
@@ -64,7 +68,6 @@ public final class GhostWorkstationActions {
                             SoundSource.BLOCKS, 0.4F, 0.7F);
                     }
                 } else if (ws instanceof com.bannerbound.antiquity.block.entity.MasonsBenchBlockEntity bench) {
-                    // The mason's bench reuses the ghost picker: FILL queues one unit of the selection.
                     if (bench.addSelected()) {
                         level.playSound(null, pos, SoundEvents.UI_BUTTON_CLICK.value(),
                             SoundSource.BLOCKS, 0.5F, 1.2F);
@@ -78,12 +81,8 @@ public final class GhostWorkstationActions {
                     level.playSound(null, pos, SoundEvents.UI_BUTTON_CLICK.value(),
                         SoundSource.BLOCKS, 0.5F, 1.2F);
                 } else if (hasGhost) {
-                    // Partial pile with a ghost preview → pull the missing ingredients (and, on the
-                    // crafting stone, craft if that completes the chosen recipe).
                     fill(player, level, pos, ws);
                 } else if (ws instanceof CraftingStoneBlockEntity be && !be.getResult().isEmpty()) {
-                    // Exact recipe already on the stone, no ghost — clicking the floating result
-                    // crafts it (the no-shift craft the player expects from the preview).
                     ItemStack out = be.craft();
                     Block.popResource(level, pos.above(), out);
                     level.playSound(null, pos, BannerboundAntiquity.KNAPPING_SOUND.get(),
@@ -94,19 +93,12 @@ public final class GhostWorkstationActions {
         }
     }
 
-    /** Pulls as many of the missing ingredients as the player has into the station, then — on the
-     *  crafting stone — crafts immediately if that completed the pile. */
     private static void fill(ServerPlayer player, Level level, BlockPos pos, GhostRecipeWorkstation ws) {
-        // Clicking the recipe is an explicit choice — lock it so later inserts can't switch it.
         ws.lockGhost();
-        // Remember WHICH recipe is being filled: a partial pull can complete a different, smaller
-        // recipe by accident (2 sticks = fire sticks while building a bone axe) and that must not
-        // be auto-crafted.
         ItemStack target = ws.getGhostResult().copy();
         Direction from = player.getDirection().getOpposite();
         boolean any = false;
-        // Snapshot — each insertOne() recomputes the ghost and shrinks this list under us. The
-        // sticky selection keeps the same recipe chosen while its ingredients land.
+        // Snapshot: each insertOne() recomputes the ghost and shrinks this list under us.
         for (ItemStack miss : List.copyOf(ws.getGhostIngredients())) {
             int want = miss.getCount();
             for (int slot = 0; slot < player.getInventory().getContainerSize() && want > 0; slot++) {
@@ -128,6 +120,7 @@ public final class GhostWorkstationActions {
             return;
         }
         level.playSound(null, pos, SoundEvents.ITEM_PICKUP, SoundSource.BLOCKS, 0.4F, 1.1F);
+        // Auto-craft only if the completed pile still matches the clicked recipe (else a partial pull crafts a smaller one, e.g. fire sticks).
         if (ws instanceof CraftingStoneBlockEntity be && !be.getResult().isEmpty()
                 && be.getResult().is(target.getItem())) {
             ItemStack out = be.craft();

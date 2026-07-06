@@ -13,44 +13,48 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * One barbarian camp. Mutable record-style class persisted inside {@link BarbarianData} (mirrors the
+ * One barbarian camp: a mutable, record-style class persisted inside {@link BarbarianData} (mirrors the
  * {@code DiplomacyRelation}/{@code StolenStandard} inner-class save/load pattern in SettlementData).
+ * {@link #center} is the banner anchor and {@link #bannerPos} the raze target (equal to center until the
+ * structure is stamped). Camps never grow: {@link #memberTarget} is a fixed headcount that doubles as
+ * the respawn target on realize. A camp has two independent defeat conditions -- every commander killed
+ * ({@link #commandersDefeated}) AND the central standard razed ({@link #bannerRazed}) -- and is only
+ * {@link #clearable} when both hold.
  *
- * <p>Live entity handles ({@link #commanderIds}/{@link #rosterIds}) are NOT saved — camp NPCs are
- * {@code markSimulated()} and never serialize; they respawn from {@link #memberTarget} on approach.
- * Defeat progress survives via the persisted {@link #commandersKilled} counter instead of resolving
- * stale UUIDs offscreen. {@link #realized} is transient and forced false on load.
+ * <p>Save-format invariants. Live entity handles ({@link #commanderIds}/{@link #rosterIds}) and
+ * {@link #realized} are transient: camp NPCs are {@code markSimulated()} and never serialize, so they
+ * respawn from {@link #memberTarget} on approach and {@code realized} is forced false on load. Defeat
+ * progress therefore survives ONLY via the persisted {@link #commandersKilled} counter -- never resolve
+ * stale UUIDs offscreen. {@link #graceUntil} records settlements that took the "we'll get it for you"
+ * grace on a demand, keyed to the game-tick the tribute falls due.
  */
 public final class BarbarianCamp {
     public final UUID id;
     public CampType type;
-    public BlockPos center;          // banner anchor
-    public BlockPos bannerPos;       // the raze target (== center until stamped)
-    public ResourceLocation biome;   // resolved once at seed time
-    public long languageSeed;        // type-biased deterministic seed
-    public String name = "";         // the camp's name in its own tongue (e.g. "Ratakusupria")
-    public int memberTarget;         // fixed headcount (camps do NOT grow); respawn target on realize
-    public int commanderCount;       // total commanders; defeat needs commandersKilled >= this
-    public int commandersKilled;     // PERSISTED defeat progress (do not rely on UUIDs offscreen)
-    public int raidDifficulty;       // escalation counter, ++ on failed raid
+    public BlockPos center;
+    public BlockPos bannerPos;
+    public ResourceLocation biome;
+    public long languageSeed;
+    public String name = "";
+    public int memberTarget;
+    public int commanderCount;
+    public int commandersKilled;
+    public int raidDifficulty;
     public long lastRaidTick;
     public long nextScoutTick;
     public long nextDriftTick;
     public boolean razed;
-    public boolean bannerRazed;      // the central standard has been broken (one defeat condition)
-    public boolean structureStamped; // props placed at least once
+    public boolean bannerRazed;
+    public boolean structureStamped;
 
-    // Live-only (never serialized; cleared on ghostify / forced empty on load).
     public final transient Set<UUID> commanderIds = new HashSet<>();
     public final transient Set<UUID> rosterIds = new HashSet<>();
     public transient boolean realized;
 
-    // Per player-settlement relationship.
     public final Map<UUID, Integer> relScore = new HashMap<>();
     public final Map<UUID, CampRelationState> relState = new HashMap<>();
     public final Set<UUID> discoveredBy = new HashSet<>();
-    public final Set<UUID> reachedBy = new HashSet<>(); // settlements whose player has stood at the camp
-    // Settlements that took the "we'll get it for you" grace on a demand → game-tick the tribute is due.
+    public final Set<UUID> reachedBy = new HashSet<>();
     public final Map<UUID, Long> graceUntil = new HashMap<>();
 
     public BarbarianCamp(UUID id, CampType type, BlockPos center, ResourceLocation biome) {
@@ -65,12 +69,10 @@ public final class BarbarianCamp {
         this.id = id;
     }
 
-    /** Stance toward a settlement, defaulting to the type's baseline if first contact. */
     public CampRelationState relationToward(UUID settlementId) {
         return relState.getOrDefault(settlementId, type.defaultRelation());
     }
 
-    /** Records that {@code settlementId} owes a deferred tribute, due at {@code deadlineTick}. */
     public void setGrace(UUID settlementId, long deadlineTick) {
         graceUntil.put(settlementId, deadlineTick);
     }
@@ -79,22 +81,18 @@ public final class BarbarianCamp {
         graceUntil.remove(settlementId);
     }
 
-    /** Tick the settlement's deferred tribute is due, or 0 if none is outstanding. */
     public long graceDeadline(UUID settlementId) {
         return graceUntil.getOrDefault(settlementId, 0L);
     }
 
-    /** All commanders have been killed (one of the two defeat conditions). */
     public boolean commandersDefeated() {
         return commandersKilled >= commanderCount && commanderCount > 0;
     }
 
-    /** Ready for permanent clearing: every commander dead AND the standard razed. */
     public boolean clearable() {
         return commandersDefeated() && bannerRazed;
     }
 
-    /** Commanders still to spawn on realize (finite — killed commanders never come back). */
     public int liveCommanderCount() {
         return Math.max(0, commanderCount - commandersKilled);
     }
@@ -178,7 +176,7 @@ public final class BarbarianCamp {
         camp.razed = tag.getBoolean("Razed");
         camp.bannerRazed = tag.getBoolean("BannerRazed");
         camp.structureStamped = tag.getBoolean("StructureStamped");
-        camp.realized = false; // entities are never saved; respawn on approach
+        camp.realized = false;
 
         ListTag rel = tag.getList("Relations", Tag.TAG_COMPOUND);
         for (int i = 0; i < rel.size(); i++) {

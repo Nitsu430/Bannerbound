@@ -23,9 +23,26 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 /**
- * Server handlers for the wall-preview screen's payload family — thin glue over
+ * Server handlers for the wall-preview screen's payload family - thin glue over
  * {@link WallService} (the same verbs the {@code /bannerbound walls} commands use). Every
- * action replies with a refreshed {@code OpenWallPreview} so the open screen re-renders.
+ * action runs on the main thread (context.enqueueWork) and replies with a refreshed
+ * OpenWallPreview so the open screen re-renders. All wall feedback goes through the in-screen
+ * status banner, never chat (chat bloat, playtest 2026-06-12); it falls back to the client's
+ * action bar when no wall screen is open.
+ *
+ * <p>The save path never trusts the client: it rebuilds the WallDesign with a server-owned id
+ * (a slug of the player name + kind, so re-saving the same name overwrites and a new name makes
+ * a new library entry), then re-validates geometry, that every palette block is researched by
+ * the settlement, and that a GATE design has at least one pathable opening (fence gate / door
+ * tag). A draft save is a silent autosave of the working copy - persisted in world data, no
+ * validation beyond geometry, never activated, never entering the layout resolver - so closing
+ * the designer never loses work; drafts ride the OpenWallDesigner payload and override the
+ * active set in the editor.
+ *
+ * <p>Preview payload: every design the pieces reference rides along deduped in insertion order,
+ * and each PieceLite carries its index into that list so per-piece variants render their real
+ * blocks client-side. planCurrent = the committed plan still matches the previewed layout;
+ * false means the built wall is an older design and the "% built" headline must say so.
  */
 @ApiStatus.Internal
 public final class WallNetworkHandlers {
@@ -33,8 +50,6 @@ public final class WallNetworkHandlers {
     private WallNetworkHandlers() {
     }
 
-    /** All wall feedback goes through the in-screen status banner — never chat ("a lot of
-     *  chat bloat", playtest 2026-06-12). Falls back to the action bar client-side. */
     private static void status(ServerPlayer player, String message, boolean error) {
         PacketDistributor.sendToPlayer(player, new WallScreenPayloads.WallStatus(message, error));
     }
@@ -73,8 +88,6 @@ public final class WallNetworkHandlers {
             Settlement settlement = settlementOf(player);
             if (settlement == null) return;
             if (payload.show()) {
-                // Sender-only ghosts of the layout AS PREVIEWED (gates included, nothing
-                // committed). Placement tracking stays keyed to the committed plan.
                 com.bannerbound.core.api.walls.WallSync.sendPlanPreview(player, settlement,
                     WallService.computeLayout(player.serverLevel(), settlement).plan());
             } else {
@@ -176,12 +189,8 @@ public final class WallNetworkHandlers {
         });
     }
 
-    /** Builds and ships the designer payload — also used to refresh an OPEN designer's
-     *  library list in place after save/delete. */
     private static void sendDesigner(ServerPlayer player, Settlement settlement, ServerLevel level) {
         var designs = WallService.designs(level, settlement);
-        // Picker candidates: BlockItems the settlement's knowledge system recognizes —
-        // the same gate every worker yield passes (unknown items never reach players).
         it.unimi.dsi.fastutil.ints.IntArrayList known = new it.unimi.dsi.fastutil.ints.IntArrayList();
         it.unimi.dsi.fastutil.ints.IntArrayList owned = new it.unimi.dsi.fastutil.ints.IntArrayList();
         for (net.minecraft.world.item.Item item : net.minecraft.core.registries.BuiltInRegistries.ITEM) {
@@ -192,12 +201,9 @@ public final class WallNetworkHandlers {
                 continue;
             }
             known.add(net.minecraft.core.registries.BuiltInRegistries.ITEM.getId(item));
-            // "Owned" = actually on hand: settlement stockpiles + the requester's inventory.
             owned.add(com.bannerbound.core.stockpile.StockpileService.count(level, settlement, item)
                 + player.getInventory().countItem(item));
         }
-        // Unsaved drafts (designer autosave on close) ride along and override the active
-        // set in the editor — Escape never loses work.
         WallData walls = WallData.get(level);
         List<com.bannerbound.core.api.walls.WallDesign> drafts = new ArrayList<>();
         for (com.bannerbound.core.api.walls.WallDesign.Kind kind
@@ -220,10 +226,6 @@ public final class WallNetworkHandlers {
             ServerLevel level = player.serverLevel();
             com.bannerbound.core.api.walls.WallDesign incoming = payload.design();
 
-            // Never trust the client: rebuild with a server-owned id and validate. Saved
-            // designs key on a SLUG of the player-given name + kind ("variants are designs
-            // the player made and saved", playtest 2026-06-12) — same name overwrites,
-            // new name = new library entry.
             String kindName = incoming.kind().name().toLowerCase(java.util.Locale.ROOT);
             String serverId = payload.draft() ? "draft_" + kindName
                 : "u_" + slug(incoming.name()) + "_" + kindName;
@@ -238,8 +240,6 @@ public final class WallNetworkHandlers {
             }
             WallData walls = WallData.get(level);
             if (payload.draft()) {
-                // Silent autosave of the working copy (designer close) — no validation
-                // beyond geometry, never activated, never enters the layout resolver.
                 walls.setDraft(settlement.id(), design);
                 return;
             }
@@ -269,17 +269,12 @@ public final class WallNetworkHandlers {
             }
             walls.upsertDesign(settlement.id(), design);
             walls.setActiveId(settlement.id(), design.kind(), design.id());
-            // Draft mirrors the saved state so reopening the designer shows what was saved.
             walls.setDraft(settlement.id(), design);
-            // Generic text: the client saves all three kinds in one click; identical banners
-            // overwrite invisibly while a per-kind error (banner gives errors priority) sticks.
             status(player, "Designs saved & set active — re-run Construct to apply.", false);
-            // Refresh the open designer's library list in place.
             sendDesigner(player, settlement, level);
         });
     }
 
-    /** Lowercase-alnum slug of a player-given design name (id-safe, never empty). */
     private static String slug(String name) {
         String s = name.toLowerCase(java.util.Locale.ROOT)
             .replaceAll("[^a-z0-9]+", "_")
@@ -306,7 +301,6 @@ public final class WallNetworkHandlers {
         });
     }
 
-    /** GATE rule: at least one openable block (fence gate / door tag) somewhere in the grid. */
     private static boolean hasPathableOpening(com.bannerbound.core.api.walls.WallDesign design) {
         for (int l = 0; l < design.length(); l++) {
             for (int d = 0; d < design.depth(); d++) {
@@ -322,13 +316,10 @@ public final class WallNetworkHandlers {
         return false;
     }
 
-    /** Builds and sends a fresh preview: territory base payload + the previewed wall pieces. */
     public static void sendPreview(ServerPlayer player, Settlement settlement) {
         sendPreview(player, settlement, false);
     }
 
-    /** {@code openRefine} = the client should open the 3D refinement view directly (the
-     *  {@code /bannerbound walls refine} shortcut — no menu chain just to test heights). */
     public static void sendPreview(ServerPlayer player, Settlement settlement, boolean openRefine) {
         ServerLevel overworld = player.getServer().overworld();
         ServerLevel level = player.serverLevel();
@@ -337,9 +328,6 @@ public final class WallNetworkHandlers {
         WallLayoutEngine.LayoutResult result = WallService.computeLayout(level, settlement);
         java.util.function.Function<String, com.bannerbound.core.api.walls.WallDesign> resolver =
             WallService.resolver(level, settlement);
-        // Every design the pieces reference (dedup, insertion order) rides the payload; each
-        // piece carries its INDEX into that list — per-piece variants render their real
-        // blocks client-side without any kind-based guessing.
         java.util.Map<String, Integer> designIndexById = new java.util.LinkedHashMap<>();
         List<com.bannerbound.core.api.walls.WallDesign> referencedDesigns = new ArrayList<>();
         List<WallScreenPayloads.PieceLite> pieces = new ArrayList<>(result.plan().pieces().size());
@@ -368,9 +356,6 @@ public final class WallNetworkHandlers {
             completeness = WallProgress.scan(level, committed,
                 WallService.resolver(level, settlement)).percent();
         }
-        // planCurrent: does the COMMITTED plan still match what's being previewed? False
-        // after design/gate/territory changes — the built wall is an OLDER design and the
-        // "% built" headline must say so (playtest 2026-06-12).
         boolean planCurrent = committed != null
             && samePieces(committed.pieces(), result.plan().pieces());
         var activeSet = WallService.designs(level, settlement);
@@ -379,7 +364,6 @@ public final class WallNetworkHandlers {
                 activeSet.gate().length(), openRefine, planCurrent, referencedDesigns));
     }
 
-    /** Piece-list identity for planCurrent: same count and per-slot geometry/design/height. */
     private static boolean samePieces(List<WallPiece> a, List<WallPiece> b) {
         if (a.size() != b.size()) return false;
         for (int i = 0; i < a.size(); i++) {

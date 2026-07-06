@@ -13,9 +13,10 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Client-only mixin: when an item is unknown to the local player's civ, override the hover name to
- * "Unknown item" (red). This drives the hotbar selector name, anvil display, chat hover, and the
- * tooltip's first line — basically every surface that asks ItemStack what to call itself.
+ * Client-only hover-name override. When an item is unknown to the local player's civ the name
+ * becomes "Unknown item" (red); otherwise a per-civ language name (if any) from ClientLanguageState
+ * is substituted. Because getHoverName backs the hotbar selector, anvil display, chat hover, and the
+ * tooltip's first line, this one hook covers every surface that asks ItemStack what to call itself.
  */
 @Mixin(ItemStack.class)
 @ApiStatus.Internal

@@ -12,6 +12,8 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
+/** S->C full replacement of the client's claim overlay: every claimed chunk visible to the viewer
+ *  as {@link ClaimEntry} rows. Handled by ClientClaimState.replaceAll. */
 @ApiStatus.Internal
 public record ClaimSyncPayload(List<ClaimEntry> claims) implements CustomPacketPayload {
     public static final CustomPacketPayload.Type<ClaimSyncPayload> TYPE =

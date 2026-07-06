@@ -29,34 +29,30 @@ import net.minecraft.world.item.Items;
  * placeholder (flat accrual toward a pop cap + flat tech timer).
  *
  * <p>Everything is priced in {@link ItemValue} units and runs on {@code CityStateManager}'s 600-tick
- * economy clock (40 ticks/day) with a once-a-day pass on the day rollover — pure map arithmetic over
- * numbers persisted by the {@code realizePass} grounding scans, so it never loads a chunk.
+ * economy clock (40 ticks/day) with a once-a-day pass on the day rollover -- pure map arithmetic over
+ * numbers persisted by the {@code realizePass} grounding scans, so it never loads a chunk. The caller
+ * has already skipped frozen city-states before {@link #tick} runs.
  *
  * <p>What a city-state produces comes from the data-driven catalog ({@link CityStateGoodsLoader}),
- * gated three ways: biome family × its own adopted tech × specialized resource chunks in its
- * territory, weighted by the village's real job-site POIs. What it DEMANDS (and pays a premium for —
- * the market for player surplus, consumed by trade in P4) is ranked: tech-gap &gt; biome complement
- * &gt; the authored wants ladder.
+ * gated three ways: biome family x its own adopted tech x specialized resource chunks in its
+ * territory, weighted by the village's real job-site POIs. What it DEMANDS (and pays a premium for --
+ * the market for player surplus, consumed by trade in P4) is ranked: tech-gap (knows the tech, lacks
+ * the chunk) > biome complement > the authored wants ladder, deterministic per (city-state, day) so
+ * the picks don't flicker. The hard cap -- a city-state is never ahead of players on tech -- is
+ * enforced by the {@code techCap} set passed in, never here. Tuning constants are ItemValue units and
+ * in-game days; see the plan's calibration section.
  */
 @ApiStatus.Internal
 public final class CityStateEconomy {
-    // ─── Tuning (all in ItemValue units "v" and in-game days; see the plan's calibration section) ──
-    /** Gross production value per citizen per day, before multipliers. */
     private static final double GROSS_VALUE_PER_POP_DAY = 2.0;
-    /** Food value each citizen eats per day (half the baseline gross → surplus is structural). */
     private static final double EAT_VALUE_PER_POP_DAY = 1.0;
-    /** Non-food value drained per citizen per day from imported/demanded goods — keeps demand recurring. */
     private static final double WANT_DRAIN_PER_POP_DAY = 0.25;
-    /** A good's stock cap = this many days of its own production (a real granary, not a magic refill). */
     private static final int STOCK_DAYS = 8;
-    /** Tech progress per economy tick at P=1, pop=24, MEDIUM (see evolve() for the full formula). */
     private static final double TECH_RATE = 0.009;
     private static final int DEMAND_SLOTS = 3;
-    /** Demand quantity ≈ this much value per citizen. */
     private static final double DEMAND_VALUE_PER_POP = 1.5;
     private static final int DEMAND_EXPIRE_DAYS = 5;
     private static final int DEMAND_COOLDOWN_DAYS = 3;
-    /** Give-side valuation premium for items on an active demand (used by the P4 TradeEvaluator). */
     public static final double DEMAND_PREMIUM = 1.30;
     private static final int ECONOMY_TICKS_PER_DAY = 40; // 24000 / ECONOMY_INTERVAL_TICKS(600)
     private static final int MAX_POP = 64;
@@ -64,21 +60,14 @@ public final class CityStateEconomy {
     private CityStateEconomy() {
     }
 
-    // ─── Per-economy-tick entry (caller has already skipped frozen city-states) ────────────────────
-
-    /** One economy tick: produce → consume → evolve, plus the daily pass on a day rollover. */
     public static void tick(CityState cs, long gameTime, Set<String> techCap) {
         long today = gameTime / 24000L;
         produce(cs);
         consume(cs);
         evolve(cs, techCap);
-        // Bootstrap: don't make a fresh (or fully-satisfied) city-state wait for the day rollover to
-        // want things — an empty demand board refills immediately, the daily pass handles the rest.
         if (cs.demands.isEmpty()) refillDemands(cs, today);
         if (today > cs.dayIndex) dailyPass(cs, today);
     }
-
-    // ─── Production ────────────────────────────────────────────────────────────────────────────────
 
     private static void produce(CityState cs) {
         ActiveGoods ag = activeGoods(cs);
@@ -101,7 +90,6 @@ public final class CityStateEconomy {
             int cap = Math.max(4, (int) Math.ceil(STOCK_DAYS * itemsPerDay));
             Integer cur = cs.ledger.get(g.item);
             if (cur == null) {
-                // First time this good is active — towns aren't empty on discovery.
                 cs.ledger.put(g.item, cap / 2);
                 continue;
             }
@@ -112,8 +100,6 @@ public final class CityStateEconomy {
             cs.prodRemainder.put(g.item, rem - whole);
         }
     }
-
-    // ─── Consumption (food eaten cheapest-first; imported wants used up so demand recurs) ──────────
 
     private static void consume(CityState cs) {
         double foodNeed = cs.believedPop * EAT_VALUE_PER_POP_DAY / ECONOMY_TICKS_PER_DAY;
@@ -156,8 +142,6 @@ public final class CityStateEconomy {
         }
     }
 
-    // ─── Evolution (prosperity-driven; the hard cap — never ahead of players — is untouched) ───────
-
     private static void evolve(CityState cs, Set<String> techCap) {
         double p = cs.prosperity;
         cs.techProgress += TECH_RATE * (p * p / 1.5)
@@ -166,14 +150,12 @@ public final class CityStateEconomy {
         for (String id : techCap) {
             if (cs.knownTech.add(id)) {
                 cs.techProgress = 0.0;
-                cs.activeGoodsCache = null; // new tech may activate catalog goods
+                cs.activeGoodsCache = null;
                 return;
             }
         }
-        cs.techProgress = 1.0; // at the cap — wait for players to push the frontier
+        cs.techProgress = 1.0;
     }
-
-    // ─── Daily pass (fed ratio, trade decay, demand slots, prosperity, pop drift) ──────────────────
 
     private static void dailyPass(CityState cs, long today) {
         long elapsed = Math.max(1, today - cs.dayIndex);
@@ -190,12 +172,11 @@ public final class CityStateEconomy {
         cs.demandCooldowns.values().removeIf(until -> until <= today);
         refillDemands(cs, today);
 
-        // Cooldown entries double as the "recently satisfied" record (set for 3 days on satisfy).
         double demandScore = Math.min(1.0, cs.demandCooldowns.size() / (double) DEMAND_SLOTS);
         double tradeScore = Math.min(1.0, cs.tradeVolume / (cs.believedPop * 10.0));
         double target = 0.8 * cs.fedRatio + 0.8 * tradeScore + 0.4 * demandScore;
         target = Math.max(0.0, Math.min(2.0, target));
-        double blend = Math.min(0.65, 0.10 * elapsed); // catch up after idle days, never overshoot
+        double blend = Math.min(0.65, 0.10 * elapsed);
         cs.prosperity += (target - cs.prosperity) * blend;
         cs.prosperity = Math.max(0.0, Math.min(2.0, cs.prosperity));
 
@@ -209,9 +190,6 @@ public final class CityStateEconomy {
         cs.dayIndex = today;
     }
 
-    /** Fills empty demand slots from the ranked candidate pools: tech-gap (knows the tech, lacks the
-     *  chunk — the AI-side "bronze needs tin" trade) &gt; biome complement &gt; the authored wants
-     *  ladder. Deterministic per (city-state, day) so the picks don't flicker. */
     private static void refillDemands(CityState cs, long today) {
         if (cs.demands.size() >= DEMAND_SLOTS) return;
         ActiveGoods ag = activeGoods(cs);
@@ -227,9 +205,9 @@ public final class CityStateEconomy {
             boolean techOk = def.requiresTech() == null || cs.knownTech.contains(def.requiresTech());
             if (!techOk) continue;
             if (def.requiresTech() != null && !chunksSatisfied(cs, def)) {
-                pool.add(new Candidate(def.item(), 3, order(cs, today, def.item()))); // tech-gap
+                pool.add(new Candidate(def.item(), 3, order(cs, today, def.item())));
             } else if (!def.biomes().isEmpty() && !biomeMatches(biomePath, def.biomes())) {
-                pool.add(new Candidate(def.item(), 2, order(cs, today, def.item()))); // biome complement
+                pool.add(new Candidate(def.item(), 2, order(cs, today, def.item())));
             }
         }
         for (CityStateWantsLoader.WantDef w : CityStateWantsLoader.wants()) {
@@ -256,11 +234,6 @@ public final class CityStateEconomy {
         return h ^ (h >>> 33);
     }
 
-    // ─── Trade hook (P4 calls this on delivery; wired now so the interface is stable) ──────────────
-
-    /** Credits delivered goods into the ledger, fulfils matching demand slots (relScore +5 when a
-     *  slot completes), tracks non-food as imports (so wants-drain uses them up), and feeds
-     *  {@code tradeVolume} → prosperity. Call for every completed player→city-state delivery. */
     public static void onGoodsDelivered(CityState cs, UUID fromSettlement, String itemId, int count) {
         if (count <= 0) return;
         cs.ledger.merge(itemId, count, Integer::sum);
@@ -277,12 +250,8 @@ public final class CityStateEconomy {
         }
     }
 
-    // ─── Active-goods resolution (cached per city-state; cheap staleness checks) ───────────────────
-
-    /** One producible good, resolved against a specific city-state. */
     public record ActiveGood(String item, double effectiveWeight, int unitValue) {}
 
-    /** The resolved catalog for one city-state, with the inputs it was computed from. */
     public static final class ActiveGoods {
         final List<ActiveGood> food = new ArrayList<>();
         final List<ActiveGood> nonFood = new ArrayList<>();
@@ -293,8 +262,6 @@ public final class CityStateEconomy {
         private int scanStamp;
     }
 
-    /** The city-state's currently-active goods, recomputed when the catalog reloads, tech is adopted,
-     *  or the grounding scans learn something new. */
     public static ActiveGoods activeGoods(CityState cs) {
         ActiveGoods cached = cs.activeGoodsCache;
         int gen = CityStateGoodsLoader.generation();
@@ -315,7 +282,7 @@ public final class CityStateEconomy {
             boolean chunkMatched = chunksSatisfied(cs, def);
             if (!def.requiresChunks().isEmpty() && !chunkMatched) continue;
             int unit = unitValue(def.item());
-            if (unit <= 0) continue; // unregistered item id — skip quietly (datapack typo)
+            if (unit <= 0) continue;
             double poiMult = def.poi() == null ? 1.0
                 : Math.min(3.0, Math.pow(1.5, cs.jobPois.getOrDefault(def.poi(), 0)));
             double w = def.weight() * poiMult
@@ -342,8 +309,6 @@ public final class CityStateEconomy {
         return true;
     }
 
-    // ─── Item helpers (unitValue walks tags — cache per catalog generation) ────────────────────────
-
     private static final Map<String, Integer> VALUE_CACHE = new HashMap<>();
     private static int valueCacheGeneration = -1;
 
@@ -361,10 +326,6 @@ public final class CityStateEconomy {
         return item != null && FoodValueLoader.base(item) > 0;
     }
 
-    /** True if the city-state itself "recognizes" this item — a global starting item, or unlocked by
-     *  a research it has adopted. The city-state analogue of {@code ItemKnowledge.isKnown} (which
-     *  needs a Settlement); keeps demands honest: a tech-0 village never seeks research-gated goods
-     *  like salt, and the wants board upgrades itself as the town evolves. */
     private static boolean knowsItem(CityState cs, String itemId) {
         Item item = resolve(itemId);
         if (item == null) return false;
@@ -384,9 +345,6 @@ public final class CityStateEconomy {
         return item == Items.AIR ? null : item;
     }
 
-    // ─── Read-only views for the Diplomacy tab (and the P4 trade screen) ───────────────────────────
-
-    /** The city-state's best-stocked goods (by total value), for the read-only diplomacy row. */
     public static List<String> topGoods(CityState cs, int limit) {
         List<Map.Entry<String, Integer>> held = new ArrayList<>();
         for (Map.Entry<String, Integer> e : cs.ledger.entrySet()) {
@@ -399,7 +357,6 @@ public final class CityStateEconomy {
         return out;
     }
 
-    /** Total ledger worth in ItemValue units — the one number that shows off-screen accrual moving. */
     public static int totalStockValue(CityState cs) {
         int total = 0;
         for (Map.Entry<String, Integer> e : cs.ledger.entrySet()) {
@@ -408,7 +365,6 @@ public final class CityStateEconomy {
         return total;
     }
 
-    /** Debug view: "wheat×23, cow_hide×9, …" for the best-stocked goods (item paths, no namespace). */
     public static String stockSummary(CityState cs, int limit) {
         List<String> top = topGoods(cs, limit);
         StringBuilder sb = new StringBuilder();
@@ -421,7 +377,6 @@ public final class CityStateEconomy {
         return sb.toString();
     }
 
-    /** Item ids of the active demand slots (what the city-state pays a premium for). */
     public static List<String> demandItems(CityState cs) {
         List<String> out = new ArrayList<>(cs.demands.size());
         for (CityState.Demand d : cs.demands) {

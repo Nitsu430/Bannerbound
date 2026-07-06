@@ -12,18 +12,11 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client → server: a mason's-bench interaction.
- * <ul>
- *   <li>{@link #COMPLETE} / {@link #CANCEL} — end of the chisel-strike minigame (session-based;
- *       {@code index} unused).</li>
- *   <li>{@link #REMOVE_QUEUE} — right-clicked the in-world queue item at {@code index}; the server
- *       removes that queued output.</li>
- * </ul>
- * (Add-to-queue and browse-cycle reuse the shared ghost-preview path — {@code GhostActionPayload}.)
- *
- * @param pos    the bench
- * @param action one of {@link #COMPLETE} / {@link #CANCEL} / {@link #REMOVE_QUEUE}
- * @param index  the queue slot for {@link #REMOVE_QUEUE} (else ignored)
+ * Client -> server: a mason's-bench interaction at {@code pos}. COMPLETE / CANCEL end the
+ * chisel-strike minigame (session-based; {@code index} is unused and sent as -1). REMOVE_QUEUE
+ * means the player right-clicked the in-world queue item at slot {@code index}; the server removes
+ * that queued output. Add-to-queue and browse-cycle reuse the shared ghost-preview path
+ * ({@code GhostActionPayload}).
  */
 @ApiStatus.Internal
 public record MasonryActionPayload(BlockPos pos, int action, int index) implements CustomPacketPayload {

@@ -12,15 +12,16 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
 /**
- * Small helpers for "does the player have N of item X across their inventory?" + bulk consume.
- * Both are atomic-as-needed: {@link #consume} only writes if {@link #countAll(ServerPlayer, java.util.List)}
- * confirms every line item has enough. Used by the chunk-claim expansion handler to charge a tier.
+ * Inventory count/consume helpers for the chunk-claim expansion handler: "does the player hold N of
+ * item X across main + armor + offhand?" (countItem / hasAll) and the matching bulk removal
+ * (consume). consume assumes feasibility -- callers MUST gate it behind hasAll; it removes greedily
+ * across slots and returns false only on an impossible mid-consume state (partial removal possible)
+ * that a caller should treat as a fatal bug.
  */
 @ApiStatus.Internal
 public final class InventoryItemHelper {
     private InventoryItemHelper() {}
 
-    /** Count how many of {@code item} the player has across main / armor / offhand inventories. */
     public static int countItem(ServerPlayer player, Item item) {
         Inventory inv = player.getInventory();
         int total = 0;
@@ -30,7 +31,6 @@ public final class InventoryItemHelper {
         return total;
     }
 
-    /** True if the player has at least {@code cost.count()} of each item listed in {@code costs}. */
     public static boolean hasAll(ServerPlayer player, List<ChunkClaimCost.ItemCost> costs) {
         for (ChunkClaimCost.ItemCost c : costs) {
             if (countItem(player, c.item()) < c.count()) return false;
@@ -38,9 +38,6 @@ public final class InventoryItemHelper {
         return true;
     }
 
-    /** Consume the listed costs. Caller must have called {@link #hasAll} first — this method
-     *  assumes feasibility and removes greedily across inventory slots. Returns false if anything
-     *  went wrong mid-consume (partial state possible; caller should treat as a fatal bug). */
     public static boolean consume(ServerPlayer player, List<ChunkClaimCost.ItemCost> costs) {
         Inventory inv = player.getInventory();
         for (ChunkClaimCost.ItemCost c : costs) {
@@ -53,7 +50,6 @@ public final class InventoryItemHelper {
         return true;
     }
 
-    /** Counts every stack matching {@code item} in {@code stacks}. */
     private static int sumOf(List<ItemStack> stacks, Item item) {
         int n = 0;
         for (ItemStack s : stacks) {
@@ -62,8 +58,6 @@ public final class InventoryItemHelper {
         return n;
     }
 
-    /** Removes up to {@code wanted} items of {@code item} from {@code stacks}. Returns the
-     *  amount still owed (0 = fully satisfied). */
     private static int removeFrom(List<ItemStack> stacks, Item item, int wanted) {
         for (int i = 0; i < stacks.size() && wanted > 0; i++) {
             ItemStack s = stacks.get(i);

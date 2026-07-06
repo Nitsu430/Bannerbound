@@ -12,6 +12,7 @@ import net.neoforged.api.distmarker.OnlyIn;
  * Client-side hold for the settlement's current unrest warnings (see
  * {@link com.bannerbound.core.network.SettlementWarningsPayload}). Pushed by the server alongside
  * the town-hall open; read by {@code TownHallScreen}'s Main tab. An empty list means "all clear".
+ * {@code clear()} wipes it on disconnect so stale warnings don't carry into the next world.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -26,6 +27,5 @@ public final class ClientSettlementWarningsState {
 
     public static List<Component> get() { return warnings; }
 
-    /** Wipe on disconnect so stale warnings don't carry into the next world. */
     public static void clear() { warnings = List.of(); }
 }

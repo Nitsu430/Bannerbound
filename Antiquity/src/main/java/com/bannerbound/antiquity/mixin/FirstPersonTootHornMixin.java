@@ -25,7 +25,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * transforms then position it at the mouth. Third person is already handled natively by vanilla's
  * {@code TOOT_HORN} arm pose.
  *
- * <p>Injected before the <em>second</em> {@code renderItem} call (ordinal 1 — the one inside the
+ * <p>Injected before the <em>second</em> {@code renderItem} call (ordinal 1, the one inside the
  * generic using/swinging branch), and guarded to the exact "is using this item in this hand" condition
  * vanilla's switch checks, so non-using items (which already had their transform applied) are untouched.
  */

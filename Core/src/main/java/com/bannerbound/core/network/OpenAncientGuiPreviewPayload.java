@@ -10,9 +10,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server→client nudge to open {@link com.bannerbound.core.client.AncientWorldBoxScreen}, the
- * preview-only WorldBox-style Ancient-era Town Hall skin. Sent by {@code /bannerbound gui ancient}
- * so the look can be evaluated without touching the live Town Hall flow.
+ * Server -> client nudge to open AncientWorldBoxScreen, the preview-only WorldBox-style Ancient-era
+ * Town Hall skin. Sent by "/bannerbound gui ancient" so the look can be evaluated without touching
+ * the live Town Hall flow.
  */
 @ApiStatus.Internal
 public record OpenAncientGuiPreviewPayload() implements CustomPacketPayload {

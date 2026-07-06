@@ -22,9 +22,19 @@ import net.neoforged.api.distmarker.OnlyIn;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
- * Two-page settlement founding screen. Page 1 (IDENTITY) picks a name + banner color and leads
- * to page 2 (STYLE), where the player picks the settlement's culture style. The style governs
- * which blocks the settlement finds appealing (see the chunk-beauty / culture system).
+ * Two-page settlement founding screen (client-only). Page 1 (IDENTITY) picks a name + banner color;
+ * page 2 (STYLE) picks the settlement's culture style, which governs which blocks the settlement
+ * finds appealing (see the chunk-beauty / culture system). Confirm sends a SettleRequestPayload to
+ * the server. Widgets are rebuilt on every init() (page switch), so the name / color / style picks
+ * are held in fields to survive the rebuild. Banner colors are unique per server: taken colors are
+ * derived from the client's mirror of the claim map (each claim carries its settlement color, so no
+ * extra packet is needed), greyed out and unselectable, and if the player's pick is taken (or on
+ * first build) the picker snaps to the first still-available color. The identity page also shows a
+ * server-assessed site report: a green all-clear, or one warning line per poor-terrain finding.
+ * The style page is a scrollable grid of 16:9 image cards, custom-drawn (not widgets) and scissored
+ * to a viewport clamped to the window, so a small window / high GUI scale shrinks the scroll area
+ * instead of overflowing the screen; the selection accent is the page-1 banner color so both steps
+ * read as one identity, and style names come from the style JSON (not lang) so they render literally.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -37,27 +47,24 @@ public class SettleScreen extends PolishedScreen {
     private static final int SWATCH_SIZE = 20;
     private static final int SWATCH_GAP = 4;
 
-    // ─ Culture-style picker (page 2): a scrollable grid of image cards ─
     private static final int STYLE_PANEL_WIDTH = 340;
-    private static final int STYLE_HEADER_H = 30;   // title + divider band
-    private static final int STYLE_FOOTER_H = 40;   // back/confirm button band
-    private static final int STYLE_PAD = 14;        // inner horizontal padding (card area inset)
+    private static final int STYLE_HEADER_H = 30;
+    private static final int STYLE_FOOTER_H = 40;
+    private static final int STYLE_PAD = 14;
     private static final int STYLE_COLS = 2;
     private static final int STYLE_COL_GAP = 12;
     private static final int STYLE_ROW_GAP = 10;
-    private static final int STYLE_LABEL_H = 20;    // name bar beneath each card's image
-    /** Cached [exists?1:0, width, height] per preview texture, read once from the resource pack. */
+    private static final int STYLE_LABEL_H = 20;
+    // Entries are [exists?1:0, width, height] per preview texture, read once and cached.
     private static final java.util.Map<net.minecraft.resources.ResourceLocation, int[]> IMG_SIZE =
         new java.util.HashMap<>();
 
     private Page page = Page.IDENTITY;
 
-    // Persisted across page switches (widgets are rebuilt each time).
     private String nameText = "";
     private int selectedColor = 0;
     private String selectedStyleId = "";
 
-    // Style-page scroll state + the current frame's card layout (rebuilt each init).
     private double styleScroll = 0;
     private int styleScrollMax = 0;
     private int styleViewLeft, styleViewTop, styleViewRight, styleViewBottom;
@@ -66,7 +73,6 @@ public class SettleScreen extends PolishedScreen {
     private EditBox nameField;
     private Button confirmButton;
 
-    /** Site warnings assessed server-side at the founding spot, shown on the identity page. */
     private final List<SiteWarning> siteWarnings;
 
     public SettleScreen(int siteWarningMask) {
@@ -82,8 +88,6 @@ public class SettleScreen extends PolishedScreen {
             initStylePage();
         }
     }
-
-    // ─── Page 1: name + color ───────────────────────────────────────────────────────────────
 
     private void initIdentityPage() {
         final int panelX = (this.width - PANEL_WIDTH) / 2;
@@ -110,10 +114,6 @@ public class SettleScreen extends PolishedScreen {
         this.addRenderableWidget(this.nameField);
         this.setInitialFocus(this.nameField);
 
-        // Colors are unique per server: a color already flown by another settlement is greyed
-        // out and unselectable. Derived from the claims the client already mirrors (each claim
-        // carries its settlement's color), so no extra packet is needed. If the player's current
-        // pick is taken (or this is the first build), snap to the first still-available color.
         java.util.Set<Integer> takenColors = takenColorIndices();
         if (takenColors.contains(selectedColor)) {
             for (int i = 0; i < SettlementColor.count(); i++) {
@@ -176,8 +176,6 @@ public class SettleScreen extends PolishedScreen {
                 controlsX + 12, panelY + 72, 0xFFCCCCCC);
         });
 
-        // Site assessment, drawn just below the panel: a green all-clear, or one warning line per
-        // poor-terrain finding so the player isn't surprised by a starved settlement later.
         final int reportCenterX = panelX + PANEL_WIDTH / 2;
         final int reportTop = panelY + IDENTITY_PANEL_HEIGHT + 8;
         this.addRenderableOnly((graphics, mouseX, mouseY, partialTick) -> {
@@ -202,8 +200,6 @@ public class SettleScreen extends PolishedScreen {
         updateConfirmButton();
     }
 
-    // ─── Page 2: culture style ──────────────────────────────────────────────────────────────
-
     private void initStylePage() {
         List<ClientCultureStyleState.Entry> styles = ClientCultureStyleState.styles();
         if (selectedStyleId.isEmpty() && !styles.isEmpty()) {
@@ -212,14 +208,12 @@ public class SettleScreen extends PolishedScreen {
 
         final int panelW = STYLE_PANEL_WIDTH;
         final int cardW = (panelW - 2 * STYLE_PAD - (STYLE_COLS - 1) * STYLE_COL_GAP) / STYLE_COLS;
-        final int imageH = Math.round(cardW * 9f / 16f);   // 16:9 preview thumbnails
+        final int imageH = Math.round(cardW * 9f / 16f);
         final int cardH = imageH + STYLE_LABEL_H;
         final int rowStride = cardH + STYLE_ROW_GAP;
         final int rowCount = Math.max(1, (styles.size() + STYLE_COLS - 1) / STYLE_COLS);
-        final int contentH = rowCount * rowStride - STYLE_ROW_GAP;   // no trailing gap
+        final int contentH = rowCount * rowStride - STYLE_ROW_GAP;
 
-        // Viewport prefers to show ~3 rows, but the whole panel is clamped to the window so a small
-        // window / high GUI scale shrinks the scroll area instead of overflowing the screen.
         int viewH = Math.min(contentH, 3 * rowStride - STYLE_ROW_GAP);
         int maxPanelH = this.height - 20;
         if (STYLE_HEADER_H + viewH + STYLE_FOOTER_H > maxPanelH) {
@@ -236,8 +230,6 @@ public class SettleScreen extends PolishedScreen {
         styleScrollMax = Math.max(0, contentH - viewH);
         styleScroll = Math.max(0, Math.min(styleScroll, styleScrollMax));
 
-        // Card layout — x is screen-space (no horizontal scroll); contentY is relative to the top
-        // of the scroll content, with the frame's scroll offset applied at draw/hit-test time.
         styleCards.clear();
         for (int i = 0; i < styles.size(); i++) {
             ClientCultureStyleState.Entry entry = styles.get(i);
@@ -250,7 +242,6 @@ public class SettleScreen extends PolishedScreen {
             styleCards.add(new StyleCard(entry.id(), entry.nameKey(), img, x, cy, cardW, cardH, imageH));
         }
 
-        // Panel chrome + header (drawn behind the cards).
         this.addRenderableOnly((graphics, mouseX, mouseY, partialTick) -> {
             drawIdentityPanel(graphics, panelX, panelY, panelW, panelH, identityAccents);
             graphics.drawCenteredString(this.font,
@@ -265,7 +256,6 @@ public class SettleScreen extends PolishedScreen {
             }
         });
 
-        // Scrollable card grid, clipped to the viewport, plus a scrollbar when it overflows.
         this.addRenderableOnly((graphics, mouseX, mouseY, partialTick) -> {
             graphics.enableScissor(styleViewLeft, styleViewTop, styleViewRight, styleViewBottom);
             int scroll = (int) Math.round(styleScroll);
@@ -278,7 +268,7 @@ public class SettleScreen extends PolishedScreen {
             if (styleScrollMax > 0) {
                 int trackX = styleViewRight + 4;
                 graphics.fill(trackX, styleViewTop, trackX + 3, styleViewBottom, 0xFF2A2A2A);
-                int trackH = styleViewBottom - styleViewTop;   // == viewport height
+                int trackH = styleViewBottom - styleViewTop;
                 int thumbH = Math.max(16, trackH * trackH / (trackH + styleScrollMax));
                 int thumbY = styleViewTop + (int) ((trackH - thumbH) * (styleScroll / styleScrollMax));
                 graphics.fill(trackX, thumbY, trackX + 3, thumbY + thumbH, 0xFF8A8A8A);
@@ -302,8 +292,6 @@ public class SettleScreen extends PolishedScreen {
             .build());
     }
 
-    /** Draws one culture card: 16:9 preview image with a name bar beneath it. The selection accent
-     *  is the banner color chosen on page 1, so the two founding steps read as one identity. */
     private void renderStyleCard(GuiGraphics graphics, StyleCard card, int cardY,
                                  int mouseX, int mouseY) {
         int x = card.x();
@@ -315,7 +303,6 @@ public class SettleScreen extends PolishedScreen {
             && mouseY >= Math.max(cardY, styleViewTop) && mouseY < Math.min(cardY + h, styleViewBottom);
         int accent = 0xFF000000 | (SettlementColor.byIndex(selectedColor).rgb() & 0x00FFFFFF);
 
-        // Preview image (or a dark "?" placeholder when the texture is absent).
         int[] size = card.image() == null ? new int[]{0, 16, 9} : imageSize(card.image());
         graphics.fill(x, cardY, x + w, cardY + imageH, 0xFF181818);
         if (size[0] == 1) {
@@ -324,7 +311,6 @@ public class SettleScreen extends PolishedScreen {
             graphics.drawCenteredString(this.font, "?", x + w / 2, cardY + imageH / 2 - 4, 0xFF666666);
         }
 
-        // Name bar beneath the image (the sketch's grey label strip).
         int barTop = cardY + imageH;
         int barColor = selected ? blendArgb(0xFF202020, accent, 0.45f)
             : (hovered ? 0xFF3A3A3A : 0xFF262626);
@@ -332,7 +318,6 @@ public class SettleScreen extends PolishedScreen {
         graphics.drawCenteredString(this.font, Component.literal(card.name()),
             x + w / 2, barTop + (STYLE_LABEL_H - this.font.lineHeight) / 2 + 1, 0xFFFFFFFF);
 
-        // Border: banner accent when selected, brightened on hover, subtle otherwise.
         int border = selected ? accent : (hovered ? 0xFFCCCCCC : 0xFF000000);
         graphics.renderOutline(x, cardY, w, h, border);
         if (selected) {
@@ -340,8 +325,6 @@ public class SettleScreen extends PolishedScreen {
         }
     }
 
-    /** [exists?1:0, width, height] for a preview texture, read once and cached. Lets the blit use
-     *  the true texture dimensions so any correctly-sized replacement image still fills the card. */
     private static int[] imageSize(net.minecraft.resources.ResourceLocation tex) {
         return IMG_SIZE.computeIfAbsent(tex, t -> {
             try {
@@ -362,13 +345,10 @@ public class SettleScreen extends PolishedScreen {
         return mx >= styleViewLeft && mx < styleViewRight && my >= styleViewTop && my < styleViewBottom;
     }
 
-    /** A laid-out culture card. {@code x} is screen-space; {@code contentY} is scroll-content space. */
+    // x is screen-space; contentY is scroll-content space (scroll offset applied at draw/hit-test).
     private record StyleCard(String id, String name, net.minecraft.resources.ResourceLocation image,
                              int x, int contentY, int w, int h, int imageH) {}
 
-    /** Color indices already claimed by an existing settlement, derived from the client's mirror
-     *  of the claim map (each claimed chunk carries its settlement's color). These are greyed out
-     *  and unselectable in the picker — colors are unique per server. */
     private static java.util.Set<Integer> takenColorIndices() {
         java.util.Set<Integer> taken = new java.util.HashSet<>();
         for (com.bannerbound.core.network.ClaimEntry e : ClientClaimState.all().values()) {
@@ -409,9 +389,7 @@ public class SettleScreen extends PolishedScreen {
 
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        // Culture cards are custom-drawn (not widgets), so hit-test them here. Selection is a pure
-        // repaint — the render pass reads selectedStyleId live, so no widget rebuild is needed
-        // (which also keeps the current scroll position).
+        // Card selection is a pure repaint - do NOT rebuildWidgets here or the scroll position resets.
         if (page == Page.STYLE && button == 0 && withinStyleViewport(mouseX, mouseY)) {
             int scroll = (int) Math.round(styleScroll);
             for (StyleCard card : styleCards) {
@@ -422,7 +400,7 @@ public class SettleScreen extends PolishedScreen {
                     return true;
                 }
             }
-            return true;   // swallow clicks landing in the viewport gutter
+            return true;   // swallow clicks in the viewport gutter
         }
         return super.mouseClicked(mouseX, mouseY, button);
     }
@@ -453,7 +431,7 @@ public class SettleScreen extends PolishedScreen {
             this.color = color;
             this.isSelected = isSelected;
             this.taken = taken;
-            // A taken color can't be picked — disabling the button also blocks its click handler.
+            // Disabling the button is what blocks the click handler for taken colors.
             this.active = !taken;
         }
 
@@ -465,7 +443,6 @@ public class SettleScreen extends PolishedScreen {
             int h = this.getHeight();
 
             if (taken) {
-                // Dim the swatch and draw an X so it reads clearly as "already claimed".
                 int dim = 0xFF000000 | (((color.rgb() & 0xFEFEFE) >> 1));
                 graphics.fill(x, y, x + w, y + h, dim);
                 graphics.renderOutline(x, y, w, h, 0xFF222222);

@@ -31,21 +31,24 @@ import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.neoforged.neoforge.event.level.ChunkEvent;
 
 /**
- * Bakes the plaster/trim face overlays into chunk-section geometry via {@link AddSectionGeometryEvent}
- * — flush quads on decorated faces (plaster under, trim on top), proper chunk lighting, no
- * BlockEntity, leaving the adjacent cell free. Data comes from {@link ClientDecorations}; a change
- * re-bakes the section. Reads are done on the main thread in the event handler; only the gathered
- * snapshot is touched on the mesher thread.
+ * Bakes the plaster/trim face overlays into chunk-section geometry via
+ * {@link AddSectionGeometryEvent} - flush quads on decorated faces (plaster layer under, trim on
+ * top), lit with proper chunk light, no BlockEntity, and leaving the adjacent block cell free.
+ * Data comes from {@link ClientDecorations}; a data change re-bakes the section, and chunk unload
+ * / logout evict the client cache. Threading: ClientDecorations is only read on the main thread
+ * inside the event handler; the mesher thread touches nothing but the gathered per-section
+ * snapshot list. Quads are emitted double-sided, with corners() supplying each face's boundary
+ * corners CCW as seen from outside. Also hooks BreakSpeed: a plastered block breaks at half speed
+ * - purely client-side feel, the block's real hardness is unchanged so the server accepts the
+ * slower break.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 @EventBusSubscriber(modid = BannerboundAntiquity.MODID, value = Dist.CLIENT)
 public final class DecoSectionRenderer {
-    // Tiny outward offsets to sit just proud of the face without z-fighting. Kept small: the gap is
-    // a perpendicular offset, so at grazing angles it projects to a visible seam — ~0.0015 blocks is
-    // sub-pixel even edge-on, while still beating depth-fighting with the block face.
-    private static final float PLASTER_EPS = 0.0015f; // lower layer
-    private static final float TRIM_EPS = 0.003f;     // upper layer, just above plaster
+    // eps is perpendicular so it seams at grazing angles: ~0.0015 stays sub-pixel edge-on yet beats z-fighting; trim must sit above plaster
+    private static final float PLASTER_EPS = 0.0015f;
+    private static final float TRIM_EPS = 0.003f;
 
     private DecoSectionRenderer() {}
 
@@ -76,8 +79,6 @@ public final class DecoSectionRenderer {
         ClientDecorations.clear();
     }
 
-    /** Plaster makes a block sturdier to mine: a plastered block breaks at half speed (client-side
-     *  feel; the block's own hardness is unchanged so the server accepts the slower break). */
     @SubscribeEvent
     static void onBreakSpeed(net.neoforged.neoforge.event.entity.player.PlayerEvent.BreakSpeed event) {
         event.getPosition().ifPresent(pos -> {
@@ -101,7 +102,7 @@ public final class DecoSectionRenderer {
             Direction dir = e.dir();
             FaceDeco d = e.deco();
             if (region.getBlockState(pos).isAir()) {
-                continue; // block gone via a path we didn't clear — don't draw a floating overlay
+                continue; // block gone via a path we didn't clear -> don't draw a floating overlay
             }
             int light = LevelRenderer.getLightColor(region, pos.relative(dir));
             float lx = pos.getX() - origin.getX();
@@ -118,7 +119,6 @@ public final class DecoSectionRenderer {
         }
     }
 
-    /** Emit a double-sided textured quad on the given face of cell (lx,ly,lz), pushed out by eps. */
     private static void face(VertexConsumer vc, PoseStack.Pose pose, float lx, float ly, float lz,
                              Direction dir, float eps, TextureAtlasSprite sprite, int argb, int light) {
         float[][] c = corners(dir, lx, ly, lz);
@@ -139,11 +139,10 @@ public final class DecoSectionRenderer {
         int g = (argb >> 8) & 0xFF;
         int b = argb & 0xFF;
         int a = (argb >>> 24) & 0xFF;
-        // front winding
         for (int i = 0; i < 4; i++) {
             vertex(vc, pose, c[i], uv[i], r, g, b, a, light, nx, ny, nz);
         }
-        // back winding (so it shows regardless of the face's outward orientation)
+        // second pass = back winding, NOT a duplicate: the quad must show from both sides
         for (int i = 3; i >= 0; i--) {
             vertex(vc, pose, c[i], uv[i], r, g, b, a, light, -nx, -ny, -nz);
         }
@@ -158,7 +157,6 @@ public final class DecoSectionRenderer {
             .setNormal(pose, nx, ny, nz);
     }
 
-    /** The four boundary corners of {@code dir}'s face of unit cell (lx,ly,lz), CCW from outside. */
     private static float[][] corners(Direction dir, float x, float y, float z) {
         float x1 = x + 1, y1 = y + 1, z1 = z + 1;
         return switch (dir) {

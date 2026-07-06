@@ -18,6 +18,22 @@ import net.minecraft.world.item.Item;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
+/**
+ * Client mirror of the settlement's research/insight state, fed by the research-sync payloads and
+ * read by ResearchScreen, ore gating, JEI, and other UI. Holds the research tree, completed nodes,
+ * active research + per-node progress, science rate, capacity, the unlocked-item id set, the queue,
+ * and insight progress/fired sets. {@code hasFlag} scans completed nodes' {@code unlocks.flags} for
+ * persistent-flag checks (ore reveals, breeding gates, workshop-type gating via
+ * {@link com.bannerbound.core.api.settlement.WorkstationUnlocks#flagForWorkshopType} -- an
+ * un-researched workshop reads as "Unknown Workshop" with assign disabled). Prereq and age checks
+ * are cross-tree (a science node may require a culture node and vice versa) and fold the tribe gate
+ * into {@code ageMet} so every call site treats it as "locked" uniformly. Knowledge listeners fire
+ * when the unlocked-item set changes so JEI-style views can refresh.
+ *
+ * <p>When completed nodes change, {@code replaceState} rebuilds the disguised-ore set and re-bakes
+ * only the chunk sections around the player via {@code setSectionDirty} (deliberately NOT
+ * {@code allChanged()}, which tears down GPU resources rather than just queuing a re-mesh).
+ */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class ClientResearchState {
@@ -58,9 +74,6 @@ public final class ClientResearchState {
         firedInsights = Set.copyOf(newFiredInsights);
 
         if (!oldCompleted.equals(completed)) {
-            // Active flags may have changed (ore reveals, etc.) — rebuild the disguised-ore set
-            // and re-bake the chunk sections around the player. setSectionDirty is way lighter
-            // than allChanged() since it doesn't tear down GPU resources, just queues a re-mesh.
             ClientOreState.recomputeActiveDisguises();
             ClientOreState.invalidateNearbySections();
         }
@@ -85,10 +98,6 @@ public final class ClientResearchState {
         }
     }
 
-    /**
-     * Returns true if any completed research's {@code unlocks.flags} contains the given flag.
-     * Used by ore-disguise gating, animal-breeding gating, and other persistent-flag checks.
-     */
     public static boolean hasFlag(String flag) {
         for (String id : completed) {
             com.bannerbound.core.api.research.ResearchDefinition def = tree.get(id);
@@ -99,14 +108,6 @@ public final class ClientResearchState {
         return false;
     }
 
-    /**
-     * Client mirror of the workshop-type research gate (server side:
-     * {@link com.bannerbound.core.api.settlement.WorkstationUnlocks#flagForWorkshopType} +
-     * {@code ResearchManager.hasFlag} in {@code WorkshopMenu.handleAssignWorker}). A workshop whose
-     * craft the settlement hasn't researched reads as "Unknown Workshop" with assign disabled, so a
-     * station pre-placed on the ruins of an old settlement can't be operated before the research is
-     * earned. Ungated types (mixed/none, or any type with no declared unit) are always known.
-     */
     public static boolean isWorkshopTypeKnown(String workshopTypeId) {
         String flag = com.bannerbound.core.api.settlement.WorkstationUnlocks
             .flagForWorkshopType(workshopTypeId);
@@ -115,11 +116,6 @@ public final class ClientResearchState {
 
     public static java.util.List<String> getQueue() { return queue; }
 
-    /**
-     * Returns the queue position to display above the node (1 = current active, 2+ = queue
-     * order). If nothing is active, the first queued item is shown as [1]. Returns 0 for nodes
-     * that are neither active nor queued — caller should skip rendering the badge.
-     */
     public static int getQueuePosition(String id) {
         if (!activeResearch.isEmpty() && id.equals(activeResearch)) return 1;
         int idx = queue.indexOf(id);
@@ -145,7 +141,6 @@ public final class ClientResearchState {
 
     public static boolean prereqsMet(ResearchDefinition def) {
         for (String prereq : def.prerequisites()) {
-            // Cross-tree: a science node may require a culture node (and vice versa).
             if (!completed.contains(prereq) && !ClientCultureState.isCompleted(prereq)) {
                 return false;
             }
@@ -153,10 +148,6 @@ public final class ClientResearchState {
         return true;
     }
 
-    /** True if the local player's settlement age is at or above the research's min_age AND, for
-     *  tribe-gated nodes, the settlement has reached the Tribe stage. Folding the tribe gate into
-     *  ageMet keeps every existing call site (node colouring, click gate, tooltip) respecting it
-     *  with no extra plumbing — both read as "locked" the same way. */
     public static boolean ageMet(ResearchDefinition def) {
         if (def.requiresTribe() && !ClientPopulationState.isTribe()) return false;
         return ClientEraState.getPlayerEra().ordinal() >= def.minAge().ordinal();

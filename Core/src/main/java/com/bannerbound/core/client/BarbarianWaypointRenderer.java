@@ -20,14 +20,19 @@ import net.neoforged.api.distmarker.OnlyIn;
  * Draws a screen-space waypoint (camp name + live distance) for each barbarian-camp QUEST whose
  * "reach the camp" objective isn't done yet, using the entry's {@code targetPos}. Rendered as a HUD
  * layer (world position projected to the screen), NOT world-space geometry, so it ALWAYS shows on top
- * of terrain and is immune to Iris/shader depth quirks. Off-screen targets clamp to the screen edge.
+ * of terrain and is immune to Iris/shader depth quirks.
+ *
+ * Because GameRenderer.getFov is protected, the view/projection matrices are rebuilt here from the base
+ * FOV setting (a tiny mismatch during transient sprint/zoom FOV effects is acceptable for a waypoint).
+ * Targets behind the camera are mirrored, then every off-screen target is clamped to the screen edge so
+ * the marker always points the way.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
 public final class BarbarianWaypointRenderer implements LayeredDraw.Layer {
     public static final BarbarianWaypointRenderer INSTANCE = new BarbarianWaypointRenderer();
     private static final float MARGIN = 14f;
-    private static final double MAX_DRAW = 1200.0; // don't bother past this (blocks)
+    private static final double MAX_DRAW = 1200.0;
 
     private BarbarianWaypointRenderer() {}
 
@@ -38,12 +43,10 @@ public final class BarbarianWaypointRenderer implements LayeredDraw.Layer {
 
         Camera camera = mc.gameRenderer.getMainCamera();
         Vec3 camPos = camera.getPosition();
-        // Rebuild the world perspective ourselves (GameRenderer.getFov is protected). Uses the base FOV
-        // setting — fine for a waypoint; tiny mismatch only during transient FOV effects (sprint/zoom).
         float fovDeg = mc.options.fov().get().floatValue();
         float aspect = (float) mc.getWindow().getWidth() / (float) mc.getWindow().getHeight();
         Matrix4f proj = new Matrix4f().perspective(fovDeg * ((float) Math.PI / 180f), aspect, 0.05f, 1000f);
-        // View rotation, matching vanilla GameRenderer (XP pitch then YP yaw+180; roll ignored).
+        // Rotation order must match vanilla GameRenderer: XP pitch then YP yaw+180 (roll ignored).
         Matrix4f view = new Matrix4f();
         view.rotate(com.mojang.math.Axis.XP.rotationDegrees(camera.getXRot()));
         view.rotate(com.mojang.math.Axis.YP.rotationDegrees(camera.getYRot() + 180.0f));
@@ -52,7 +55,7 @@ public final class BarbarianWaypointRenderer implements LayeredDraw.Layer {
         int h = g.guiHeight();
         for (JournalSyncPayload.Entry entry : ClientJournalState.hudEntries()) {
             if (!"barbarian_camp".equals(entry.sourceType()) || entry.targetPos() == 0L) continue;
-            if (reachedCamp(entry)) continue; // objective done — stop guiding there
+            if (reachedCamp(entry)) continue;
             BlockPos c = BlockPos.of(entry.targetPos());
             double tx = c.getX() + 0.5, ty = c.getY() + 2.5, tz = c.getZ() + 0.5;
             double dist = mc.player.position().distanceTo(new Vec3(tx, ty, tz));
@@ -66,10 +69,9 @@ public final class BarbarianWaypointRenderer implements LayeredDraw.Layer {
             boolean behind = p.w <= 0f;
             float ndcX = p.x / p.w;
             float ndcY = p.y / p.w;
-            if (behind) { ndcX = -ndcX; ndcY = -ndcY; } // mirror so the edge-clamp points the right way
+            if (behind) { ndcX = -ndcX; ndcY = -ndcY; }
             float sx = (ndcX * 0.5f + 0.5f) * w;
             float sy = (0.5f - ndcY * 0.5f) * h;
-            // Clamp off-screen / behind targets to the screen edge so the marker is always a guide.
             sx = Math.max(MARGIN, Math.min(w - MARGIN, sx));
             sy = behind ? h - MARGIN : Math.max(MARGIN, Math.min(h - MARGIN, sy));
 

@@ -13,7 +13,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-/** Server → client: the full face-decoration set of one chunk (sent when a player starts tracking
+/** Server -> client: the full face-decoration set of one chunk (sent when a player starts tracking
  *  it). An empty list clears the client's cache for that chunk. */
 @ApiStatus.Internal
 public record DecoChunkSyncPayload(int chunkX, int chunkZ, List<FaceDecoEntry> entries)

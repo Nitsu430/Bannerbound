@@ -12,7 +12,7 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server→client sync of the datapack-loaded {@link ArrowPart} registry, so clients can render modular
+ * Server->client sync of the datapack-loaded {@link ArrowPart} registry, so clients can render modular
  * arrows (icon + projectile) and show their tooltips even for modpack-added parts the client jar
  * doesn't bundle. Sent on player join / {@code /reload} (see {@code AntiquityEvents}); the handler
  * (registered in {@link AntiquityNetwork}) replaces {@code ArrowPartRegistry}.

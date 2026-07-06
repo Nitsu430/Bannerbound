@@ -15,13 +15,13 @@ import net.neoforged.neoforge.common.util.FakePlayer;
 import net.neoforged.neoforge.common.util.FakePlayerFactory;
 
 /**
- * Soft-dependency bridge to <a href="https://github.com/ThePandaOliver/Pandas-Falling-Trees">
- * Pandas Falling Trees</a>. Reflection-only — we don't pull PFT or PandaLib onto the gradle
- * classpath, so the mod compiles and runs identically with or without PFT installed.
- * <p>
- * Use {@link #fellTree(ServerLevel, BlockPos, double, double, double)} to delegate a chop to PFT.
- * Returns false if PFT isn't loaded; callers should fall back to their own felling logic in that
- * case.
+ * Soft-dependency bridge to Pandas Falling Trees (PFT). Reflection-only: PFT and PandaLib are never
+ * on the gradle classpath, so the mod compiles and runs identically with or without PFT installed.
+ * Use fellTree(...) to delegate a chop to PFT; it returns false when PFT is absent so callers fall
+ * back to their own felling logic. Detection (isAvailable) is one-shot: it probes ModList and binds
+ * TreeHandler.destroyTree once, then remembers success/failure so we don't retry every chop.
+ * fellTree moves a FakePlayer to the citizen's coordinates so PFT's drop-position math and stat
+ * tracking land at the worksite.
  */
 @ApiStatus.Internal
 public final class FallingTreesCompat {
@@ -35,10 +35,6 @@ public final class FallingTreesCompat {
     private FallingTreesCompat() {
     }
 
-    /**
-     * One-shot detection. Probes {@link ModList} and binds the {@code TreeHandler.destroyTree}
-     * method reference. Failures are logged once and remembered, so we don't retry every chop.
-     */
     public static boolean isAvailable() {
         if (!checked) {
             checked = true;
@@ -47,8 +43,7 @@ public final class FallingTreesCompat {
             }
             try {
                 Class<?> handler = Class.forName(HANDLER_FQN);
-                // @JvmStatic on a Kotlin object emits a static delegate on the enclosing class —
-                // we can invoke it with a null receiver.
+                // @JvmStatic on a Kotlin object emits a static delegate; invoke it with a null receiver.
                 destroyTreeMethod = handler.getMethod("destroyTree",
                     Level.class, BlockPos.class, Player.class);
                 available = true;
@@ -62,13 +57,6 @@ public final class FallingTreesCompat {
         return available;
     }
 
-    /**
-     * Asks PFT to fell the tree at {@code logPos}. The fake player's position is set to
-     * ({@code atX}, {@code atY}, {@code atZ}) — typically the citizen's coordinates — so PFT's
-     * drop-position math and stat tracking land at the worksite.
-     *
-     * @return true if PFT handled it; false if PFT isn't loaded or the call threw.
-     */
     public static boolean fellTree(ServerLevel level, BlockPos logPos, double atX, double atY, double atZ) {
         if (!isAvailable()) return false;
         try {
@@ -78,7 +66,7 @@ public final class FallingTreesCompat {
             return result instanceof Boolean && (Boolean) result;
         } catch (Throwable t) {
             BannerboundCore.LOGGER.warn("PFT destroyTree invocation failed: {}", t.toString());
-            // Don't flip `available` — a one-off failure shouldn't permanently disable the bridge.
+            // Don't flip available: a one-off failure shouldn't permanently disable the bridge.
             return false;
         }
     }

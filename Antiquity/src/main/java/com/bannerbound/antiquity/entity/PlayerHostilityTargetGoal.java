@@ -14,10 +14,12 @@ import net.minecraft.world.item.Items;
 
 /**
  * Makes a predator target the player. A thin {@link NearestAttackableTargetGoal} subclass so it can
- * be {@code instanceof}-matched for dedup (the way the repo dedups on its own goal classes). The
- * mob's existing melee goal (wolf {@code MeleeAttackGoal}, ocelot {@code OcelotAttackGoal}) does the
- * actual attacking once a target is set. Skips creative/spectator players and — if configured — a
- * player holding the predator's food (so it can still be pacified/lured, like prey).
+ * be instanceof-matched for dedup (the way the repo dedups on its own goal classes); the mob's
+ * existing melee goal (wolf MeleeAttackGoal, ocelot OcelotAttackGoal) does the actual attacking once
+ * the target is set. Inert unless Config.HUNTING_ENABLED. Never targets creative/spectator players,
+ * a player holding a bone when the mob is a wolf (a held bone reads as taming intent and calms it,
+ * even though a bone is not wolf "food"), or - when Config.PREDATORS_PACIFIED_BY_FOOD - a player
+ * holding the predator's food in either hand, so predators can still be pacified/lured like prey.
  */
 public class PlayerHostilityTargetGoal extends NearestAttackableTargetGoal<Player> {
     public PlayerHostilityTargetGoal(Mob mob) {
@@ -32,7 +34,6 @@ public class PlayerHostilityTargetGoal extends NearestAttackableTargetGoal<Playe
         if (!(le instanceof Player player) || player.isCreative() || player.isSpectator()) {
             return false;
         }
-        // A held bone calms a wolf (it reads as taming intent), even though a bone isn't wolf "food".
         if (mob instanceof Wolf
                 && (player.getMainHandItem().is(Items.BONE) || player.getOffhandItem().is(Items.BONE))) {
             return false;

@@ -7,18 +7,25 @@ import net.minecraft.world.level.block.Rotation;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * One placed instance of a {@link WallDesign} in the world — the unit the layout engine emits
- * and the blueprint/task board expands. Holds everything needed to expand into world block
- * states WITHOUT touching the level again: the terrain was sampled at layout time and frozen
- * here (per-column ground Y), per WALLS_PLAN.md ("plans are frozen; later claim/terrain changes
- * do nothing until the player explicitly adapts").
+ * One placed instance of a WallDesign in the world: the unit WallLayoutEngine emits and the
+ * blueprint / builder task board expands. Holds everything needed to expand into world block
+ * states WITHOUT touching the level again -- terrain was sampled at layout time and frozen here
+ * (per-column ground Y), per WALLS_PLAN.md ("plans are frozen; later claim/terrain changes do
+ * nothing until the player explicitly adapts").
  *
- * <p>Geometry: {@code (startX, startZ)} is the world column of design-local {@code (l=0, d=0)};
- * local {@code +l} steps along {@link #along()} and {@code +d} along {@link #inward()}. Block
- * states are rotated by {@link #rotation()} (designs are authored outward = north).
+ * <p>Geometry: (startX, startZ) is the world column of design-local (l=0, d=0); +l steps along
+ * along() and +d along inward(). Block states are rotated by rotation() (designs authored
+ * outward = north). length may be shorter than the design's length -- a run remainder that does
+ * not fill a full instance becomes a truncated piece rather than a hole (plan sec B run fill).
  *
- * <p>{@code length} may be shorter than the design's length — runs whose remainder doesn't fit
- * a full design instance get a truncated piece rather than a hole (plan §B run fill).
+ * <p>STEPPED pieces fill a foundation from each column's ground up to baseY (DRAPE follows the
+ * ground). Foundation is the column's own BOTTOM design block continued downward (no separate
+ * material), only under columns that have a bottom block whose bottom is NOT openable (doors /
+ * fence gates / trapdoors) -- continuing an openable duplicated gates on slopes. noFoundation is
+ * a per-piece refinement that suppresses continuation entirely; waterGap pieces emit nothing;
+ * groundY is indexed l * depth + d. forEachBlock visits foundation-then-design per column, bottom
+ * up: the builder's task sort relies on lower blocks enumerating first. Courses at or below the
+ * terrain are buried (omitted from the blueprint) so the level wall top stays walkable.
  */
 public final class WallPiece {
 
@@ -32,14 +39,9 @@ public final class WallPiece {
     private final int length;
     private final int depth;
     private final Mode mode;
-    /** STEPPED: the level Y of the design's bottom layer. Unused for DRAPE. */
     private final int baseY;
-    /** Topmost solid ground Y per column, indexed {@code l * depth + d}. */
     private final int[] groundY;
-    /** Deep-water gap: the slot is recorded (preview, completeness) but emits no blocks. */
     private final boolean waterGap;
-    /** Player refinement: suppress the bottom-course continuation for THIS piece (e.g. a
-     *  gate on a slope whose threshold blocks would stack, playtest 2026-06-12). */
     private final boolean noFoundation;
 
     public WallPiece(String designId, WallDesign.Kind kind, Direction outward,
@@ -91,25 +93,21 @@ public final class WallPiece {
         return min;
     }
 
-    /** Copy with a different design-bottom Y — the run-level top-alignment pass uses this. */
     public WallPiece withBaseY(int newBaseY) {
         return new WallPiece(designId, kind, outward, startX, startZ, length, depth,
             Mode.STEPPED, newBaseY, groundY, waterGap, noFoundation);
     }
 
-    /** Copy with a different design id — per-piece VARIANT overrides (steps etc.). */
     public WallPiece withDesignId(String newDesignId) {
         return new WallPiece(newDesignId, kind, outward, startX, startZ, length, depth,
             mode, baseY, groundY, waterGap, noFoundation);
     }
 
-    /** Copy with the bottom-course continuation suppressed (per-piece refinement). */
     public WallPiece withNoFoundation() {
         return new WallPiece(designId, kind, outward, startX, startZ, length, depth,
             mode, baseY, groundY, waterGap, true);
     }
 
-    /** Canonical along-the-wall direction: outward rotated clockwise (north edge runs east). */
     public Direction along() { return outward.getClockWise(); }
     public Direction inward() { return outward.getOpposite(); }
 
@@ -128,12 +126,6 @@ public final class WallPiece {
         void accept(BlockPos pos, BlockState state, boolean foundation);
     }
 
-    /**
-     * Expands this piece into world positions + states: the design's voxels (rotated) plus
-     * STEPPED foundation fill from each column's ground up to the base layer. Water-gap pieces
-     * emit nothing. Visit order is foundation-then-design per column, bottom-up — the builder's
-     * task sort relies on lower blocks enumerating first.
-     */
     public void forEachBlock(WallDesign design, BlockConsumer consumer) {
         if (waterGap) return;
         Direction along = along();
@@ -145,15 +137,8 @@ public final class WallPiece {
                 int z = startZ + along.getStepZ() * l + inward.getStepZ() * d;
                 int ground = groundY[l * depth + d];
                 int columnBase = mode == Mode.DRAPE ? ground + 1 : baseY;
-                // Foundation = the column's own BOTTOM BLOCK continued down to the terrain
-                // (no separate foundation material — "it just continues the lowest block",
-                // playtest 2026-06-12). Only under columns that actually have a bottom block:
-                // filling every grid column poured foundation under pure-air cells and
-                // plugged gate openings on downhill ground. OPENABLE bottoms (doors, fence
-                // gates, trapdoors) never continue — stacking duplicated the gate on slopes
-                // ("extra gates", playtest 2026-06-12) — and a per-piece refinement can turn
-                // continuation off entirely.
                 BlockState bottom = design.stateAt(l, d, 0);
+                // Never continue an openable bottom (door / fence gate / trapdoor): stacking it down a slope duplicates the gate.
                 if (!noFoundation && bottom != null && !isOpenable(bottom)) {
                     BlockState continued = bottom.rotate(rotation);
                     for (int y = ground + 1; y < columnBase; y++) {
@@ -161,9 +146,6 @@ public final class WallPiece {
                     }
                 }
                 for (int h = 0; h < design.height(); h++) {
-                    // TOP-ALIGNED walls (user decision 2026-06-12): courses at or below the
-                    // terrain are BURIED — omitted from the blueprint entirely. High ground
-                    // eats the wall's base (cheaper), the level top stays walkable.
                     if (columnBase + h <= ground) continue;
                     BlockState state = design.stateAt(l, d, h);
                     if (state != null) {
@@ -174,14 +156,11 @@ public final class WallPiece {
         }
     }
 
-    /** Functional blocks that must never be duplicated by the downward continuation. */
     private static boolean isOpenable(BlockState state) {
         return state.is(net.minecraft.tags.BlockTags.DOORS)
             || state.is(net.minecraft.tags.BlockTags.FENCE_GATES)
             || state.is(net.minecraft.tags.BlockTags.TRAPDOORS);
     }
-
-    // ─── NBT ────────────────────────────────────────────────────────────────────────────────
 
     public CompoundTag save() {
         CompoundTag tag = new CompoundTag();

@@ -12,14 +12,12 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Server → client: open the carpenter's-table saw minigame for the receiving player. The server
+ * Server -> client: open the carpenter's-table saw minigame for the receiving player. The server
  * holds the authoritative session (player + table pos); the client plays the (non-skill) sawing
  * animation and replies with {@link CarpentryActionPayload}. The log + saw are drawn in-world by the
- * table's renderer, reading the table's budget — so the only thing this payload carries is the pos
- * and how many saw strokes the queued batch takes.
- *
- * @param pos           the carpenter's table the session belongs to
- * @param strokesNeeded saw strokes to complete the batch (scaled to batch size, capped)
+ * table's renderer, reading the table's budget - so the payload carries only the table {@code pos}
+ * and {@code strokesNeeded}, the saw strokes to complete the queued batch (scaled to batch size,
+ * capped).
  */
 @ApiStatus.Internal
 public record OpenCarpentrySawPayload(BlockPos pos, int strokesNeeded) implements CustomPacketPayload {

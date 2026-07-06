@@ -32,11 +32,13 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 
 /**
- * Bellows Block (METALWORKING_PLAN.md Part 1). Place it next to a bloomery and <b>jump on it</b>: each
- * landing plays the "Push" animation ({@link BellowsBlockEntity}/{@link
- * com.bannerbound.antiquity.client.BellowsRenderer}) and pumps a burst of heat into the adjacent
- * bloomery (only while its fire is lit). Repeated jumps climb the temperature; stop and it drifts
- * back down. The block is drawn by its renderer, so its own model is invisible.
+ * Bellows Block (METALWORKING_PLAN.md Part 1). Place it next to a bloomery and jump on it: each
+ * player landing (fallOn, server side, fallDistance >= 0.1) plays the "Push" animation via
+ * BellowsBlockEntity / BellowsRenderer and pumps a burst of heat into the first bloomery controller
+ * found among the four horizontal neighbours (BloomeryBlock.getController resolves multiblock part
+ * cells, and the heat only counts while the bloomery's fire is lit). Repeated jumps climb the
+ * temperature; stop and it drifts back down. The block entity renderer draws the whole bellows, so
+ * the block's own render shape is INVISIBLE and the collision shape is a half-slab box.
  */
 public class BellowsBlock extends BaseEntityBlock {
     public static final MapCodec<BellowsBlock> CODEC = simpleCodec(BellowsBlock::new);
@@ -70,7 +72,7 @@ public class BellowsBlock extends BaseEntityBlock {
 
     @Override
     protected RenderShape getRenderShape(BlockState state) {
-        return RenderShape.INVISIBLE; // the block entity renderer draws the bellows
+        return RenderShape.INVISIBLE;
     }
 
     @Nullable
@@ -105,7 +107,6 @@ public class BellowsBlock extends BaseEntityBlock {
         }
     }
 
-    /** The first bloomery controller in a horizontal neighbour, or {@code null}. */
     private static BloomeryBlockEntity adjacentBloomery(Level level, BlockPos pos) {
         for (Direction dir : Direction.Plane.HORIZONTAL) {
             BloomeryBlockEntity be = BloomeryBlock.getController(level, pos.relative(dir));

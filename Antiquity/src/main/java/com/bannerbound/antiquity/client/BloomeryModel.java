@@ -19,11 +19,14 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.api.distmarker.OnlyIn;
 
 /**
- * Baked model for the Bloomery multiblock (1×1×2), drawn by {@link BloomeryRenderer}.
+ * Baked model for the Bloomery multiblock (1x1x2), drawn by {@link BloomeryRenderer}.
  * <p>
  * Geometry is the Blockbench "Modded Entity" export of {@code Bloomery.bbmodel}, cleaned up for
  * Minecraft 1.21.1. Extends {@link HierarchicalModel} so {@code KeyframeAnimations.animate} can
- * drive the "Door" bone's open/close animations by name.
+ * drive the "Door" bone's open/close animations by name; {@code setupAnim} is a deliberate no-op
+ * because the block entity renderer drives the animation, not entity state. The "Inside" bone is
+ * split out of the body render ({@code renderBody} hides it, {@code renderInside} draws it with its
+ * own light and colour tint) so the interior can glow orange while the furnace is lit.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -41,8 +44,6 @@ public final class BloomeryModel extends HierarchicalModel<Entity> {
         this.inside = this.master.getChild("Inside");
     }
 
-    /** Renders the bloomery — everything except the "Inside" bone (drawn separately so it can
-     *  glow orange while the furnace is lit). */
     public void renderBody(com.mojang.blaze3d.vertex.PoseStack pose,
                            com.mojang.blaze3d.vertex.VertexConsumer vc, int light, int overlay) {
         inside.visible = false;
@@ -50,7 +51,6 @@ public final class BloomeryModel extends HierarchicalModel<Entity> {
         inside.visible = true;
     }
 
-    /** Renders just the "Inside" bone, with the given light + colour tint. */
     public void renderInside(com.mojang.blaze3d.vertex.PoseStack pose,
                              com.mojang.blaze3d.vertex.VertexConsumer vc, int light, int overlay, int color) {
         pose.pushPose();
@@ -133,6 +133,5 @@ public final class BloomeryModel extends HierarchicalModel<Entity> {
     @Override
     public void setupAnim(Entity entity, float limbSwing, float limbSwingAmount, float ageInTicks,
                           float netHeadYaw, float headPitch) {
-        // Animation is driven by the block entity renderer, not entity state.
     }
 }

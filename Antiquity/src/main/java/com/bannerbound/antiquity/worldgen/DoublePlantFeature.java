@@ -11,10 +11,11 @@ import net.minecraft.world.level.levelgen.feature.FeaturePlaceContext;
 import net.minecraft.world.level.levelgen.feature.configurations.SimpleBlockConfiguration;
 
 /**
- * Worldgen feature that places a two-block {@link DoublePlantBlock} (BOTH halves) at the origin. Vanilla
- * {@code simple_block} only sets the named (lower) state, leaving the upper half missing and the lower
- * able to break on its next survival check — so a tall modded plant needs this. Configured with the
- * standard {@link SimpleBlockConfiguration} ({@code to_place} = the lower state); the upper is derived.
+ * Worldgen feature that places a two-block {@link DoublePlantBlock} (BOTH halves) at the origin.
+ * Vanilla {@code simple_block} only sets the named (lower) state, leaving the upper half missing
+ * and the lower able to break on its next survival check - so a tall modded plant needs this.
+ * Configured with the standard {@link SimpleBlockConfiguration} ({@code to_place} = the lower
+ * state); the upper half is derived by {@code DoublePlantBlock.placeAt}.
  */
 public class DoublePlantFeature extends Feature<SimpleBlockConfiguration> {
     public DoublePlantFeature(Codec<SimpleBlockConfiguration> codec) {

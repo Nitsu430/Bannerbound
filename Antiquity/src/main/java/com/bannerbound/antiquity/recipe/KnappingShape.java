@@ -11,22 +11,21 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.Item;
 
 /**
- * A data-driven knapping shape — the 3×3 silhouette a player chips out of a rock to make a tool
- * head. {@code keep} lists the grid cells that REMAIN stone; every other cell is flaked away. Cells
- * are numbered row-major, top row first:
+ * A data-driven knapping shape - the 3x3 silhouette a player chips out of a rock to make a tool
+ * head ({@code head}). {@code keep} lists the grid cells that REMAIN stone; every other cell is
+ * flaked away. Cells are numbered row-major, top row first:
  * <pre>
  *   0 1 2
  *   3 4 5
  *   6 7 8
  * </pre>
  * When the remaining cells exactly equal {@code keep}, the head is made; chipping every cell away
- * "breaks the stone" (a wasted rock). Loaded from {@code data/<namespace>/knapping_shapes/*.json}:
- * <pre>{ "head": "bannerboundantiquity:stone_pick_head", "keep": [0, 1, 2], "min_completed": 4 }</pre>
- *
- * @param head      the tool head produced when this silhouette is matched
- * @param keep      grid cells (0–8) that stay stone — must be unique across all loaded shapes
- * @param percentage_standard percentage of completed timing-minigame reps to get standard quality
- * @param percentage_fine percentage of completed timing-minigame reps to get fine quality
+ * "breaks the stone" (a wasted rock). The keep set must be UNIQUE across all loaded shapes, since
+ * the silhouette alone identifies the recipe. {@code percentage_standard} / {@code percentage_fine}
+ * are the total minigame score (as % of the possible per-rep 100s) needed for STANDARD / FINE
+ * quality. Loaded from {@code data/<namespace>/knapping_shapes/*.json}:
+ * <pre>{ "head": "bannerboundantiquity:stone_pick_head", "keep": [0, 1, 2],
+ *   "percentage_standard": 50, "percentage_fine": 75 }</pre>
  */
 @ApiStatus.Internal
 public record KnappingShape(Item head, List<Integer> keep, int percentage_standard, int percentage_fine) {
@@ -37,7 +36,6 @@ public record KnappingShape(Item head, List<Integer> keep, int percentage_standa
         Codec.INT.optionalFieldOf("percentage_fine", 75).forGetter(KnappingShape::percentage_fine)
     ).apply(i, KnappingShape::new));
 
-    /** The 9-bit mask (bit {@code i} set = cell {@code i} stays stone) of {@link #keep}. */
     public int keepMask() {
         int mask = 0;
         for (int c : keep) {

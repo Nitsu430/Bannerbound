@@ -1,10 +1,9 @@
-// Made with Blockbench 5.1.4
-// Exported for Minecraft version 1.17 or later with Mojang mappings
-// Paste this class into your mod and generate all required imports
-
-
+/**
+ * Raw Blockbench 5.1.4 export (Mojang mappings, MC 1.17+) of the bellows model, kept under
+ * resources as a reference next to its assets - NOT on the compile path, and not valid Java as-is
+ * ("Bellows Base" contains a space). Port geometry changes into the real in-mod model by hand.
+ */
 public class bellows<T extends Entity> extends EntityModel<T> {
-	// This layer location should be baked with EntityRendererProvider.Context in the entity renderer and passed into this model's constructor
 	public static final ModelLayerLocation LAYER_LOCATION = new ModelLayerLocation(new ResourceLocation("modid", "bellows"), "main");
 	private final ModelPart Bellows_Top;
 	private final ModelPart Spine;

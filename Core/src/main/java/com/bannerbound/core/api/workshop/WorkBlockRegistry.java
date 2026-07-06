@@ -15,7 +15,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Public registry of <b>work blocks</b> — the blocks that make an enclosed building a Workshop
+ * Public registry of <b>work blocks</b> - the blocks that make an enclosed building a Workshop
  * (see {@code CRAFTER_PLAN.md}). Expansions register their stations during common setup
  * ({@code FMLCommonSetupEvent.enqueueWork}, like {@code CitizenJobRegistry}):
  *
@@ -24,35 +24,41 @@ import net.minecraft.world.level.block.state.BlockState;
  *     BannerboundAntiquity.FLETCHING_STATION.get(), "fletchery"));
  * </pre>
  *
- * A workshop's TYPE is derived from the work blocks it contains: one distinct
- * {@code workshopTypeId} → that type; several → the generic "workshop" type. Its CAPACITY (max
- * assigned crafters) is the number of work blocks. Display names come from the lang keys
- * {@code bannerbound.workshop.type.<typeId>} (+ {@code bannerbound.workshop.type.mixed} and
- * {@code .none} for the derived fallbacks).
+ * <p>A workshop's TYPE is derived from the work blocks it contains: one distinct
+ * {@code workshopTypeId} -> that type; several -> the generic {@link #TYPE_MIXED} "workshop" type;
+ * none -> {@link #TYPE_NONE} (invalid). Its CAPACITY (max assigned crafters) is the number of work
+ * blocks, but a multiblock station supplies a {@code WorkBlockDef.anchorTest} so only its
+ * anchor/master cell counts - one work-slot per multiblock, not one per sub-block (shell cells are
+ * still recognized as station, so they are not mistaken for storage, but add no capacity). Display
+ * names come from lang keys {@code bannerbound.workshop.type.<typeId>} (+ {@code .mixed} / {@code
+ * .none}).
  *
- * <p>Phase 2 attaches a {@code WorkExecutor} per type (the thing that actually drives an NPC
- * craft); Phase 1 only needs the block → type mapping for validation/derivation.
+ * <p>A {@code WorkBlockDef} carries the block, its {@code workshopTypeId}, the {@link WorkExecutor}
+ * that drives an NPC craft (null = players-only station), the type's display icon (null = iconless,
+ * notably mixed/none), and the optional {@code anchorTest}. Every registration here is idempotent
+ * per key (first registration wins) across all maps.
+ *
+ * <p>Crafter professions live in {@code UNIT_BY_TYPE}: a single generic Crafter job staffs EVERY
+ * workshop, and its specialty (executor, icon, research unlock) is derived from the workshop's
+ * type, so the per-type unlock unit lives here rather than on a separate job id
+ * ({@link #crafterUnits} drives the "is the Crafter job available at all" check - any one
+ * researched is enough). When a Crafter cannot resolve a station family its icon falls back to the
+ * declared {@link #defaultCrafterType}'s icon (an expansion sets this once, Antiquity -> the
+ * crafting stone), else the Core {@link #setDefaultCrafterIconBaseline baseline} (a vanilla
+ * crafting table). Modules may layer extra per-type structure rules via {@link WorkshopRequirement}
+ * (returns null when satisfied, else the {@code Workshop.Status} that invalidates the workshop).
+ *
+ * <p>Phase 2 attaches a {@code WorkExecutor} per type; Phase 1 only needs the block -> type
+ * mapping. Icon and type lookups must resolve on BOTH client and server - registrations run in
+ * common setup.
  */
 public final class WorkBlockRegistry {
-    /** Derived type id for a workshop containing work blocks of SEVERAL types. */
     public static final String TYPE_MIXED = "mixed";
-    /** Derived type id for a workshop that currently contains NO work blocks (invalid). */
     public static final String TYPE_NONE = "none";
 
-    /** The fallback station type a generic Crafter's icon shows when no station family can be
-     *  resolved (no held position, and a mixed/none workshop). An expansion declares this once
-     *  (Antiquity → {@code "general_crafts"}, the crafting stone) so a Crafter is never iconless.
-     *  Its registered type icon takes precedence over {@link #defaultCrafterIconBaseline}. */
     private static volatile String defaultCrafterType = null;
-    /** Core baseline for the generic-Crafter fallback icon (a vanilla crafting table) — used when no
-     *  expansion has declared a {@link #defaultCrafterType} with an icon. Era-themed expansions
-     *  override it via {@link #setDefaultCrafterType} (Antiquity's crafting stone). */
     private static volatile net.minecraft.world.item.Item defaultCrafterIconBaseline = null;
 
-    /** One registered work block: the block, the workshop type it produces, the
-     *  {@link WorkExecutor} that drives an NPC craft at it (null = players-only station), and the
-     *  type's display icon item (null = no type icon) shown on the rod's floating workshop
-     *  overview labels. */
     public record WorkBlockDef(Block block, String workshopTypeId, @Nullable WorkExecutor executor,
                                @Nullable net.minecraft.world.item.Item icon,
                                @Nullable java.util.function.Predicate<BlockState> anchorTest) {
@@ -69,31 +75,16 @@ public final class WorkBlockRegistry {
             this(block, workshopTypeId, executor, icon, null);
         }
 
-        /** True when {@code state} is a capacity-bearing instance of this station. Single-block
-         *  stations always count; a multiblock station supplies an {@code anchorTest} so only its
-         *  anchor/master cell counts — one work-slot (and one NPC station) per multiblock, not one
-         *  per sub-block. The shell cells are still recognized as part of the station (so they're not
-         *  mistaken for storage) but contribute no capacity. */
         public boolean countsAt(BlockState state) {
             return anchorTest == null || anchorTest.test(state);
         }
     }
 
     private static final Map<Block, WorkBlockDef> BY_BLOCK = new LinkedHashMap<>();
-    /** First registered icon per workshop type id (for the floating overview labels). */
     private static final Map<String, net.minecraft.world.item.Item> ICON_BY_TYPE = new LinkedHashMap<>();
-    /** Optional per-workshop-type structure rules layered on top of the core workshop checks. */
     private static final Map<String, WorkshopRequirement> REQUIREMENT_BY_TYPE = new LinkedHashMap<>();
-    /** Research-unlock unit name per workshop type id (e.g. {@code "carpentry" -> "carpenter"}).
-     *  These are the crafter PROFESSIONS — a single generic Crafter job staffs every workshop, and
-     *  its specialty (executor, icon, unlock) is derived from the workshop's type, so the per-type
-     *  unit lives here rather than on a separate job id. Absent = that type is ungated. */
     private static final Map<String, String> UNIT_BY_TYPE = new LinkedHashMap<>();
 
-    /**
-     * Extra validation supplied by a module for one workshop type. Return {@code null} when the
-     * workshop satisfies the rule, or the status that should make the workshop invalid.
-     */
     @FunctionalInterface
     public interface WorkshopRequirement {
         @Nullable
@@ -105,7 +96,6 @@ public final class WorkBlockRegistry {
     private WorkBlockRegistry() {
     }
 
-    /** Registers a work block. Idempotent per block (first registration wins). */
     public static synchronized void register(WorkBlockDef def) {
         BY_BLOCK.putIfAbsent(def.block(), def);
         if (def.icon() != null) {
@@ -113,36 +103,28 @@ public final class WorkBlockRegistry {
         }
     }
 
-    /** Declares the research-unlock unit gating a workshop type (the crafter profession), e.g.
-     *  {@code registerTypeUnit("carpentry", "carpenter")}. First registration wins. */
     public static synchronized void registerTypeUnit(String typeId, String unitName) {
         if (typeId != null && unitName != null) UNIT_BY_TYPE.putIfAbsent(typeId, unitName);
     }
 
-    /** The research-unlock unit name gating a workshop type, or {@code null} when ungated. */
     @Nullable
     public static String unitForType(String typeId) {
         return UNIT_BY_TYPE.get(typeId);
     }
 
-    /** Every distinct crafter-profession unit declared via {@link #registerTypeUnit} — drives the
-     *  "is the generic Crafter job available at all" check (any one researched is enough). */
     public static synchronized Set<String> crafterUnits() {
         return Set.copyOf(UNIT_BY_TYPE.values());
     }
 
-    /** Replaces the extra validation rule for a workshop type id. */
     public static synchronized void registerRequirement(String typeId, WorkshopRequirement requirement) {
         REQUIREMENT_BY_TYPE.put(typeId, requirement);
     }
 
-    /** Registers a fallback validation rule for a workshop type id, preserving an expansion rule. */
     public static synchronized void registerRequirementIfAbsent(String typeId,
                                                                 WorkshopRequirement requirement) {
         REQUIREMENT_BY_TYPE.putIfAbsent(typeId, requirement);
     }
 
-    /** Runs every registered extra rule for the type ids present in this workshop. */
     @Nullable
     public static Workshop.Status validateRequirements(Set<String> typeIds, ServerLevel sl,
                                                        Workshop workshop, Set<BlockPos> marked,
@@ -158,34 +140,23 @@ public final class WorkBlockRegistry {
         return null;
     }
 
-    /** Declares the fallback station type a generic Crafter's icon falls back to (see
-     *  {@link #defaultCrafterType}). First declaration wins. An era-themed expansion calls this to
-     *  override Core's plain {@link #setDefaultCrafterIconBaseline crafting-table baseline} with its
-     *  own general-crafts station (Antiquity → the crafting stone). */
     public static synchronized void setDefaultCrafterType(String typeId) {
         if (typeId != null && !typeId.isBlank() && defaultCrafterType == null) {
             defaultCrafterType = typeId;
         }
     }
 
-    /** Core baseline for the generic-Crafter fallback icon (a vanilla crafting table). First call
-     *  wins; an expansion's {@link #setDefaultCrafterType} still takes precedence over it. */
     public static synchronized void setDefaultCrafterIconBaseline(net.minecraft.world.item.Item item) {
         if (item != null && defaultCrafterIconBaseline == null) {
             defaultCrafterIconBaseline = item;
         }
     }
 
-    /** The fallback station type for a generic Crafter's icon, or {@code null} if none declared. */
     @Nullable
     public static String defaultCrafterType() {
         return defaultCrafterType;
     }
 
-    /** Resolved fallback icon for a generic Crafter that can't resolve a station family: the
-     *  declared {@link #defaultCrafterType}'s registered icon (Antiquity's crafting stone) when
-     *  present, else the Core {@link #setDefaultCrafterIconBaseline baseline} (a crafting table),
-     *  else {@code null}. Resolvable on both sides (registrations run in common setup). */
     @Nullable
     public static net.minecraft.world.item.Item defaultCrafterIcon() {
         if (defaultCrafterType != null) {
@@ -195,14 +166,11 @@ public final class WorkBlockRegistry {
         return defaultCrafterIconBaseline;
     }
 
-    /** The display icon item for a workshop type id, or {@code null} when that type is intentionally
-     *  iconless (notably mixed/none). Resolvable on BOTH sides (registrations run in common setup). */
     @Nullable
     public static net.minecraft.world.item.Item iconForType(String typeId) {
         return ICON_BY_TYPE.get(typeId);
     }
 
-    /** The registration for this state's block, or null if it isn't a work block. */
     @Nullable
     public static WorkBlockDef of(BlockState state) {
         return BY_BLOCK.get(state.getBlock());
@@ -212,7 +180,6 @@ public final class WorkBlockRegistry {
         return BY_BLOCK.containsKey(state.getBlock());
     }
 
-    /** Lang key for a workshop type id (registered, mixed, or none). */
     public static String displayKey(String typeId) {
         return "bannerbound.workshop.type." + typeId;
     }

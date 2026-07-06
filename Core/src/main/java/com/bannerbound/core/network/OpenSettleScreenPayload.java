@@ -11,10 +11,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Opens the settlement-founding screen. {@code siteWarningMask} is a bitmask of
- * {@link com.bannerbound.core.api.settlement.SiteWarning}s assessed server-side at the founding
- * spot (see {@code SettlementSiteAssessor}), so the screen can flag a poor site before the player
- * commits.
+ * Opens the settlement-founding screen. siteWarningMask is a bitmask of SiteWarning values
+ * (com.bannerbound.core.api.settlement.SiteWarning) assessed server-side at the founding spot (see
+ * SettlementSiteAssessor), so the screen can flag a poor site before the player commits.
  */
 @ApiStatus.Internal
 public record OpenSettleScreenPayload(int siteWarningMask) implements CustomPacketPayload {

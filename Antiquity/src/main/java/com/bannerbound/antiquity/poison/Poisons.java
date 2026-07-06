@@ -1,6 +1,9 @@
 package com.bannerbound.antiquity.poison;
 
 import java.util.List;
+import java.util.UUID;
+
+import javax.annotation.Nullable;
 
 import com.bannerbound.antiquity.BannerboundAntiquity;
 import com.bannerbound.antiquity.Config;
@@ -13,6 +16,8 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.sounds.SoundEvent;
 import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.player.Player;
@@ -22,27 +27,61 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * The poison "spine" — the {@link HuntingFear}-style helper every poison reads and writes. Backed by
- * the synced {@code POISON_STATE} attachment. The shared lifecycle ({@link #applyPoison}, escalation,
- * damage-over-time, {@link #cure}) lives here; each poison's signature behaviour is the per-constant
- * {@link PoisonType#tick}. Ticked for every poisoned {@link LivingEntity} by {@code PoisonEvents}.
+ * The poison "spine" - the {@code HuntingFear}-style helper every poison reads and writes, backed by
+ * the synced {@code POISON_STATE} attachment and ticked for every poisoned {@link LivingEntity} by
+ * {@code PoisonEvents}. The shared lifecycle (apply, escalation, damage-over-time, cure) lives here;
+ * each poison's signature behaviour is its per-constant {@link PoisonType#tick}.
+ *
+ * <p>Application: a second dart of the SAME poison escalates one stage immediately; a different
+ * poison tears the old one down (onCleared) and takes over at stage 1. {@link #applyPoisonAtStage}
+ * is the poisoned-food path - the dose (number of coatings) sets the opening stage, and each extra
+ * dose replays onApplied(false) (a no-op for staged poisons, a clock acceleration for oleander).
+ * The causedBy overloads record WHO administered the dose so the eventual poison death still credits
+ * their settlement (DropGatingEvents kill-credit resolution plus the "succumbed to poison whilst
+ * fighting" death line); a null causedBy deliberately CLEARS any previous inflictor so an
+ * unattributed re-dose can't keep crediting the old attacker. Escalation: when a stage's deadline
+ * passes the stage climbs; past the final stage the deadline IS the moment of death - players die by
+ * running out the final stage (their DoT is multiplied way down and clamped above
+ * POISON_NONLETHAL_FLOOR, never lethal), while a non-lethal timeout (wolfsbane on an animal) simply
+ * wears off, since it only ever held the creature still for the hunter. A non-escalating poison gets
+ * stageEndsAt = Long.MAX_VALUE. {@link #cure(LivingEntity, PoisonType)} is the cross-biome cure
+ * cycle (each remedy treats exactly one poison, e.g. yarrow -> wolfsbane); curing curare grants
+ * brief immunity (POISON_CURARE_IMMUNE_UNTIL) so a kidnapper can't instantly re-dart a freed victim.
+ *
+ * <p>Signature mechanics: wolfsbane pins the victim in ~0.5s root-pulse windows whose gap tightens
+ * per stage (PULSE_* constants, in ticks: every ~3s at stage 1 down to ~1.5s), staggers a visible
+ * leg-buckle stumble, and from stage 2 rolls a jump-lock per JUMP_WINDOW_TICKS window -
+ * deterministic within a window (no flicker) but unpredictable across windows, because the
+ * uncertainty is scarier than a flat lock; the final stage adds blood vomits every 1200-2400t,
+ * scheduled per-victim. Oleander's one-shot cardiac clock lives in the SYNCED POISON_CARDIAC_AT
+ * attachment (the client drives countdown visuals from it); re-doses never reset it but cut the
+ * REMAINING time to OLEANDER_DOSE_KEEP of itself (floor OLEANDER_MIN_TICKS), blood coughs cost extra
+ * health on a cadence tightening from 40-60s toward 15s, and {@link #blocksHealing} drives
+ * PoisonEvents' LivingHealEvent cancel that blocks ALL healing. Curare's stun -> unconscious ->
+ * recover deadlines are synced, so {@link #isCurareUnconscious} works on both sides; a re-dose on an
+ * already-unconscious victim EXTENDS the wake deadline (restarting the stun phase would briefly wake
+ * them), capped at CURARE_MAX_OUT_MULT x the base out-duration since the faint - holding someone
+ * under forever means letting them wake and landing a fresh dart each cycle, not dart spam. Curing
+ * curare also releases both ends of any kidnap-drag rope link. Belladonna's server tick only affects
+ * mobs (erratic bolting/flailing others can see); a poisoned player's hallucinations are
+ * client-side. Paralysis is a shared pair of transient ADD_MULTIPLIED_BASE attribute modifiers
+ * (-1.0 = fully rooted, idempotent); transient modifiers vanish on death/relog, so
+ * {@link #clearParalysis} only matters for a live cure.
+ *
+ * <p>{@link #POISON_STAGE_TAG} is the cross-mod bridge: Core's CitizenEntity cannot import this
+ * Antiquity attachment, so setState mirrors the 1-based stage (0 = not poisoned) into shared
+ * persistent data for its thought / stamina / name-tag glyph - the same bridge pattern as
+ * HuntingFear's DOMESTICATED_TAG.
  */
 public final class Poisons {
     private Poisons() {}
 
-    /** Shared persistent-data int Core's {@code CitizenEntity} reads to mirror poison into its
-     *  thought / stamina / name-tag glyph — Core can't import this Antiquity attachment, so we stamp
-     *  the same bridge {@link com.bannerbound.antiquity.entity.HuntingFear#DOMESTICATED_TAG} uses.
-     *  {@code 0} = not poisoned; otherwise the current 1-based stage. */
     public static final String POISON_STAGE_TAG = "BannerboundPoisonStage";
 
-    // Wolfsbane paralytic root-pulse cadence (ticks). The freeze window stays ~0.5s; the gap between
-    // pulses tightens as the poison deepens, so it locks the victim down more and more.
-    private static final int PULSE_LENGTH = 10;       // ~0.5s pinned
-    private static final int PULSE_BASE_PERIOD = 60;  // stage 1: a pulse every ~3s
-    private static final int PULSE_PERIOD_STEP = 10;  // each stage shortens the gap
-    private static final int PULSE_MIN_PERIOD = 30;   // floor (max stage: every ~1.5s)
-    /** A leg-buckle window for the unpredictable jump-lock — re-rolled each window per victim. */
+    private static final int PULSE_LENGTH = 10;
+    private static final int PULSE_BASE_PERIOD = 60;
+    private static final int PULSE_PERIOD_STEP = 10;
+    private static final int PULSE_MIN_PERIOD = 30;
     private static final int JUMP_WINDOW_TICKS = 30;
 
     private static final ResourceLocation PARALYSIS_SPEED_ID =
@@ -50,7 +89,6 @@ public final class Poisons {
     private static final ResourceLocation PARALYSIS_JUMP_ID =
         ResourceLocation.fromNamespaceAndPath(BannerboundAntiquity.MODID, "poison_paralysis_jump");
 
-    // ── Query ────────────────────────────────────────────────────────────────────────────────
     public static boolean isPoisoned(LivingEntity e) {
         return e.getData(BannerboundAntiquity.POISON_STATE.get()).active();
     }
@@ -59,40 +97,40 @@ public final class Poisons {
         return e.getData(BannerboundAntiquity.POISON_STATE.get());
     }
 
-    // ── Apply / cure ───────────────────────────────────────────────────────────────────────────
-    /** Inflict (or refresh) {@code type} on {@code victim}. Re-applying the same poison keeps the
-     *  current stage and restarts that stage's clock; a different poison takes over at stage 1. */
     public static void applyPoison(LivingEntity victim, PoisonType type) {
+        applyPoison(victim, type, null);
+    }
+
+    public static void applyPoison(LivingEntity victim, PoisonType type, @Nullable Entity causedBy) {
         if (!Config.POISON_ENABLED.get() || type == null) {
             return;
         }
         if (type == PoisonType.CURARE && isCurareImmune(victim)) {
-            return; // the arnica antidote left them temporarily resistant — the dose doesn't take
+            return;
         }
         PoisonState cur = getPoison(victim);
         if (cur.type() != null && cur.type() != type) {
-            cur.type().onCleared(victim); // switching poisons — let the old one tear down its effects
+            cur.type().onCleared(victim);
         }
-        // A second dart of the SAME poison escalates a stage IMMEDIATELY (stacking darts); a fresh
-        // poison starts at stage 1. Either way the new stage's clock restarts.
         boolean freshInfection = !(cur.active() && cur.type() == type);
         int stage = freshInfection ? 1 : Math.min(type.maxStage(), cur.stage() + 1);
-        // A non-escalating poison (oleander) never times its stage out — death is its own tick's job.
         long stageEndsAt = type.escalates()
             ? victim.level().getGameTime() + Config.POISON_STAGE_ADVANCE_TICKS.get()
             : Long.MAX_VALUE;
         setState(victim, new PoisonState(type, stage, stageEndsAt));
-        type.onApplied(victim, freshInfection); // e.g. oleander arms its fixed cardiac clock
-        // Impact cue, heard only by the afflicted player.
+        setPoisonedBy(victim, causedBy);
+        type.onApplied(victim, freshInfection);
         if (victim instanceof ServerPlayer player && type.hitSound() != null) {
             player.playNotifySound(type.hitSound(), SoundSource.PLAYERS, 1.0F, 1.0F);
         }
     }
 
-    /** Inflict {@code type} starting at an explicit {@code startStage} (clamped 1..maxStage) — used by
-     *  poisoned food, where the dose (number of coatings) sets the opening stage. Treated as a fresh
-     *  infection so any per-poison clock (oleander/curare) arms from now. */
     public static void applyPoisonAtStage(LivingEntity victim, PoisonType type, int startStage) {
+        applyPoisonAtStage(victim, type, startStage, null);
+    }
+
+    public static void applyPoisonAtStage(LivingEntity victim, PoisonType type, int startStage,
+            @Nullable Entity causedBy) {
         if (!Config.POISON_ENABLED.get() || type == null) {
             return;
         }
@@ -109,9 +147,8 @@ public final class Poisons {
             ? victim.level().getGameTime() + Config.POISON_STAGE_ADVANCE_TICKS.get()
             : Long.MAX_VALUE;
         setState(victim, new PoisonState(type, stage, stageEndsAt));
+        setPoisonedBy(victim, causedBy);
         type.onApplied(victim, freshInfection);
-        // Extra food doses beyond the first: a no-op for staged poisons (their stage was already set),
-        // but oleander treats each as a re-dose that speeds up its cardiac clock.
         for (int i = 1; i < startStage; i++) {
             type.onApplied(victim, false);
         }
@@ -120,14 +157,9 @@ public final class Poisons {
         }
     }
 
-    /** Cure ONLY if the active poison is {@code onlyType} — the cross-biome cure cycle, where each
-     *  remedy treats exactly one poison (yarrow→wolfsbane, marshmallow→belladonna, …). A no-op if the
-     *  victim isn't suffering that specific poison. */
     public static void cure(LivingEntity victim, PoisonType onlyType) {
         if (getPoison(victim).type() == onlyType) {
             cure(victim);
-            // Curing curare specifically (an antidote, not a natural wake-up) grants brief resistance so
-            // a kidnapper can't instantly re-dart the freed victim back under.
             if (onlyType == PoisonType.CURARE && Config.POISON_CURARE_IMMUNE_TICKS.get() > 0) {
                 victim.setData(BannerboundAntiquity.POISON_CURARE_IMMUNE_UNTIL.get(),
                     victim.level().getGameTime() + Config.POISON_CURARE_IMMUNE_TICKS.get());
@@ -135,12 +167,10 @@ public final class Poisons {
         }
     }
 
-    /** Whether the arnica antidote left {@code victim} still resisting new curare doses. */
     private static boolean isCurareImmune(LivingEntity victim) {
         return victim.level().getGameTime() < victim.getData(BannerboundAntiquity.POISON_CURARE_IMMUNE_UNTIL.get());
     }
 
-    /** Clear all poison from {@code victim} (milk, debug, death-cleanup). */
     public static void cure(LivingEntity victim) {
         PoisonState cur = getPoison(victim);
         if (cur.type() != null) {
@@ -150,15 +180,37 @@ public final class Poisons {
             }
         }
         setState(victim, PoisonState.NONE);
+        victim.removeData(BannerboundAntiquity.POISON_BY.get());
+    }
+
+    private static void setPoisonedBy(LivingEntity victim, @Nullable Entity causedBy) {
+        if (causedBy != null) {
+            victim.setData(BannerboundAntiquity.POISON_BY.get(), causedBy.getStringUUID());
+        } else {
+            victim.removeData(BannerboundAntiquity.POISON_BY.get());
+        }
+    }
+
+    private static DamageSource poisonDamage(LivingEntity victim) {
+        Entity owner = null;
+        if (victim.level() instanceof ServerLevel sl) {
+            String by = victim.getData(BannerboundAntiquity.POISON_BY.get());
+            if (!by.isEmpty()) {
+                try {
+                    owner = sl.getEntity(UUID.fromString(by));
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
+        }
+        return victim.damageSources().source(BannerboundAntiquity.POISON_DAMAGE, owner);
     }
 
     private static void setState(LivingEntity victim, PoisonState state) {
         victim.setData(BannerboundAntiquity.POISON_STATE.get(), state);
-        // Bridge for Core (citizens): mirror the stage into shared persistent data. 0 clears it.
+        // Bridge for Core citizens: mirror the stage into shared persistent data; 0 clears it.
         victim.getPersistentData().putInt(POISON_STAGE_TAG, state.active() ? state.stage() : 0);
     }
 
-    // ── Per-tick lifecycle (called only for already-poisoned entities) ──────────────────────────
     public static void tickPoison(LivingEntity victim, ServerLevel level) {
         PoisonState s = getPoison(victim);
         if (!s.active()) {
@@ -168,39 +220,28 @@ public final class Poisons {
         boolean isPlayer = victim instanceof Player;
         long now = level.getGameTime();
         int stage = s.stage();
-        // Escalate when this stage's deadline passes. Past the final stage the deadline becomes the
-        // moment of death — "stage 5": the body finally gives out. This is what kills a player
-        // (their DoT is negligible); they die by running out the final stage, not by chip damage.
         if (now >= s.stageEndsAt()) {
             if (stage < type.maxStage()) {
                 stage++;
                 setState(victim, new PoisonState(type, stage, now + Config.POISON_STAGE_ADVANCE_TICKS.get()));
             } else if (type.lethalAtMaxStage() && (isPlayer || type.toxicToAnimals())) {
-                victim.hurt(victim.damageSources().source(BannerboundAntiquity.POISON_DAMAGE),
-                    victim.getMaxHealth() * 10.0F + 1000.0F); // guaranteed lethal, "succumbed to poison"
+                victim.hurt(poisonDamage(victim),
+                    victim.getMaxHealth() * 10.0F + 1000.0F);
                 return;
             } else {
-                // Non-lethal here (e.g. wolfsbane on an animal): the dose simply wears off — it only
-                // ever held the creature still for the hunter, it never poisoned it to death.
                 cure(victim);
                 return;
             }
         }
-        // Damage-over-time on the interval, clamped non-lethal below the final stage (pure control
-        // poisons like curare skip it entirely).
         if (type.dealsDamageOverTime() && now % Config.POISON_DOT_INTERVAL_TICKS.get() == 0) {
             applyDot(victim, type, stage, isPlayer);
         }
-        // Signature effect (wolfsbane root-pulse, etc).
         type.tick(victim, stage, level);
-        // Ambient poison haze in the poison's colour — so OTHERS (not just the victim) can see at a
-        // glance that this creature is poisoned and with what.
         if (now % 10 == 0) {
             emitPoisonHaze(victim, type, level);
         }
     }
 
-    /** A small puff of the poison's tint colour around the victim, broadcast to all nearby clients. */
     private static void emitPoisonHaze(LivingEntity victim, PoisonType type, ServerLevel level) {
         int c = type.tintColor();
         level.sendParticles(
@@ -211,16 +252,13 @@ public final class Poisons {
     }
 
     private static void applyDot(LivingEntity victim, PoisonType type, int stage, boolean isPlayer) {
-        // A pure hunting paralytic (wolfsbane) deals animals NO poison damage — it just immobilizes.
         if (!isPlayer && !type.toxicToAnimals()) {
             return;
         }
         float dmg = (float) (double) Config.POISON_DOT_PER_STAGE.get() * stage;
         if (isPlayer) {
-            dmg *= (float) (double) Config.POISON_PLAYER_DOT_MULT.get(); // players barely take chip damage
+            dmg *= (float) (double) Config.POISON_PLAYER_DOT_MULT.get();
         }
-        // Players are NEVER killed by the DoT — only by the final-stage timeout above. Animals can be
-        // finished by the DoT at the lethal final stage.
         boolean lethal = type.lethalAtMaxStage() && stage >= type.maxStage() && !isPlayer;
         if (!lethal) {
             float floor = (float) (double) Config.POISON_NONLETHAL_FLOOR.get();
@@ -229,38 +267,31 @@ public final class Poisons {
         if (dmg <= 0.0F) {
             return;
         }
-        victim.hurt(victim.damageSources().source(BannerboundAntiquity.POISON_DAMAGE), dmg);
+        victim.hurt(poisonDamage(victim), dmg);
     }
 
-    // ── Oleander signature: anti-heal + a fixed cardiac countdown ───────────────────────────────
-    /** Whether {@code victim} is currently suffering oleander — drives the {@code LivingHealEvent}
-     *  cancel in {@code PoisonEvents} that blocks ALL healing for oleander's duration. */
     public static boolean blocksHealing(LivingEntity victim) {
         return getPoison(victim).type() == PoisonType.OLEANDER;
     }
 
-    /** Arm the fixed heart-attack clock at infection (a one-shot; re-doses don't reset it). Stored in
-     *  the SYNCED {@code POISON_CARDIAC_AT} attachment so the client can drive the countdown visuals. */
     static void startOleanderClock(LivingEntity victim) {
         victim.setData(BannerboundAntiquity.POISON_CARDIAC_AT.get(),
             victim.level().getGameTime() + Config.POISON_OLEANDER_CLOCK_TICKS.get());
-        victim.setData(BannerboundAntiquity.POISON_NEXT_VOMIT.get(), 0L); // reschedule coughs fresh
+        victim.setData(BannerboundAntiquity.POISON_NEXT_VOMIT.get(), 0L);
     }
 
     static void clearOleanderClock(LivingEntity victim) {
         victim.setData(BannerboundAntiquity.POISON_CARDIAC_AT.get(), 0L);
     }
 
-    private static final long OLEANDER_MIN_TICKS = 300L;     // a re-dosed clock can't drop below 15s
-    private static final double OLEANDER_DOSE_KEEP = 0.6;    // each extra dose cuts the REMAINING time by 40%
+    private static final long OLEANDER_MIN_TICKS = 300L;
+    private static final double OLEANDER_DOSE_KEEP = 0.6;
 
-    /** A second-and-onward oleander dose (more darts/arrows, or a higher-dosed food) doesn't reset the
-     *  clock — it drags the heart-attack deadline CLOSER, flooring at {@link #OLEANDER_MIN_TICKS}. */
     static void accelerateOleanderClock(LivingEntity victim) {
         long now = victim.level().getGameTime();
         long deadline = victim.getData(BannerboundAntiquity.POISON_CARDIAC_AT.get());
         if (deadline <= 0L) {
-            startOleanderClock(victim); // no clock yet — arm the full one
+            startOleanderClock(victim);
             return;
         }
         long remaining = Math.max(0L, deadline - now);
@@ -268,42 +299,33 @@ public final class Poisons {
         victim.setData(BannerboundAntiquity.POISON_CARDIAC_AT.get(), now + shortened);
     }
 
-    /** Oleander does no special per-tick movement effect — its threat is the anti-heal (handled by the
-     *  heal-event cancel) plus the fixed clock checked here: when the deadline passes, the heart gives
-     *  out and the victim dies outright, regardless of stage. Stage only deepens the (un-healable) DoT. */
     static void oleanderTick(LivingEntity victim, int stage, ServerLevel level) {
         long now = level.getGameTime();
         long deadline = victim.getData(BannerboundAntiquity.POISON_CARDIAC_AT.get());
         if (deadline <= 0L) {
-            startOleanderClock(victim); // safety: clock missing (poison predates this code) — arm it now
+            startOleanderClock(victim);
             return;
         }
         if (now >= deadline) {
             clearOleanderClock(victim);
-            // Cardiac arrest: guaranteed lethal (players and animals — oleander is toxicToAnimals).
-            victim.hurt(victim.damageSources().source(BannerboundAntiquity.POISON_DAMAGE),
+            victim.hurt(poisonDamage(victim),
                 victim.getMaxHealth() * 10.0F + 1000.0F);
             return;
         }
-        // Blood coughs (same retch + blood as wolfsbane) that ALSO cost 2 hearts each — with the anti-heal
-        // they accumulate. Cadence: every 40–60s early, tightening toward 15s as the heart nears arrest.
         long nextCough = victim.getData(BannerboundAntiquity.POISON_NEXT_VOMIT.get());
         if (now >= nextCough) {
             if (nextCough > 0L) {
                 vomit(victim, level, PoisonType.WOLFSBANE.belchSound());
-                victim.hurt(victim.damageSources().source(BannerboundAntiquity.POISON_DAMAGE), 3.0F);
+                victim.hurt(poisonDamage(victim), 3.0F);
             }
             double clock = Math.max(1.0, Config.POISON_OLEANDER_CLOCK_TICKS.get());
-            double f = Math.max(0.0, Math.min(1.0, 1.0 - (deadline - now) / clock)); // 0 at infection → 1 at arrest
-            long slow = 800L + victim.getRandom().nextInt(401);                       // 40–60s
-            long interval = Math.round(slow + (300.0 - slow) * f);                    // → 15s near the end
+            double f = Math.max(0.0, Math.min(1.0, 1.0 - (deadline - now) / clock));
+            long slow = 800L + victim.getRandom().nextInt(401);
+            long interval = Math.round(slow + (300.0 - slow) * f);
             victim.setData(BannerboundAntiquity.POISON_NEXT_VOMIT.get(), now + interval);
         }
     }
 
-    // ── Curare signature: two-phase kidnap (stun → unconscious) ─────────────────────────────────
-    /** True while {@code victim} is in curare's UNCONSCIOUS phase (passed out: fully immobilised,
-     *  rendered prone, draggable). Usable on both sides (synced deadlines). */
     public static boolean isCurareUnconscious(LivingEntity victim, long now) {
         if (getPoison(victim).type() != PoisonType.CURARE) {
             return false;
@@ -313,24 +335,14 @@ public final class Poisons {
         return faintAt > 0L && now >= faintAt && now < wakeAt;
     }
 
-    /** Arm (or refresh) curare's stun→unconscious→recover timeline from now. Re-darting RESETS it
-     *  (the opposite of oleander's one-shot clock). Players go under for less time than animals. */
     static void startCurareClocks(LivingEntity victim) {
         long faintAt = victim.level().getGameTime() + Config.POISON_CURARE_STUN_TICKS.get();
         victim.setData(BannerboundAntiquity.POISON_CURARE_FAINT_AT.get(), faintAt);
         victim.setData(BannerboundAntiquity.POISON_CURARE_WAKE_AT.get(), faintAt + curareOutTicks(victim));
     }
 
-    /** Re-doses extend unconsciousness, but never beyond this many times the base out-duration from
-     *  the faint — caps CONTINUOUS captivity (players: 3×300t = 45s; animals/citizens: 3×600t = 90s at
-     *  defaults). Past the cap the victim wakes (fully cured), so holding someone under forever takes
-     *  letting them wake and landing a fresh stun-phase dart each cycle, not a dart-spam lock. */
     private static final int CURARE_MAX_OUT_MULT = 3;
 
-    /** A re-dose: if the victim has ALREADY passed out, keep them under and just push the wake time back
-     *  (extend the unconsciousness, capped at {@link #CURARE_MAX_OUT_MULT}× the base duration since the
-     *  faint) — resetting to the stun phase would briefly WAKE them. If they're still in the stun phase
-     *  (or somehow have no clock), restart the timeline from scratch. */
     static void refreshCurare(LivingEntity victim) {
         long now = victim.level().getGameTime();
         long faintAt = victim.getData(BannerboundAntiquity.POISON_CURARE_FAINT_AT.get());
@@ -349,8 +361,6 @@ public final class Poisons {
             : Config.POISON_CURARE_ANIMAL_OUT_TICKS.get();
     }
 
-    /** Cure-cleanup for curare: strip the immobilising modifiers, clear the deadlines, and drop any
-     *  kidnap drag (release both ends of the rope link). */
     static void clearCurare(LivingEntity victim) {
         clearParalysis(victim);
         victim.setData(BannerboundAntiquity.POISON_CURARE_FAINT_AT.get(), 0L);
@@ -364,18 +374,15 @@ public final class Poisons {
         }
     }
 
-    /** Phase 1 STUN = heavy slow + sprint/jump lock (the victim staggers, eyelids heavy). Phase 2
-     *  UNCONSCIOUS = fully rooted (speed -1, jump -1, zero horizontal velocity each tick) UNLESS being
-     *  dragged, in which case the drag controls movement. Ends (non-lethal) at the wake deadline. */
     static void curareTick(LivingEntity victim, ServerLevel level) {
         long now = level.getGameTime();
         long wakeAt = victim.getData(BannerboundAntiquity.POISON_CURARE_WAKE_AT.get());
         if (wakeAt <= 0L) {
-            startCurareClocks(victim); // safety: clocks missing (poison predates this code) — arm now
+            startCurareClocks(victim);
             return;
         }
         if (now >= wakeAt) {
-            cure(victim); // wakes up — onCleared() clears clocks, modifiers and any drag
+            cure(victim);
             return;
         }
         boolean unconscious = now >= victim.getData(BannerboundAntiquity.POISON_CURARE_FAINT_AT.get());
@@ -385,20 +392,16 @@ public final class Poisons {
             player.setSprinting(false);
         }
         if (victim instanceof PathfinderMob mob) {
-            mob.getNavigation().stop(); // drop any path (stun stagger or full faint)
+            mob.getNavigation().stop();
         }
         if (unconscious && victim.getData(BannerboundAntiquity.DRAGGED_BY.get()) == 0) {
-            // Pin in place — but only when NOT being towed (the drag owns the velocity then).
+            // Pin in place only when NOT being towed - the drag owns the velocity then.
             Vec3 v = victim.getDeltaMovement();
             victim.setDeltaMovement(0.0, v.y, 0.0);
             victim.hurtMarked = true;
         }
     }
 
-    // ── Belladonna signature: deliriant madness (mob erratic behaviour) ─────────────────────────
-    /** So the madness is VISIBLE to others, a belladonna-poisoned mob (citizen/animal) acts erratically
-     *  — bolting to random spots and flailing/striking at nothing (or, rarely, a random bystander). A
-     *  poisoned PLAYER instead gets the client-side hallucinations, so this is a no-op for players. */
     static void belladonnaTick(LivingEntity victim, int stage, ServerLevel level) {
         if (!(victim instanceof PathfinderMob mob)) {
             return;
@@ -421,24 +424,17 @@ public final class Poisons {
         }
     }
 
-    // ── Wolfsbane signature: creeping paralytic ─────────────────────────────────────────────────
     static void wolfsbaneTick(LivingEntity victim, int stage, ServerLevel level) {
         applyParalysisSlow(victim, stage);
-        // Root pulse: a short full-stop window every `period` ticks; the gap tightens with stage.
         int period = Math.max(PULSE_MIN_PERIOD, PULSE_BASE_PERIOD - (stage - 1) * PULSE_PERIOD_STEP);
         if (level.getGameTime() % period < PULSE_LENGTH) {
             rootPulse(victim);
         }
-        // A visible stumble — every so often the legs buckle and the victim lurches off-balance, so it
-        // clearly reads as "trying to walk and failing" to anyone watching (not just a slow).
         if (victim.onGround() && victim.getRandom().nextInt(Math.max(15, 45 - stage * 8)) == 0) {
             double a = victim.getRandom().nextDouble() * Math.PI * 2.0;
             victim.setDeltaMovement(Math.cos(a) * 0.18, victim.getDeltaMovement().y, Math.sin(a) * 0.18);
             victim.hurtMarked = true;
         }
-        // Players can't be path-stopped — kill their sprint. The jump only buckles from stage 2 on,
-        // and even then only in unpredictable windows (sometimes you can leap, sometimes your legs
-        // give out) — the uncertainty is scarier than a flat lock.
         if (victim instanceof ServerPlayer player) {
             player.setSprinting(false);
             if (jumpBucklesNow(victim, stage, level.getGameTime())) {
@@ -447,8 +443,6 @@ public final class Poisons {
                 removeJumpLock(victim);
             }
         }
-        // Final stage: the body is failing — an occasional blood-vomit + retch (every 1200–2400t),
-        // scheduled per-victim so it isn't a metronome.
         if (stage >= PoisonType.WOLFSBANE.maxStage()) {
             long now = level.getGameTime();
             long next = victim.getData(BannerboundAntiquity.POISON_NEXT_VOMIT.get());
@@ -457,14 +451,11 @@ public final class Poisons {
                     vomit(victim, level, PoisonType.WOLFSBANE.belchSound());
                 }
                 victim.setData(BannerboundAntiquity.POISON_NEXT_VOMIT.get(),
-                    now + 1200L + victim.getRandom().nextInt(1201)); // 1200–2400 ticks
+                    now + 1200L + victim.getRandom().nextInt(1201));
             }
         }
     }
 
-    /** Unpredictable leg-buckle: stage 2+, a per-victim coin-flip per {@link #JUMP_WINDOW_TICKS}
-     *  window whose odds climb with the stage. Deterministic within a window (so it doesn't flicker
-     *  every tick) but unpredictable across windows and desynced between victims. */
     private static boolean jumpBucklesNow(LivingEntity victim, int stage, long gameTime) {
         if (stage < 2) {
             return false;
@@ -477,8 +468,6 @@ public final class Poisons {
         return roll < chance;
     }
 
-    /** A burst of blood from the mouth (front of the head) + a retch — the "you're really dying" cue.
-     *  Visible on poisoned citizens/animals too, not just the player. */
     private static void vomit(LivingEntity victim, ServerLevel level, SoundEvent belch) {
         Vec3 look = victim.getLookAngle();
         Vec3 mouth = victim.getEyePosition().add(look.scale(0.3)).subtract(0.0, 0.15, 0.0);
@@ -489,19 +478,18 @@ public final class Poisons {
         }
         Player except = victim instanceof Player p ? p : null;
         if (victim instanceof ServerPlayer sp) {
-            sp.playNotifySound(belch, SoundSource.PLAYERS, 0.9F, 1.0F); // first-person, only them
+            sp.playNotifySound(belch, SoundSource.PLAYERS, 0.9F, 1.0F);
         }
         level.playSound(except, victim.getX(), victim.getY(), victim.getZ(),
-            belch, SoundSource.PLAYERS, 0.7F, 1.0F); // everyone else nearby
+            belch, SoundSource.PLAYERS, 0.7F, 1.0F);
     }
 
-    /** Pin the victim where it stands for this tick (zero horizontal velocity + halt pathing). */
     private static void rootPulse(LivingEntity victim) {
         Vec3 v = victim.getDeltaMovement();
         victim.setDeltaMovement(0.0, v.y, 0.0);
-        victim.hurtMarked = true; // force a velocity packet so the client actually sees the freeze
+        victim.hurtMarked = true; // force a velocity packet or the client never sees the freeze
         if (victim instanceof PathfinderMob mob) {
-            mob.getNavigation().stop(); // citizens + wild animals: drop the current path
+            mob.getNavigation().stop();
         }
     }
 
@@ -509,8 +497,6 @@ public final class Poisons {
         setParalysisSlow(victim, -Math.min(0.9, Config.POISON_SLOW_PER_STAGE.get() * stage));
     }
 
-    /** Set the shared poison movement-speed modifier to {@code slow} (a negative ADD_MULTIPLIED_BASE
-     *  fraction; -1.0 = fully rooted). Idempotent; cleared by {@link #clearParalysis}. */
     private static void setParalysisSlow(LivingEntity victim, double slow) {
         AttributeInstance speed = victim.getAttribute(Attributes.MOVEMENT_SPEED);
         if (speed == null) {
@@ -539,8 +525,6 @@ public final class Poisons {
         }
     }
 
-    /** Remove the paralytic attribute modifiers (cure, or switching off wolfsbane). Transient
-     *  modifiers also vanish on their own at death/relog, so this only matters for a live cure. */
     static void clearParalysis(LivingEntity victim) {
         AttributeInstance speed = victim.getAttribute(Attributes.MOVEMENT_SPEED);
         if (speed != null) {

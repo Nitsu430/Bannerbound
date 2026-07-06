@@ -11,7 +11,8 @@ import net.neoforged.api.distmarker.OnlyIn;
  * the Job tab's "Set drop location" button (see {@code OpenDropLocationEditPayload}); while active,
  * {@link DropLocationEditRenderer} draws a one-block wireframe at the looked-at block and an
  * action-bar prompt in the settlement color, and {@link com.bannerbound.core.event.DropLocationEditClick}
- * captures the right-click that marks the block.
+ * captures the right-click that marks the block. The {@code seed} flag distinguishes marking a
+ * farmer's seed source from the harvest drop-off.
  */
 @OnlyIn(Dist.CLIENT)
 @ApiStatus.Internal
@@ -30,7 +31,6 @@ public final class DropLocationEditState {
     public static Component name() { return name; }
     public static Component jobTitle() { return jobTitle; }
     public static int settlementRgb() { return settlementRgb; }
-    /** True when marking the farmer's seed source (vs the harvest drop-off). */
     public static boolean isSeed() { return seed; }
 
     public static void begin(int id, Component citizenName, Component title, int rgb, boolean isSeed) {

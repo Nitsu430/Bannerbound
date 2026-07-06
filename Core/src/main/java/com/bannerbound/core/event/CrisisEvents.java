@@ -17,7 +17,13 @@ import net.neoforged.neoforge.event.entity.player.ItemEntityPickupEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.level.BlockEvent;
 
-/** Generic vanilla-action triggers for data-authored crises. */
+/**
+ * Bridges vanilla player actions (item pickup/craft, block place/break) into {@link CrisisManager}
+ * so data-authored crises can react to them. Each hook resolves the acting player's settlement via
+ * {@link SettlementData#getByPlayer} and bails if there is none - crises are settlement-scoped.
+ * Server-side only; block place/break run at LOWEST priority and skip cancelled events so a denied
+ * action does not register.
+ */
 @EventBusSubscriber(modid = BannerboundCore.MODID)
 @ApiStatus.Internal
 public final class CrisisEvents {

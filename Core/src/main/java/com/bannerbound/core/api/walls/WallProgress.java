@@ -11,14 +11,15 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
- * Blueprint-vs-world completeness scan (WALLS_PLAN.md §A "completeness %"). A position counts
- * as satisfied when the world block MATCHES THE EXPECTED BLOCK — deliberately forgiving on
+ * Blueprint-vs-world completeness scan (WALLS_PLAN.md section A "completeness %"). A position
+ * counts as satisfied when the world block MATCHES THE EXPECTED BLOCK - deliberately forgiving on
  * state (an open gate, a differently-shaped wall connection or rotated stair still counts;
- * tightening to exact-state is a later refinement if it ever matters). Water-gap pieces emit
- * no blueprint positions, so they're inherently excluded — water IS the wall.
+ * tightening to exact-state is a later refinement if it ever matters). Water-gap pieces emit no
+ * blueprint positions, so they are inherently excluded - water IS the wall.
  *
- * <p>Used on demand (status command / future walls tab + stakes); throttled callers piggyback
- * the settlement upkeep tick, never per-block ticking.
+ * <p>Used on demand (status command / future walls tab + stakes); throttled callers piggyback the
+ * settlement upkeep tick, never per-block ticking. {@link #remainingItems} reports the items still
+ * needed for unsatisfied positions, largest counts first.
  */
 public final class WallProgress {
 
@@ -52,7 +53,6 @@ public final class WallProgress {
         return new Progress(blueprint.size(), matching, missing, mismatched);
     }
 
-    /** Items still needed for unsatisfied blueprint positions, largest counts first. */
     public static Map<Item, Integer> remainingItems(ServerLevel level, WallPlan plan,
                                                     Function<String, WallDesign> designs) {
         Long2ObjectMap<BlockState> blueprint = plan.buildBlueprint(designs);

@@ -24,22 +24,20 @@ import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemp
 
 /**
  * Assembles a barbarian camp village-style: a procedural center (campfire + the type-coloured
- * standard = raze target), then a ring of authored {@code .nbt} building pieces around it — one
- * chief hut, a stockpile, and enough huts to house the camp's population (big hut = 2, others = 1) —
+ * standard = raze target), then a ring of authored {@code .nbt} building pieces around it - one
+ * chief hut, a stockpile, and enough huts to house the camp's population (big hut = 2, others = 1) -
  * each rotated to face the campfire with a dirt path trodden back to the center. Layout is a pure
  * function of the camp seed (stable across re-stamps / per-chunk stamping).
  *
- * <p>Authored pieces (built facing South, ground included in the .nbt → placed one Y lower) come from
+ * <p>Authored pieces (built facing NORTH, ground included in the .nbt -> placed one Y lower) come from
  * {@link CampPieces}. A type with no authored pieces yet falls back to placeholder procedural tents.
  * Every write is {@code hasChunk}-guarded so a camp straddling chunk borders never force-loads a
  * neighbor (the cascade-freeze hazard).
  */
 @ApiStatus.Internal
 public final class CampStructureStamper {
-    private static final int MIN_RING = 8;   // ring radius bounds (blocks from the campfire)
+    private static final int MIN_RING = 8;
     private static final int MAX_RING = 16;
-    // Target arc between adjacent buildings. Huts are ~7–9 wide, so this must exceed a hut's width
-    // plus a gap or they touch; the ring radius grows with the building count to hold it.
     private static final double PIECE_SPACING = 14.0;
 
     private CampStructureStamper() {
@@ -49,7 +47,6 @@ public final class CampStructureStamper {
         int cx = camp.center.getX();
         int cz = camp.center.getZ();
 
-        // ── Center: campfire + the standard (raze target) ──
         prepArea(level, cx, cz, 1);
         BlockPos fire = surface(level, cx, cz);
         if (fire != null) {
@@ -63,24 +60,19 @@ public final class CampStructureStamper {
             camp.bannerPos = bannerPos;
         }
 
-        // ── Ring of buildings (authored pieces if any, else procedural) ──
         RandomSource rng = RandomSource.create(camp.languageSeed);
         List<ResourceLocation> ring = buildPlacementList(level, camp, rng);
         if (ring == null) {
-            proceduralRing(level, camp, rng); // no authored pieces for this type yet
+            proceduralRing(level, camp, rng);
             return;
         }
         int n = ring.size();
-        // Ring radius scaled to the building count so the arc between neighbours is ~PIECE_SPACING
-        // (a hut is ~5–7 wide) — prevents the overlap you get from a fixed small radius.
         int ringR = Math.max(MIN_RING, Math.min(MAX_RING,
             (int) Math.round(n * PIECE_SPACING / (2.0 * Math.PI))));
         for (int i = 0; i < n; i++) {
             StructureTemplate template = level.getStructureManager().get(ring.get(i)).orElse(null);
             if (template == null) continue;
             double angle = (Math.PI * 2.0 / n) * i + (rng.nextDouble() - 0.5) * 0.25;
-            // Pick the flattest spot along this spoke so the building isn't half-buried (its door stays
-            // above ground and keeps line-of-sight to the campfire).
             int[] anchor = findFlatAnchor(level, cx, cz, angle, ringR, template.getSize());
             int ax = anchor[0], az = anchor[1];
             placePiece(level, template, ax, az, rotationFacingCenter(ax, az, cx, cz),
@@ -89,8 +81,6 @@ public final class CampStructureStamper {
         }
     }
 
-    /** Tries several radii along {@code angle} and returns the (x,z) whose piece-footprint ground is
-     *  flattest (first one within tolerance, else the least-uneven), so buildings don't sink into slopes. */
     private static int[] findFlatAnchor(ServerLevel level, int cx, int cz, double angle, int ringR,
                                         Vec3i size) {
         int half = Math.max(size.getX(), size.getZ()) / 2 + 1;
@@ -113,7 +103,6 @@ public final class CampStructureStamper {
                           cz + (int) Math.round(Math.sin(angle) * ringR) };
     }
 
-    /** Ground relief (max − min height) over a piece footprint, sampling corners + center. */
     private static int footprintRelief(ServerLevel level, int cx, int cz, int half) {
         int min = Integer.MAX_VALUE, max = Integer.MIN_VALUE;
         for (int dx = -half; dx <= half; dx += half) {
@@ -128,11 +117,6 @@ public final class CampStructureStamper {
         return max == Integer.MIN_VALUE ? 0 : max - min;
     }
 
-    /**
-     * The ring contents for this camp: one chief hut, one stockpile, then huts sized to the camp's
-     * population (big hut houses 2, others 1; the chief hut already houses one). Returns null if the
-     * type has no authored pieces (→ procedural fallback).
-     */
     private static List<ResourceLocation> buildPlacementList(ServerLevel level, BarbarianCamp camp,
                                                              RandomSource rng) {
         List<CampPieces.Piece> all = CampPieces.forType(level.getServer(), camp.type);
@@ -145,12 +129,11 @@ public final class CampStructureStamper {
         int housed = 0;
         if (!chiefs.isEmpty()) {
             ring.add(pick(chiefs, rng).id());
-            housed += 1; // the chief hut shelters one (the commander)
+            housed += 1;
         }
         if (!stores.isEmpty()) {
-            ring.add(pick(stores, rng).id()); // functional, no housing
+            ring.add(pick(stores, rng).id());
         }
-        // Fill huts until the rest of the population is housed (big hut = 2, others = 1).
         while (housed < camp.memberTarget && !huts.isEmpty()) {
             CampPieces.Piece hut = pick(huts, rng);
             ring.add(hut.id());
@@ -163,8 +146,6 @@ public final class CampStructureStamper {
         return id.getPath().toLowerCase(Locale.ROOT).contains("big") ? 2 : 1;
     }
 
-    /** Places one authored piece centered on the anchor, rotated to {@code facing}, dropped one Y
-     *  lower because the .nbt includes its own ground layer. No-op if the template is missing/unloaded. */
     private static void placePiece(ServerLevel level, StructureTemplate template, int x, int z,
                                    Rotation facing, DyeColor dye) {
         if (!loaded(level, x, z)) return;
@@ -173,21 +154,16 @@ public final class CampStructureStamper {
         BlockPos pivot = new BlockPos(size.getX() / 2, 0, size.getZ() / 2);
         StructurePlaceSettings settings = new StructurePlaceSettings()
             .setRotation(facing).setRotationPivot(pivot).setIgnoreEntities(true)
-            // Don't stamp the .nbt's air (or its structure blocks) — air cells would carve the terrain.
+            // STRUCTURE_AND_AIR: skip the .nbt's air cells or they carve the terrain
             .addProcessor(net.minecraft.world.level.levelgen.structure.templatesystem
                 .BlockIgnoreProcessor.STRUCTURE_AND_AIR);
         int gy = level.getHeight(Heightmap.Types.MOTION_BLOCKING_NO_LEAVES, x, z);
-        // Centre the footprint on (x,z); ground row sits at the top solid block (gy-1), so the camp
-        // reads as built into the terrain rather than floating one block up.
         BlockPos placePos = new BlockPos(x - pivot.getX(), gy - 1, z - pivot.getZ());
         template.placeInWorld(level, placePos, placePos, settings, level.random, Block.UPDATE_CLIENTS);
-        // Recolour any white standard built into the piece to the camp type's banner colour.
         int reach = Math.max(size.getX(), size.getZ());
         recolorBanners(level, x, z, gy - 1, reach, size.getY() + 1, dye);
     }
 
-    /** Swaps any WHITE banner (standing or wall) in the placed piece's bounds to {@code dye},
-     *  preserving rotation/facing — so a white standard built into a hut adopts the camp's colour. */
     private static void recolorBanners(ServerLevel level, int cx, int cz, int y0, int reach,
                                        int height, DyeColor dye) {
         for (int dx = -reach; dx <= reach; dx++) {
@@ -234,8 +210,6 @@ public final class CampStructureStamper {
         return out;
     }
 
-    // ─── Procedural fallback (types without authored pieces yet) ──────────────────────────────────
-
     private static void proceduralRing(ServerLevel level, BarbarianCamp camp, RandomSource rng) {
         int tents = Math.max(3, camp.memberTarget / 2);
         for (int i = 0; i < tents; i++) {
@@ -265,15 +239,11 @@ public final class CampStructureStamper {
         level.setBlock(base.above(3), Blocks.TORCH.defaultBlockState(), Block.UPDATE_ALL);
     }
 
-    // ─── Shared helpers ───────────────────────────────────────────────────────────────────────────
-
-    /** Lays a 3-wide imperfect dirt-path trail from an anchor to the center: the middle lane is
-     *  always paved, the two edge lanes ~50% of the time, so it reads as a trodden village track. */
     private static void drawPath(ServerLevel level, int x0, int z0, int x1, int z1, RandomSource rng) {
         int dx = x1 - x0, dz = z1 - z0;
         int steps = Math.max(Math.abs(dx), Math.abs(dz));
         if (steps == 0) return;
-        boolean alongX = Math.abs(dx) >= Math.abs(dz); // widen perpendicular to the dominant axis
+        boolean alongX = Math.abs(dx) >= Math.abs(dz);
         for (int s = 1; s < steps; s++) {
             int x = x0 + Math.round((float) dx * s / steps);
             int z = z0 + Math.round((float) dz * s / steps);
@@ -288,8 +258,6 @@ public final class CampStructureStamper {
         }
     }
 
-    /** Paves one path cell over earth-like ground. Edge cells ({@code !always}) place only ~50% of
-     *  the time for the imperfect look. */
     private static void pavePathCell(ServerLevel level, int x, int z, boolean always, RandomSource rng) {
         if (!always && rng.nextFloat() < 0.5f) return;
         if (!loaded(level, x, z)) return;
@@ -306,16 +274,15 @@ public final class CampStructureStamper {
         }
     }
 
-    /** Whole-step rotation pointing a NORTH-built entrance toward the center from (x,z). Verified
-     *  against {@code Rotation.rotate(NORTH)}: NONE→NORTH, CW90→EAST, CW180→SOUTH, CCW90→WEST. */
     private static Rotation rotationFacingCenter(int x, int z, int cx, int cz) {
+        // pieces are built facing NORTH; verified Rotation.rotate(NORTH): NONE->N, CW90->E, CW180->S, CCW90->W
         int dx = cx - x, dz = cz - z;
         if (Math.abs(dx) >= Math.abs(dz)) {
-            return dx >= 0 ? Rotation.CLOCKWISE_90          // center is east  → face east
-                           : Rotation.COUNTERCLOCKWISE_90;  // center is west  → face west
+            return dx >= 0 ? Rotation.CLOCKWISE_90
+                           : Rotation.COUNTERCLOCKWISE_90;
         }
-        return dz >= 0 ? Rotation.CLOCKWISE_180    // center is south → face south
-                       : Rotation.NONE;             // center is north → face north (built facing)
+        return dz >= 0 ? Rotation.CLOCKWISE_180
+                       : Rotation.NONE;
     }
 
     private static void prepArea(ServerLevel level, int cx, int cz, int radius) {
